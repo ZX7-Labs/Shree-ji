@@ -1,0 +1,160 @@
+name: Opaque retired-owner helper role classifier 20261012
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opaque-retired-helper-role-classifier-20261012.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 12246190df640013d9ee426d2a340387c6d22d0e8241135d6a20dcf1fe5a2bc0
+  EXPECTED_COMMITTED_HEAD_PROOF: eae214ecf5fbcd274dc0e5ef32747a62ccce3d480be8e7b46931512d26ea03ad
+  EXPECTED_COMMITTED_TREE_PROOF: baf8e7cf99e3a2d2806a0edc1e9ab2bba3218170fae0991457e410af99d67032
+  HELPER_A_PATH_HASH: 3bd0f3b2ae73ca0acd5d1e08b47720c6cc80569d4b87901c2e1fc0b69f7504e2
+  HELPER_B_PATH_HASH: 3339f22991f94a6f36ccc66648584a4ea905fe49d2e0d854321e69643eb0d7c4
+  EXPECTED_SOURCE_PATH_HASH_1: 680761d41ae8315a6bf67b2df5250c8b4ebc93b434b7de42be032b743c37b90a
+  EXPECTED_SOURCE_PATH_HASH_2: 736cc80e53ddc8c5287113b778e1a8fb5f3973b1b5092cdf665c982b07ce8b6d
+
+jobs:
+  classify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Recover exact committed private head opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_READ_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_READ_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_READ_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; head=""
+          while read -r sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$matched_ref"; matched_ref="$ref"; head="$sha"; fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$head"
+          test "$(printf '%s' "$head" | sha256sum | awk '{print $1}')" = "$EXPECTED_COMMITTED_HEAD_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=64 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$head"; git checkout -q --detach "$head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_COMMITTED_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          echo "LAS_HELPER_ROLE_RECOVERY=PASS"
+
+      - name: Classify tracked helper roles without source disclosure
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          python3 - "$RUNNER_TEMP" <<'PY'
+          import ast,hashlib,os,pathlib,re,subprocess,sys
+          tmp=pathlib.Path(sys.argv[1])
+          tracked=[p.decode() for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if p]
+          targets=[os.environ['HELPER_A_PATH_HASH'],os.environ['HELPER_B_PATH_HASH']]
+          expected_sources={os.environ['EXPECTED_SOURCE_PATH_HASH_1'],os.environ['EXPECTED_SOURCE_PATH_HASH_2']}
+          resolved=[]
+          for idx,target in enumerate(targets,1):
+              matches=[p for p in tracked if hashlib.sha256(p.encode()).hexdigest()==target]
+              print(f'LAS_HELPER_{idx}_MATCH_COUNT={len(matches)}')
+              if len(matches)!=1: raise SystemExit(70+idx)
+              p=pathlib.Path(matches[0]); resolved.append(p)
+              raw=p.read_bytes(); text=raw.decode('utf-8',errors='replace')
+              mode=subprocess.check_output(['git','ls-files','-s','--',str(p)],text=True).split()[0]
+              print(f'LAS_HELPER_{idx}_MODE={mode}')
+              print(f'LAS_HELPER_{idx}_SIZE={len(raw)}')
+              print(f'LAS_HELPER_{idx}_LINE_COUNT={text.count(chr(10))+1}')
+              print(f'LAS_HELPER_{idx}_PATH_DEPTH={len(p.parts)}')
+              print(f'LAS_HELPER_{idx}_EXT_HASH={hashlib.sha256(p.suffix.encode()).hexdigest()}')
+              print(f'LAS_HELPER_{idx}_CONTENT_SHA256={hashlib.sha256(raw).hexdigest()}')
+              print(f'LAS_HELPER_{idx}_IN_SOURCE_SET=' + ('1' if target in expected_sources else '0'))
+              # Coarse role booleans only; no path text is emitted.
+              parts={x.lower() for x in p.parts[:-1]}
+              print(f'LAS_HELPER_{idx}_UNDER_TOOLS=' + ('1' if 'tools' in parts else '0'))
+              print(f'LAS_HELPER_{idx}_UNDER_SCRIPTS=' + ('1' if 'scripts' in parts else '0'))
+              print(f'LAS_HELPER_{idx}_UNDER_SRC=' + ('1' if 'src' in parts else '0'))
+              print(f'LAS_HELPER_{idx}_UNDER_TESTS=' + ('1' if ('tests' in parts or 'test' in parts) else '0'))
+              print(f'LAS_HELPER_{idx}_UNDER_GITHUB=' + ('1' if '.github' in parts else '0'))
+              try:
+                  tree=ast.parse(text)
+              except Exception:
+                  print(f'LAS_HELPER_{idx}_PYTHON_AST=0')
+              else:
+                  print(f'LAS_HELPER_{idx}_PYTHON_AST=1')
+                  assigns=[]; funcs=0; imports=0; system_exits=0; subprocess_calls=0
+                  for n in ast.walk(tree):
+                      if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)): funcs+=1
+                      if isinstance(n,(ast.Import,ast.ImportFrom)): imports+=1
+                      if isinstance(n,ast.Call):
+                          if isinstance(n.func,ast.Name) and n.func.id=='SystemExit': system_exits+=1
+                          if isinstance(n.func,ast.Attribute) and isinstance(n.func.value,ast.Name) and n.func.value.id=='subprocess': subprocess_calls+=1
+                  for n in tree.body:
+                      if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name): assigns.append(n.targets[0].id)
+                  print(f'LAS_HELPER_{idx}_AST_FUNCTIONS={funcs}')
+                  print(f'LAS_HELPER_{idx}_AST_IMPORTS={imports}')
+                  print(f'LAS_HELPER_{idx}_AST_SYSTEM_EXITS={system_exits}')
+                  print(f'LAS_HELPER_{idx}_AST_SUBPROCESS_CALLS={subprocess_calls}')
+                  print(f'LAS_HELPER_{idx}_HAS_PAYLOAD_ASSIGN=' + ('1' if 'PAYLOAD' in assigns else '0'))
+                  print(f'LAS_HELPER_{idx}_HAS_EXPECTED_ASSIGN=' + ('1' if 'EXPECTED' in assigns else '0'))
+
+          # Reference census: exact full path and basename references outside each helper itself.
+          text_files=[]
+          for q in tracked:
+              qp=pathlib.Path(q)
+              try: txt=qp.read_text(encoding='utf-8')
+              except Exception: continue
+              text_files.append((qp,txt))
+          for idx,p in enumerate(resolved,1):
+              full=str(p); base=p.name; full_refs=base_refs=full_files=base_files=0
+              for q,txt in text_files:
+                  if q==p: continue
+                  c=txt.count(full); b=txt.count(base)
+                  full_refs+=c; base_refs+=b
+                  if c: full_files+=1
+                  if b: base_files+=1
+              print(f'LAS_HELPER_{idx}_FULL_PATH_REFERENCE_COUNT={full_refs}')
+              print(f'LAS_HELPER_{idx}_FULL_PATH_REFERRER_COUNT={full_files}')
+              print(f'LAS_HELPER_{idx}_BASENAME_REFERENCE_COUNT={base_refs}')
+              print(f'LAS_HELPER_{idx}_BASENAME_REFERRER_COUNT={base_files}')
+
+          # History: number of commits in fetched history touching each helper and whether HEAD itself changed it.
+          for idx,p in enumerate(resolved,1):
+              count=subprocess.check_output(['git','rev-list','--count','HEAD','--',str(p)],text=True).strip()
+              head_changed=subprocess.run(['git','diff','--quiet','HEAD^','HEAD','--',str(p)]).returncode!=0
+              print(f'LAS_HELPER_{idx}_HISTORY_COMMIT_COUNT={count}')
+              print(f'LAS_HELPER_{idx}_CHANGED_IN_PROMOTION=' + ('1' if head_changed else '0'))
+          print('LAS_HELPER_ROLE_STATIC_CLASSIFICATION=PASS')
+
+          # Execute each Python helper in isolation on the committed snapshot, then discard mutations.
+          for idx,p in enumerate(resolved,1):
+              subprocess.run(['git','reset','--hard','HEAD'],check=True,stdout=subprocess.DEVNULL)
+              subprocess.run(['git','clean','-fdx'],check=True,stdout=subprocess.DEVNULL)
+              # Re-resolve after reset to avoid stale Path state assumptions.
+              path=str(p)
+              try:
+                  ast.parse(pathlib.Path(path).read_text(encoding='utf-8'))
+              except Exception:
+                  print(f'LAS_HELPER_{idx}_EXECUTED=0')
+                  continue
+              result=subprocess.run(['python3',path],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+              changed=[x for x in subprocess.check_output(['git','diff','--name-only','-z']).split(b'\0') if x]
+              hashes=sorted(hashlib.sha256(x).hexdigest() for x in changed)
+              print(f'LAS_HELPER_{idx}_EXECUTED=1')
+              print(f'LAS_HELPER_{idx}_POST_PROMOTION_RC={result.returncode}')
+              print(f'LAS_HELPER_{idx}_POST_PROMOTION_CHANGED_COUNT={len(changed)}')
+              print(f'LAS_HELPER_{idx}_POST_PROMOTION_CHANGESET_DIGEST={hashlib.sha256(chr(10).join(hashes).encode()).hexdigest()}')
+              print(f'LAS_HELPER_{idx}_POST_PROMOTION_ONLY_SOURCE_SET=' + ('1' if set(hashes)<=expected_sources else '0'))
+          subprocess.run(['git','reset','--hard','HEAD'],check=True,stdout=subprocess.DEVNULL)
+          subprocess.run(['git','clean','-fdx'],check=True,stdout=subprocess.DEVNULL)
+          print('LAS_HELPER_ROLE_RUNTIME_CLASSIFICATION=PASS')
+          PY
+          test -z "$(git status --porcelain)"
