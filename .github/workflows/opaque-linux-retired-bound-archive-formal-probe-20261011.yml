@@ -70,8 +70,8 @@ jobs:
           set -euo pipefail
           curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
             --output "$RUNNER_TEMP/tla2tools.jar" \
-            "https://github.com/tlaplus/tlaplus/releases/download/v1.7.2/tla2tools.jar"
-          echo "7f21faa2cdae3189e7d5fadb4488f0dfcc658407  $RUNNER_TEMP/tla2tools.jar" | sha1sum --check --strict >/dev/null
+            "https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar"
+          echo "bee4a54f3ee3d4afc347c3240ec2d9e93b075104  $RUNNER_TEMP/tla2tools.jar" | sha1sum --check --strict >/dev/null
           echo "OPAQUE_BOUND_PROBE_TOOLCHAIN=PASS"
 
       - name: Parse and model-check bound archive composition only
