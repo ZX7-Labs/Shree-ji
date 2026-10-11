@@ -1,0 +1,229 @@
+name: Opaque retired-owner composite exit41 classifier 20261012
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opaque-linux-retired-owner-composite-exit41-classifier-20261012.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  classify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Recover exact failed private snapshot and classify head relation
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+          TARGET_REF_HASH: 12246190df640013d9ee426d2a340387c6d22d0e8241135d6a20dcf1fe5a2bc0
+          EXPECTED_PRIVATE_SNAPSHOT_PROOF: 5a698107c7b9efab95ce96a98b7a8ae5218e79ac727922d69cc91ccb7ab66456
+          EXPECTED_PRIVATE_TREE_PROOF: 7424c2fa7a91f698a221c26e05d8a32d9fdf98f0b171b082506e6726c6b7a5d3
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; current_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"; matched_ref="$ref"; current_head="$candidate_sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$current_head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$current_head"
+          echo "LAS_EXIT41_CURRENT_HEAD_PROOF=$(printf '%s' "$current_head" | sha256sum | awk '{print $1}')"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=256 origin "$matched_ref"
+          resolved=""
+          while read -r candidate; do
+            if [[ "$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF" ]]; then
+              test -z "$resolved"; resolved="$candidate"
+            fi
+          done < <(git rev-list --max-count=256 FETCH_HEAD)
+          test -n "$resolved"; echo "::add-mask::$resolved"
+          git merge-base --is-ancestor "$resolved" FETCH_HEAD
+          if [[ "$resolved" = "$current_head" ]]; then echo "LAS_EXIT41_EXACT_IS_CURRENT_HEAD=1"; else echo "LAS_EXIT41_EXACT_IS_CURRENT_HEAD=0"; fi
+          git checkout -q --detach "$resolved"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          echo "LAS_EXIT41_EXACT_RECOVERY=PASS"
+
+      - name: Classify wrapper and embedded transform without source disclosure
+        shell: bash
+        env:
+          CURRENT_HELPER_PATH_HASH: 3339f22991f94a6f36ccc66648584a4ea905fe49d2e0d854321e69643eb0d7c4
+          ORIGINAL_HELPER_PATH_HASH: 3bd0f3b2ae73ca0acd5d1e08b47720c6cc80569d4b87901c2e1fc0b69f7504e2
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          python3 - "$CURRENT_HELPER_PATH_HASH" "$ORIGINAL_HELPER_PATH_HASH" "$RUNNER_TEMP" <<'PY'
+          import ast, base64, contextlib, gzip, hashlib, io, os, pathlib, runpy, subprocess, sys
+
+          current_hash, original_hash, tmp = sys.argv[1:]
+          tracked = subprocess.check_output(['git','ls-files','-z']).split(b'\0')
+          tracked = [p.decode() for p in tracked if p]
+
+          def resolve_path(target):
+              matches=[p for p in tracked if hashlib.sha256(p.encode()).hexdigest()==target]
+              if len(matches)!=1:
+                  raise SystemExit(70 + min(len(matches),9))
+              return pathlib.Path(matches[0])
+
+          current=resolve_path(current_hash)
+          original=resolve_path(original_hash)
+          print('LAS_EXIT41_CURRENT_HELPER_MATCH=1')
+          print('LAS_EXIT41_ORIGINAL_HELPER_MATCH=1')
+          print('LAS_EXIT41_CURRENT_HELPER_BLOB='+subprocess.check_output(['git','hash-object','--',str(current)],text=True).strip())
+          print('LAS_EXIT41_ORIGINAL_HELPER_BLOB='+subprocess.check_output(['git','hash-object','--',str(original)],text=True).strip())
+
+          original_text=original.read_text(encoding='utf-8')
+          tree=ast.parse(original_text)
+          values={}
+          for node in tree.body:
+              if isinstance(node, ast.Assign) and len(node.targets)==1 and isinstance(node.targets[0],ast.Name) and isinstance(node.value,ast.Constant):
+                  values[node.targets[0].id]=node.value.value
+          payload=values.get('PAYLOAD'); expected=values.get('EXPECTED')
+          if not isinstance(payload,str) or not isinstance(expected,str):
+              raise SystemExit(80)
+          transform=gzip.decompress(base64.b64decode(payload))
+          transform_sha=hashlib.sha256(transform).hexdigest()
+          if transform_sha != expected:
+              raise SystemExit(81)
+          transform_path=pathlib.Path(tmp)/'composite-transform.py'
+          transform_path.write_bytes(transform)
+          print('LAS_EXIT41_TRANSFORM_SHA256='+transform_sha)
+          print('LAS_EXIT41_TRANSFORM_LINE_COUNT='+str(transform.count(b'\n')+1))
+
+          allowed_attrs={'count','replace','read_text','write_text','split','strip','encode','decode','hexdigest','digest','exists','is_file','resolve','relative_to','items','keys','values','append','add','update','get'}
+          feature_attrs={'count':'COUNT','replace':'REPLACE','read_text':'PATH_IO','write_text':'PATH_IO','hexdigest':'HASH','digest':'HASH','exists':'PATH_IO','is_file':'PATH_IO','resolve':'PATH_IO','relative_to':'PATH_IO'}
+
+          def sketch(node):
+              if node is None: return 'NONE'
+              if isinstance(node, ast.Name): return 'NAME'
+              if isinstance(node, ast.Constant):
+                  v=node.value
+                  if isinstance(v,str): return 'STRLEN:'+str(min(len(v)//8,16))
+                  if isinstance(v,(int,float)): return 'NUM'
+                  return type(v).__name__.upper()
+              if isinstance(node, ast.Attribute):
+                  a=node.attr if node.attr in allowed_attrs else 'ATTR'
+                  return 'ATTR('+sketch(node.value)+','+a+')'
+              if isinstance(node, ast.Call): return 'CALL('+sketch(node.func)+','+','.join(sketch(x) for x in node.args)+')'
+              if isinstance(node, ast.Compare): return 'CMP('+sketch(node.left)+','+','.join(type(x).__name__ for x in node.ops)+','+','.join(sketch(x) for x in node.comparators)+')'
+              if isinstance(node, ast.BoolOp): return 'BOOL('+type(node.op).__name__+','+','.join(sketch(x) for x in node.values)+')'
+              if isinstance(node, ast.UnaryOp): return 'UNARY('+type(node.op).__name__+','+sketch(node.operand)+')'
+              if isinstance(node, ast.BinOp): return 'BIN('+type(node.op).__name__+','+sketch(node.left)+','+sketch(node.right)+')'
+              if isinstance(node, (ast.List,ast.Tuple,ast.Set)): return type(node).__name__.upper()+'('+','.join(sketch(x) for x in node.elts)+')'
+              if isinstance(node, ast.Dict): return 'DICT('+str(len(node.keys))+')'
+              if isinstance(node, ast.Subscript): return 'SUB('+sketch(node.value)+','+sketch(node.slice)+')'
+              return type(node).__name__.upper()
+
+          def features(node):
+              out=set()
+              for n in ast.walk(node):
+                  if isinstance(n, ast.Attribute) and n.attr in feature_attrs: out.add(feature_attrs[n.attr])
+                  if isinstance(n, ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='len': out.add('LEN')
+                  if isinstance(n, ast.Compare):
+                      for op in n.ops:
+                          if isinstance(op,(ast.Eq,ast.NotEq)): out.add('EQUALITY')
+                          if isinstance(op,(ast.In,ast.NotIn)): out.add('MEMBERSHIP')
+                  if isinstance(n,ast.BoolOp): out.add('BOOL')
+                  if isinstance(n,ast.UnaryOp) and isinstance(n.op,ast.Not): out.add('NOT')
+                  if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and isinstance(n.func.value,ast.Name) and n.func.value.id=='subprocess': out.add('SUBPROCESS')
+              return ','.join(sorted(out)) or 'NONE'
+
+          def exit_code(node):
+              if not isinstance(node,ast.Raise) or not isinstance(node.exc,ast.Call): return None
+              f=node.exc.func
+              if not (isinstance(f,ast.Name) and f.id=='SystemExit'): return None
+              if not node.exc.args or not isinstance(node.exc.args[0],ast.Constant): return None
+              v=node.exc.args[0].value
+              return v if isinstance(v,int) else None
+
+          def analyze(label, source):
+              t=ast.parse(source)
+              parents={}
+              for p in ast.walk(t):
+                  for c in ast.iter_child_nodes(p): parents[c]=p
+              exits=[]
+              for n in ast.walk(t):
+                  code=exit_code(n)
+                  if code is not None: exits.append((getattr(n,'lineno',0),code,n))
+              exits.sort()
+              hist={}
+              for _,code,_ in exits: hist[code]=hist.get(code,0)+1
+              print(f'LAS_EXIT41_{label}_EXIT_HIST=' + ','.join(f'{k}:{hist[k]}' for k in sorted(hist)))
+              sites=[x for x in exits if x[1]==41]
+              print(f'LAS_EXIT41_{label}_SITE_COUNT={len(sites)}')
+              for idx,(line,_,node) in enumerate(sites,1):
+                  cur=node; guard=None
+                  while cur in parents:
+                      cur=parents[cur]
+                      if isinstance(cur,ast.If): guard=cur.test; break
+                  s=sketch(guard)
+                  print(f'LAS_EXIT41_{label}_SITE_{idx}_LINE={line}')
+                  print(f'LAS_EXIT41_{label}_SITE_{idx}_GUARD_HASH={hashlib.sha256(s.encode()).hexdigest()}')
+                  print(f'LAS_EXIT41_{label}_SITE_{idx}_FEATURES={features(guard) if guard is not None else "NONE"}')
+              return [(line,code) for line,code,_ in exits]
+
+          current_text=current.read_text(encoding='utf-8')
+          current_exits=analyze('WRAPPER', current_text)
+          transform_text=transform.decode('utf-8')
+          transform_exits=analyze('TRANSFORM', transform_text)
+
+          def trace_run(path, label):
+              executed=[]; out=io.StringIO(); err=io.StringIO(); result={'kind':'RETURN','code':0,'last':0}
+              target=os.path.realpath(path)
+              def tr(frame,event,arg):
+                  if event=='line' and os.path.realpath(frame.f_code.co_filename)==target:
+                      executed.append(frame.f_lineno)
+                  return tr
+              old=sys.gettrace(); sys.settrace(tr)
+              try:
+                  with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                      runpy.run_path(path,run_name='__main__')
+              except SystemExit as e:
+                  code=e.code if isinstance(e.code,int) else 1
+                  result={'kind':'SYSTEM_EXIT','code':code,'last':executed[-1] if executed else 0}
+              except BaseException as e:
+                  result={'kind':'EXCEPTION_'+type(e).__name__,'code':1,'last':executed[-1] if executed else 0}
+              finally:
+                  sys.settrace(old)
+              combined=(out.getvalue()+err.getvalue()).encode()
+              print(f'LAS_EXIT41_{label}_RUN_KIND={result["kind"]}')
+              print(f'LAS_EXIT41_{label}_RUN_CODE={result["code"]}')
+              print(f'LAS_EXIT41_{label}_LAST_LINE={result["last"]}')
+              print(f'LAS_EXIT41_{label}_OUTPUT_SHA256={hashlib.sha256(combined).hexdigest()}')
+              print(f'LAS_EXIT41_{label}_TRACE_SHA256={hashlib.sha256(",".join(map(str,executed)).encode()).hexdigest()}')
+              return result
+
+          # Execute wrapper on exact pristine snapshot first.
+          wrapper_result=trace_run(str(current.resolve()),'WRAPPER')
+          subprocess.run(['git','reset','--hard','HEAD'],check=True,stdout=subprocess.DEVNULL)
+          subprocess.run(['git','clean','-fdx'],check=True,stdout=subprocess.DEVNULL)
+
+          # Re-create extracted transform after clean and execute it from repository root.
+          transform_path=pathlib.Path(tmp)/'composite-transform.py'; transform_path.write_bytes(transform)
+          transform_result=trace_run(str(transform_path.resolve()),'TRANSFORM')
+          changed=subprocess.check_output(['git','diff','--name-only','-z']).split(b'\0')
+          changed=[p for p in changed if p]
+          changed_hashes=sorted(hashlib.sha256(p).hexdigest() for p in changed)
+          print('LAS_EXIT41_TRANSFORM_CHANGED_COUNT='+str(len(changed_hashes)))
+          print('LAS_EXIT41_TRANSFORM_CHANGED_SET_DIGEST='+hashlib.sha256('\n'.join(changed_hashes).encode()).hexdigest())
+          subprocess.run(['git','reset','--hard','HEAD'],check=True,stdout=subprocess.DEVNULL)
+          subprocess.run(['git','clean','-fdx'],check=True,stdout=subprocess.DEVNULL)
+
+          # The observed live blocker must remain reproducible; otherwise stop rather than reinterpret it.
+          if wrapper_result['code'] != 41:
+              raise SystemExit(91)
+          print('LAS_EXIT41_REPRODUCED=PASS')
+          PY
