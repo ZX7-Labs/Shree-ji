@@ -11,9 +11,9 @@ permissions:
   contents: read
 
 env:
-  TARGET_REF_HASH: 1fac30945223ebc9f0cc8e1bbadc2bffd24839393c448896663afd60ae943539
-  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 5ba9f042b138d6609aaad480aad60b156552ecacb9e0115138a06ac5fc058b52
-  EXPECTED_PRIVATE_TREE_PROOF: cea659652a395664a12632f83be031501ecac11a0656cc3467616642c699f0a8
+  TARGET_REF_HASH: 4cc81ea52c8e4eaee5d71f913649d5be3a21e6e097c694b4e765226b778ff81a
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 6187541b0e0de3d3d418d3faa6c7e21ad8163b3993d63ecc19b83cae6f4e0372
+  EXPECTED_PRIVATE_TREE_PROOF: 24316ca931d90154200002607b085386bd3af61503058d0fa080c143002befc1
 
 jobs:
   verify:
@@ -143,6 +143,7 @@ jobs:
           run_gate SINK_TEST cargo +1.98.1 test --locked --lib --features linux-peer-credentials root_supervisor_linux_retired_owner_projection -- --test-threads=1 || failures=$((failures + 1))
           run_gate PEER_POLICY_TEST cargo +1.98.1 test --locked --lib --features linux-peer-credentials root_supervisor_peer_policy -- --test-threads=1 || failures=$((failures + 1))
           run_gate PRE_ACTION_POLICY_TEST cargo +1.98.1 test --locked --lib --features "root-ffi linux-peer-credentials" root_supervisor_linux_pre_action_plan -- --test-threads=1 || failures=$((failures + 1))
+          run_gate PRE_ACTION_OWNER_TEST cargo +1.98.1 test --locked --lib --features "root-ffi linux-peer-credentials" root_supervisor_linux_pre_action_authenticator -- --test-threads=1 || failures=$((failures + 1))
           run_gate PRODUCTION_LIB_TEST cargo +1.98.1 test --locked --lib --features "root-ffi linux-peer-credentials" -- --test-threads=1 || failures=$((failures + 1))
           run_gate RELEASE_CHECK cargo +1.98.1 check --release --locked --all-targets --features "root-ffi linux-peer-credentials" || failures=$((failures + 1))
 
