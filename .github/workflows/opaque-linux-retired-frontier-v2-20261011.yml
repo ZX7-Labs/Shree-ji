@@ -13,8 +13,8 @@ permissions:
 env:
   JAVA_TOOL_OPTIONS: -Xmx5g
   TARGET_REF_HASH: 535f587822554ff667cbfc2f12d2067eb29413d54436bb8ce8ac21fe636c5f56
-  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 0390b264e868395fa5704c0d2a7c25bacab11aa15589c73e258baa6ea7f30b9a
-  EXPECTED_PRIVATE_TREE_PROOF: 6f699092ac986d8ffde1c30cf35070e84ada9837fba66be00469af3089a23dac
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 180e54be973a334df60e23595c41632e6ffddab4be1f9fcbad345d90399b51eb
+  EXPECTED_PRIVATE_TREE_PROOF: 4582a797a9542ab556ef9c6ea0de0242635b1ec1364b1ce16d1b991c2349db73
 
 jobs:
   verify:
@@ -87,7 +87,7 @@ jobs:
           echo "bee4a54f3ee3d4afc347c3240ec2d9e93b075104  $jar" | sha1sum --check --strict >/dev/null
           echo "OPAQUE_FRONTIER_V2_TOOLCHAIN=PASS"
 
-      - name: Run exact Rust frontier gates without private logs
+      - name: Run exact Rust retired-archive gates without private logs
         shell: bash
         env:
           RUSTFLAGS: -Dwarnings
@@ -112,7 +112,7 @@ jobs:
           run_gate FORMAT cargo +1.98.1 fmt --all -- --check || failures=$((failures + 1))
           run_gate CHECK cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials || failures=$((failures + 1))
           run_gate CLIPPY cargo +1.98.1 clippy --locked --all-targets --features linux-peer-credentials -- -D warnings || failures=$((failures + 1))
-          run_gate TEST cargo +1.98.1 test --locked --lib --features linux-peer-credentials root_supervisor_linux_retired_archive_frontier -- --test-threads=1 || failures=$((failures + 1))
+          run_gate TEST cargo +1.98.1 test --locked --lib --features linux-peer-credentials root_supervisor_linux_retired -- --test-threads=1 || failures=$((failures + 1))
           echo "OPAQUE_FRONTIER_V2_RUST_FAILURE_COUNT=$failures"
           test -z "$(git status --porcelain --untracked-files=no)"
           test "$failures" -eq 0
