@@ -1,0 +1,177 @@
+name: Opaque retired-owner transform telemetry 20261012
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opaque-linux-retired-transform-telemetry-20261012.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Recover exact live private head opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+          TARGET_REF_HASH: 12246190df640013d9ee426d2a340387c6d22d0e8241135d6a20dcf1fe5a2bc0
+          EXPECTED_HEAD_PROOF: c1b3b06dc372f212fd256e328c9a0dad282c1b2a44e179879061c15a0a19c99b
+          EXPECTED_TREE_PROOF: 96dd6f1b2d519fe01e22647efa8d4f32f6e53f5badb00b199e9133246e0fc501
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$matched_ref"; matched_ref="$ref"; head="$candidate_sha"; fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$head"
+          test "$(printf '%s' "$head" | sha256sum | awk '{print $1}')" = "$EXPECTED_HEAD_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$head"; git checkout -q --detach "$head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          echo "LAS_TRANSFORM_TELEMETRY_RECOVERY=PASS"
+
+      - name: Extract, reproduce, and instrument transform without source disclosure
+        shell: bash
+        env:
+          ORIGINAL_HELPER_PATH_HASH: 3bd0f3b2ae73ca0acd5d1e08b47720c6cc80569d4b87901c2e1fc0b69f7504e2
+          EXPECTED_TRANSFORM_SHA256: d97bb8c1f38b8ceeb9a5814e984947822b76cb2dcf681ead65443ab02c4e8e58
+          EXPECTED_PATH_HASH_1: 680761d41ae8315a6bf67b2df5250c8b4ebc93b434b7de42be032b743c37b90a
+          EXPECTED_PATH_HASH_2: 736cc80e53ddc8c5287113b778e1a8fb5f3973b1b5092cdf665c982b07ce8b6d
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          python3 - "$RUNNER_TEMP" <<'PY'
+          import ast, base64, gzip, hashlib, os, pathlib, subprocess, sys
+
+          tmp=pathlib.Path(sys.argv[1])
+          tracked=[p.decode() for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if p]
+          target=os.environ['ORIGINAL_HELPER_PATH_HASH']
+          matches=[p for p in tracked if hashlib.sha256(p.encode()).hexdigest()==target]
+          print('LAS_TELEMETRY_ORIGINAL_HELPER_MATCH_COUNT='+str(len(matches)))
+          if len(matches)!=1: raise SystemExit(70)
+          helper=pathlib.Path(matches[0])
+          tree=ast.parse(helper.read_text(encoding='utf-8'))
+          vals={}
+          for n in tree.body:
+              if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name) and isinstance(n.value,ast.Constant):
+                  vals[n.targets[0].id]=n.value.value
+          payload=vals.get('PAYLOAD'); expected=vals.get('EXPECTED')
+          if not isinstance(payload,str) or not isinstance(expected,str): raise SystemExit(71)
+          data=gzip.decompress(base64.b64decode(payload))
+          digest=hashlib.sha256(data).hexdigest()
+          print('LAS_TELEMETRY_TRANSFORM_SHA256='+digest)
+          if digest!=expected or digest!=os.environ['EXPECTED_TRANSFORM_SHA256']: raise SystemExit(72)
+          transform=tmp/'retired-transform.py'; transform.write_bytes(data)
+
+          expected_paths=sorted([os.environ['EXPECTED_PATH_HASH_1'],os.environ['EXPECTED_PATH_HASH_2']])
+          def diff_state(prefix):
+              paths=[p for p in subprocess.check_output(['git','diff','--name-only','-z']).split(b'\0') if p]
+              hashes=sorted(hashlib.sha256(p).hexdigest() for p in paths)
+              print(prefix+'_CHANGED_COUNT='+str(len(paths)))
+              print(prefix+'_EXPECTED_CHANGESET='+('1' if hashes==expected_paths else '0'))
+              print(prefix+'_CHANGESET_DIGEST='+hashlib.sha256('\n'.join(hashes).encode()).hexdigest())
+              blobs=[]
+              for p in paths:
+                  raw=p.decode()
+                  content=subprocess.check_output(['git','hash-object','--',raw],text=True).strip()
+                  blobs.append(hashlib.sha256(content.encode()).hexdigest())
+              sig=hashlib.sha256('\n'.join(sorted(blobs)).encode()).hexdigest()
+              print(prefix+'_BLOBSET_PROOF='+sig)
+              return hashes,sig
+
+          # Exact uninstrumented reproduction.
+          result=subprocess.run(['python3',str(transform)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+          print('LAS_TELEMETRY_RAW_RC='+str(result.returncode))
+          raw_hashes,raw_sig=diff_state('LAS_TELEMETRY_RAW')
+          subprocess.run(['git','reset','--hard','HEAD'],check=True,stdout=subprocess.DEVNULL)
+          subprocess.run(['git','clean','-fdx'],check=True,stdout=subprocess.DEVNULL)
+          transform.write_bytes(data)
+
+          events=[]; counter=0
+          def add(kind,line,ident,*fields):
+              events.append((kind,line,ident)+fields)
+          def las_branch(line,ident,value):
+              add('BRANCH',line,ident,int(bool(value)))
+              return value
+          def las_count(line,ident,obj,*args):
+              value=obj.count(*args)
+              arg0=args[0] if args else None
+              alen=len(arg0) if isinstance(arg0,(str,bytes)) else -1
+              olen=len(obj) if isinstance(obj,(str,bytes,list,tuple)) else -1
+              add('COUNT',line,ident,value,alen,olen)
+              return value
+          def las_replace(line,ident,obj,*args):
+              old=args[0] if args else None
+              before=obj.count(old) if isinstance(obj,(str,bytes)) and isinstance(old,type(obj)) else -1
+              out=obj.replace(*args)
+              oldlen=len(old) if isinstance(old,(str,bytes)) else -1
+              new=args[1] if len(args)>1 else None
+              newlen=len(new) if isinstance(new,(str,bytes)) else -1
+              add('REPLACE',line,ident,before,oldlen,newlen,int(out!=obj))
+              return out
+          def las_len(line,ident,obj):
+              value=len(obj); add('LEN',line,ident,value); return value
+          def las_return(line,ident,value):
+              if isinstance(value,bool): add('RETURN_BOOL',line,ident,int(value))
+              elif isinstance(value,int): add('RETURN_INT',line,ident,value)
+              elif value is None: add('RETURN_NONE',line,ident,0)
+              else: add('RETURN_OTHER',line,ident,0)
+              return value
+
+          class T(ast.NodeTransformer):
+              def __init__(self): self.i=0
+              def nid(self): self.i+=1; return self.i
+              def visit_If(self,node):
+                  self.generic_visit(node); ident=self.nid()
+                  node.test=ast.Call(ast.Name('las_branch',ast.Load()),[ast.Constant(node.lineno),ast.Constant(ident),node.test],[])
+                  return node
+              def visit_Call(self,node):
+                  self.generic_visit(node)
+                  if isinstance(node.func,ast.Attribute) and node.func.attr in ('count','replace'):
+                      ident=self.nid(); fn='las_count' if node.func.attr=='count' else 'las_replace'
+                      return ast.copy_location(ast.Call(ast.Name(fn,ast.Load()),[ast.Constant(node.lineno),ast.Constant(ident),node.func.value,*node.args],node.keywords),node)
+                  if isinstance(node.func,ast.Name) and node.func.id=='len' and len(node.args)==1 and not node.keywords:
+                      ident=self.nid(); return ast.copy_location(ast.Call(ast.Name('las_len',ast.Load()),[ast.Constant(node.lineno),ast.Constant(ident),node.args[0]],[]),node)
+                  return node
+              def visit_Return(self,node):
+                  self.generic_visit(node); ident=self.nid()
+                  value=node.value if node.value is not None else ast.Constant(None)
+                  node.value=ast.Call(ast.Name('las_return',ast.Load()),[ast.Constant(node.lineno),ast.Constant(ident),value],[])
+                  return node
+
+          source=data.decode('utf-8')
+          parsed=ast.parse(source,filename=str(transform)); inst=T().visit(parsed); ast.fix_missing_locations(inst)
+          ns={'__name__':'__main__','__file__':str(transform),'las_branch':las_branch,'las_count':las_count,'las_replace':las_replace,'las_len':las_len,'las_return':las_return}
+          rc=0
+          try:
+              exec(compile(inst,str(transform),'exec'),ns,ns)
+          except SystemExit as e:
+              rc=e.code if isinstance(e.code,int) else 1
+          except BaseException as e:
+              rc=1; add('EXCEPTION',0,0,hash(type(e).__name__) & 0xffff)
+          print('LAS_TELEMETRY_INSTRUMENTED_RC='+str(rc))
+          inst_hashes,inst_sig=diff_state('LAS_TELEMETRY_INSTRUMENTED')
+          print('LAS_TELEMETRY_DIFF_EQUIVALENT='+('1' if raw_hashes==inst_hashes and raw_sig==inst_sig else '0'))
+          print('LAS_TELEMETRY_EVENT_COUNT='+str(len(events)))
+          for idx,event in enumerate(events[-40:],1):
+              print('LAS_TELEMETRY_EVENT_%02d='%idx + ':'.join(map(str,event)))
+          # Require instrumentation to preserve the observed failing behavior and candidate diff.
+          if result.returncode!=1 or rc!=1 or raw_hashes!=expected_paths or inst_hashes!=expected_paths or raw_sig!=inst_sig:
+              raise SystemExit(90)
+          print('LAS_TELEMETRY_REPRODUCTION=PASS')
+          PY
