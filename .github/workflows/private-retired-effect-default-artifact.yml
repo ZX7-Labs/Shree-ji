@@ -1,0 +1,71 @@
+name: Private retired effect default artifact
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/private-retired-effect-default-artifact.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Recover exact source and produce encrypted diagnostic
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+          TARGET_REF_HASH: a7195b2116dc080ad9d3be4184fef8c5fc791983798984d5fc25cd3f38e878ab
+          EXPECTED_PRIVATE_SNAPSHOT_PROOF: 05ddce8532229cda089670d55598902b5f3be68750cf9d3ad1d9c5826d7a4925
+          EXPECTED_PRIVATE_TREE_PROOF: 3fe1ebc4eebe4b22bc59f086781ffb4be6e5d6a531af55b2f80ced02eaf1332b
+          TRANSFORM_PATH_HASH: b24292ddb8ac88c004949711dfe57ce53a512e522ef6c2d2dbc682e15e124fe9
+          REPAIR_PATH_HASH: b32f32788e402a7b6a0cc56d8da35aa7304479e8fbbe01af4344afe96b8685a2
+          RECIPIENT_CERT_B64: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURSVENDQWkyZ0F3SUJBZ0lVT0JBNG5aWXdXU1hVdm9TSFVMMWgrYmNqWXBBd0RRWUpLb1pJaHZjTkFRRUwKQlFBd01qRXdNQzRHQTFVRUF3d25URUZUSUhKbGRHbHlaV1FnWldabVpXTjBJR1JwWVdkdWIzTjBhV01nWlhCbwpaVzFsY21Gc01CNFhEVEkyTVRBeE1URXpNemt3TmxvWERUSTJNVEF4TWpFek16a3dObG93TWpFd01DNEdBMVVFCkF3d25URUZUSUhKbGRHbHlaV1FnWldabVpXTjBJR1JwWVdkdWIzTjBhV01nWlhCb1pXMWxjbUZzTUlJQklqQU4KQmdrcWhraUc5dzBCQVFFRkFBT0NBUThBTUlJQkNnS0NBUUVBd3ZwZGRoL0hEQklsbXJnSGl5RThxUk5RUmdWdQpIQThPMk9UNFBDaFR6MkhUNGFta1E2dmMwaCtleEwvQ1FLaC8vaXdpUUNwR2dDcWpYY3NZNE5IdDJhYW5JbXk2CkRqVzRWR3pVQTQ5UlF5UTd1STlPZm9IakVBSStLNHlkQVA0aXRrVTNKV2JLeEc4dXBVTjE0dUthWXA3TzhGYXUKVVFiS2tGZkpzZ0dxTHRjSmQvOGFUMXQxeFVZTm44RzE4d2NHQitRbXRoanJQdU5od3M1VlcySmFkeTZxTEdhYwpwOFF5WlJZZzR1alN3QzFpSExJQXJTL1pweFRZREo3RnBtMGt1eHUxRkVEcnRrRzh5NHFDQTE3VjhUMXJsR24yCk82QW94Y0xpamRuUVBxSHZzekRSZkZ4RkM0Q0FOdTlTUFJDbzRzUGdzWjhCczN4eG5tZGxUa1ltelFJREFRQUIKbzFNd1VUQWRCZ05WSFE0RUZnUVVMK011UzdyQWlFTFg4UEY2clR4TFBaWWx0Ull3SHdZRFZSMGpCQmd3Rm9BVQpMK011UzdyQWlFTFg4UEY2clR4TFBaWWx0Ull3RHdZRFZSMFRBUUgvQkFVd0F3RUIvekFOQmdrcWhraUc5dzBCCkFRc0ZBQU9DQVFFQVczQUUvTnJmcjBBSWkxQnRrdEdqOGJqdEVXVU5qdEliVjJCTk9LaE1hZjA1NDNmWDl6ckcKdDFNVXA1c29xTFJ5T0I1cGhJb2xWMmZZNml1K0xGTWdYMG1nSjM0SjRDcGlvWVdEY0hmTUkvNDVvRUFzNkQ1dQpuS205cHRiRUtKYVB3dkNoNTBVd2tuODBYeERRNDNxbERmWTdNcUdyUzFEQVgzK1ZGVjU2Tmp2MXI0L0JYb0NnCnFFVWNGVEJwVk9VS0hxSS9Jdkdmc1l6cTVZOGJkb3dXdlVvSlVzSHplZ0FzeXdIY3JveGd1R3JsOEp5WFJOdDUKaUFXL2xMSFozZ29kdW9HTU1aUWZXN0RweFJuV1hFU1YrdzRXU05qK0ZBeG11NXpvaitDcmxSVXBwM3dCMXpLMwpkUlZlM2Z0dkhTcVVwOGp2dWczeHA1M2k1czdrQ2ZVcFpRPT0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched=""; head=""
+          while read -r sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$matched"; matched="$ref"; head="$sha"; fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched"; test -n "$head"; echo "::add-mask::$matched"; echo "::add-mask::$head"
+          test "$(printf '%s' "$head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched"
+          test "$(git rev-parse FETCH_HEAD)" = "$head"; git checkout -q --detach "$head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          transform=""; repair=""
+          while IFS= read -r -d '' p; do
+            d="$(printf '%s' "$p" | sha256sum | awk '{print $1}')"
+            [[ "$d" = "$TRANSFORM_PATH_HASH" ]] && transform="$p"
+            [[ "$d" = "$REPAIR_PATH_HASH" ]] && repair="$p"
+          done < <(git ls-files -z)
+          test -n "$transform"; test -n "$repair"; python3 "$transform" --apply; python3 "$repair"
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt >/dev/null
+          cargo +1.98.1 fmt --all
+          log="$RUNNER_TEMP/default-check.log"
+          set +e; RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --all-targets >"$log" 2>&1; rc=$?; set -e
+          echo "LAS_EFFECT_DEFAULT_ARTIFACT_RC=$rc"
+          echo "LAS_EFFECT_DEFAULT_ARTIFACT_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')"
+          cert="$RUNNER_TEMP/cert.pem"; printf '%s' "$RECIPIENT_CERT_B64" | base64 -d >"$cert"; openssl x509 -in "$cert" -noout >/dev/null
+          mkdir "$RUNNER_TEMP/export"
+          openssl cms -encrypt -binary -aes-256-cbc -outform DER -in "$log" -out "$RUNNER_TEMP/export/default-check.cms" "$cert"
+          echo "LAS_EFFECT_DEFAULT_ARTIFACT_CIPHER_SHA256=$(sha256sum "$RUNNER_TEMP/export/default-check.cms" | awk '{print $1}')"
+
+      - name: Upload ciphertext only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: retired-effect-default-diagnostic
+          path: ${{ runner.temp }}/export/default-check.cms
+          if-no-files-found: error
+          retention-days: 1
