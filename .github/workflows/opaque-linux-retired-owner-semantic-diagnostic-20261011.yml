@@ -1,0 +1,114 @@
+name: Opaque retired-owner semantic projection diagnostic
+
+on:
+  pull_request:
+    paths:
+      - "verification-requests/linux-retired-owner-semantic-projection-20261011.txt"
+      - ".github/workflows/opaque-linux-retired-owner-semantic-diagnostic-20261011.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 01cb8882ce4ea399e79d5584996272bb5200fc973aa08fe78403d104cd9cb762
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 8ba937902194dd789a570d37a96e571c0764bbb549523fa8fe08e0ebe2e122f5
+  EXPECTED_PRIVATE_TREE_PROOF: 7365d8231dfd5e0b82906e6b0271cbce62c216e1d0db8ce7a0a66af262d8ee5a
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Recover exact private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$GITHUB_WORKSPACE/target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"; matched_ref="$ref"; private_head="$candidate_sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$private_head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$private_head"
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$private_head"; git checkout -q --detach "$private_head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          unset PRIVATE_TOKEN auth matched_ref private_head tree candidate_sha ref
+          echo "OPAQUE_SEMANTIC_DIAG_RECOVERY=PASS"
+
+      - name: Install pinned Rust and Ada toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          archive="$RUNNER_TEMP/alr.zip"; prefix="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --output "$archive" \
+            "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip" >/dev/null 2>&1
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $archive" | sha256sum --check --strict >/dev/null
+          mkdir -p "$prefix"; unzip -q "$archive" -d "$prefix"; export PATH="$prefix/bin:$PATH"
+          alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
+          ws="$RUNNER_TEMP/alire-workspace"; mkdir -p "$ws"
+          (cd "$ws" && alr -n init --in-place --no-skel --lib las_semantic_diag >/dev/null)
+          wrapper="$RUNNER_TEMP/gprbuild-wrapper"
+          cat >"$wrapper" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$ws"
+          exec "$prefix/bin/alr" exec -- gprbuild "\$@"
+          EOF
+          chmod +x "$wrapper"; echo "GPRBUILD=$wrapper" >> "$GITHUB_ENV"
+
+      - name: Produce encrypted compiler diagnostic
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          stdout="$RUNNER_TEMP/check.stdout"; stderr="$RUNNER_TEMP/check.stderr"
+          set +e
+          GPRBUILD="$GPRBUILD" cargo +1.98.1 check --locked --all-targets \
+            --features root-ffi,linux-peer-credentials --message-format=json >"$stdout" 2>"$stderr"
+          rc=$?
+          set -e
+          printf 'rc=%s\nstdout_sha256=%s\nstderr_sha256=%s\n' "$rc" \
+            "$(sha256sum "$stdout" | awk '{print $1}')" \
+            "$(sha256sum "$stderr" | awk '{print $1}')" >"$RUNNER_TEMP/meta.txt"
+          tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/diag.tar.gz" meta.txt check.stdout check.stderr
+          key="$RUNNER_TEMP/diag.key"; openssl rand -hex 32 >"$key"
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
+            -pass file:"$key" -in "$RUNNER_TEMP/diag.tar.gz" -out "$RUNNER_TEMP/diag.enc"
+          cat >"$RUNNER_TEMP/public.pem" <<'PEM'
+          -----BEGIN PUBLIC KEY-----
+          MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA44kYG5HNeYX8Njzu4Rlv
+          N4l91Ot/aJ+Wt8sFzQWDM8Sx4EHt7wH6X0NvSVuaoG1kzzi7MjfoqkxJMC7Xr1+w
+          WANFilU7WMu2B/P3c8m+HHuzQ3r16zvnleD3ekkmBVL6pTVMY8aEsRJwcOpZlawV
+          QVZxywhKcxwAOXp5qR4EIy/WP1JJF0SraxpWR4DC0/SbzZCFMYvLlo8bGMjXv7+e
+          Elrt+62hZm8vCmbpV/+pybaJjHR4SOV9d15ZnlVhBGSr1D3DYECoI7iDf9/4JCDb
+          A5O72pkJqb75vRQEw0SINKlLxnZTsWAypNxRG84eNoQcaOGqK0MXzAbmPNQrUUN/
+          7wIDAQAB
+          -----END PUBLIC KEY-----
+          PEM
+          openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/public.pem" -in "$key" -out "$RUNNER_TEMP/key.enc"
+          echo "OPAQUE_SEMANTIC_DIAG_RC=$rc"
+          echo "OPAQUE_SEMANTIC_DIAG_KEY_B64=$(base64 -w0 "$RUNNER_TEMP/key.enc")"
+          echo "OPAQUE_SEMANTIC_DIAG_DATA_B64=$(base64 -w0 "$RUNNER_TEMP/diag.enc")"
+          rm -f "$stdout" "$stderr" "$RUNNER_TEMP/meta.txt" "$RUNNER_TEMP/diag.tar.gz" \
+            "$key" "$RUNNER_TEMP/public.pem" "$RUNNER_TEMP/key.enc" "$RUNNER_TEMP/diag.enc"
+          exit 0
