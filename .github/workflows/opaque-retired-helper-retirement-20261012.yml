@@ -105,7 +105,7 @@ jobs:
           mapfile -d '' helpers <"$RUNNER_TEMP/helper-paths"; test "${#helpers[@]}" -eq 2
           git rm -q -- "${helpers[@]}"
           all="$RUNNER_TEMP/all-changed"; deleted="$RUNNER_TEMP/deleted"
-          git diff --name-only -z >"$all"; git diff --diff-filter=D --name-only -z >"$deleted"
+          git diff --cached --name-only -z >"$all"; git diff --cached --diff-filter=D --name-only -z >"$deleted"
           python3 - "$all" "$deleted" <<'PY'
           import hashlib,os,sys
           def read(p): return [x for x in open(p,'rb').read().split(b'\0') if x]
@@ -115,7 +115,7 @@ jobs:
               if len(paths)!=2 or hashes!=expected: raise SystemExit(80)
               print(f'LAS_HELPER_RETIRE_{label}_COUNT=2')
           PY
-          rm -f "$all" "$deleted"; git diff --check
+          rm -f "$all" "$deleted"; git diff --cached --check
           echo "LAS_HELPER_RETIRE_DELETE_BOUNDARY=PASS"
 
       - name: Run full gate matrix after helper retirement candidate
