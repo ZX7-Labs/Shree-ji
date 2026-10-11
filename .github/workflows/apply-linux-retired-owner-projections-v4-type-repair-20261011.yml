@@ -13,8 +13,8 @@ permissions:
 
 env:
   TARGET_REF_HASH: d73e1cef0bffe2458a50827f6407f422be639f2cdbd1c1a838ac8491f09306cf
-  EXPECTED_PRIVATE_SNAPSHOT_PROOF: a2006496b5eface6d442bad25b4d8077b76b81a4a6e79e96de6260b1bb1a3e01
-  EXPECTED_PRIVATE_TREE_PROOF: 45741f2f407f517ea82dc33b8071fcf07d46d4b22de93b3725a4de2b4b9e7d16
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: f57846f7b73d7e6cdab7d3dae0750e60038feda11caabf1efef7c6e3c2876f83
+  EXPECTED_PRIVATE_TREE_PROOF: 5e3a4624bde78519afb013b51e5fc92e151ec4cf52f1f750651091e7c642e667
 
 jobs:
   apply:
@@ -138,11 +138,13 @@ jobs:
           }
 
           run_gate TRANSFORM python3 tools/verification/private_apply_retired_ingress_owner_projection.py || failures=$((failures + 1))
+          run_gate CLIPPY_FIX python3 tools/verification/private_fix_retired_ingress_projection_clippy.py || failures=$((failures + 1))
           test "$failures" -eq 0
           test ! -e tools/verification/private_apply_retired_ingress_owner_projection.py
-          test "$(git status --porcelain | wc -l)" -eq 3
+          test ! -e tools/verification/private_fix_retired_ingress_projection_clippy.py
+          test "$(git status --porcelain | wc -l)" -eq 4
           test "$(git diff --name-only --diff-filter=M | wc -l)" -eq 2
-          test "$(git diff --name-only --diff-filter=D | wc -l)" -eq 1
+          test "$(git diff --name-only --diff-filter=D | wc -l)" -eq 2
 
           run_gate FORMAT_APPLY cargo +1.98.1 fmt --all || failures=$((failures + 1))
           run_gate TRUST_CONTRACT python3 tools/verification/root_trust_input_contract.py || failures=$((failures + 1))
@@ -156,7 +158,7 @@ jobs:
 
           echo "OPAQUE_PRIVATE_APPLY_FAILURE_COUNT=$failures"
           test "$failures" -eq 0
-          test "$(git status --porcelain | wc -l)" -eq 3
+          test "$(git status --porcelain | wc -l)" -eq 4
           echo "OPAQUE_PRIVATE_APPLY_GATES=PASS"
 
       - name: Commit under exact remote-head lease
@@ -170,9 +172,9 @@ jobs:
           current="$(git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote origin "$matched_ref" | awk '{print $1}')"
           test "$current" = "$expected_head"
           git add -u
-          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          test "$(git diff --cached --name-only | wc -l)" -eq 4
           test "$(git diff --cached --name-only --diff-filter=M | wc -l)" -eq 2
-          test "$(git diff --cached --name-only --diff-filter=D | wc -l)" -eq 1
+          test "$(git diff --cached --name-only --diff-filter=D | wc -l)" -eq 2
           git config user.name "LAS Verification Committer"
           git config user.email "las-verification@users.noreply.github.com"
           git commit -q -m "Project retired Linux ingress owner semantics"
