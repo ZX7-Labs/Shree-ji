@@ -1,0 +1,88 @@
+name: Opaque Linux retired-owner composite transform diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opaque-linux-retired-owner-composite-transform-diagnostic-20261011.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Recover exact private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+          TARGET_REF_HASH: 12246190df640013d9ee426d2a340387c6d22d0e8241135d6a20dcf1fe5a2bc0
+          EXPECTED_PRIVATE_SNAPSHOT_PROOF: 5a698107c7b9efab95ce96a98b7a8ae5218e79ac727922d69cc91ccb7ab66456
+          EXPECTED_PRIVATE_TREE_PROOF: 7424c2fa7a91f698a221c26e05d8a32d9fdf98f0b171b082506e6726c6b7a5d3
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$matched_ref"; matched_ref="$ref"; private_head="$candidate_sha"; fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$private_head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$private_head"
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$private_head"; git checkout -q --detach "$private_head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          echo "LAS_COMPOSITE_DIAG_EXACT_RECOVERY=PASS"
+
+      - name: Extract and encrypt embedded transform only
+        shell: bash
+        env:
+          ORIGINAL_HELPER_PATH_HASH: 3bd0f3b2ae73ca0acd5d1e08b47720c6cc80569d4b87901c2e1fc0b69f7504e2
+          RECIPIENT_CERT_B64: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURPekNDQWlPZ0F3SUJBZ0lVTk0wL08xNTc3bjdkYlMwbURQL0ZhdG1FSHE4d0RRWUpLb1pJaHZjTkFRRUwKQlFBd0xURXJNQ2tHQTFVRUF3d2lURUZUSUdOdmJYQnZjMmwwWlNCMGNtRnVjMlp2Y20wZ1pHbGhaMjV2YzNScApZekFlRncweU5qRXdNVEV4TlRJeE16TmFGdzB5TmpFd01USXhOVEl4TXpOYU1DMHhLekFwQmdOVkJBTU1Ja3hCClV5QmpiMjF3YjNOcGRHVWdkSEpoYm5ObWIzSnRJR1JwWVdkdWIzTjBhV013Z2dFaU1BMEdDU3FHU0liM0RRRUIKQVFVQUE0SUJEd0F3Z2dFS0FvSUJBUURuRVFIRXNsTVJ2dzFwNHFxT1A0R29UamVFR0EyR1VvR3ZrUkhkM2s0OQpPTVo2NGhrOUFwN1VQNlFSVkE2TVJxeUtpYmk1S25UVW0yZ0hiMUo4a1g1Q1p2UXhuY3pRcEh4NjUvWDZHMTNlCmsrTXdZRUFYd3RJcHlBRWhRWnMwdk9yaHgrdkJKeEdrWk9jd1JvMWtqYjhKalBXVDN6c2Q5RUIyQ1FJRWJYTGQKRjYzSFk5VXl4bDBEVHhDQmk1cFJsOVlMM1E3azRzV29GRVVtanZBMVNZVGF3SFNaS0d0TEJzZDhURENsaVBrUApHeTZzTXNZR2pyKzRKdkpKNXNlb2V3b2U4NlVtQlllMWFidFN1dTRiYTlpa3hsOGpSdGwrb3BnZE5BTlMybjhFCjB2T2dsQkwzRlBWYkdFeFZ6cjVmOXJzTnNRbkNvcUxiaC9UenJBSlE2Y3oxQWdNQkFBR2pVekJSTUIwR0ExVWQKRGdRV0JCUSt4TFg1SXp0TzNOUUZ5dzRid1haaTUza1ZuakFmQmdOVkhTTUVHREFXZ0JRK3hMWDVJenRPM05RRgp5dzRid1haaTUza1ZuakFQQmdOVkhSTUJBZjhFQlRBREFRSC9NQTBHQ1NxR1NJYjNEUUVCQ3dVQUE0SUJBUUIzClFqQi9oS0J0dmROcU1PTXZIaXZEQTg3WHBQOW9tcDZoU1FyMkI5RGlnS216U3BmRFk1RlZzZHE3WWl2YnRPeVoKWkZkdU56czRaamFicVd5TU1Zc2RPN284NEsyZFk5NzRreHJidlIwTlJTSjM4UzlkaFk5ZDhnNGJRTW5NTG0vVQpzSkNjT3RDTXBsbUF3UnI5VkZLUkJvZ0JPOUp0WXB6VStMalRmWmJFa2xOUmx4ZjgzeVpjOCt6eFJVd3B1UFlpCm1rU0pHNHVMMmp4b1dRQXM0NEVSRFBqUi9qQXFnRjBWTk1RV3VuSEtPUGozeE5Qd0dNM2VFY0VyNU5qeVhLdWoKb2RIa1Y0bTBnRWhqcWNhQkxLTjVweFUvSU5vbGNWK2NiTyt3K0k4aG9leFEvMmhVQW5uRjB2L1J2azJJMVZiMwpQdTZML05VakJSMEhGVmliUnZQVQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          helper=""; matches=0
+          while IFS= read -r -d '' candidate; do
+            digest="$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')"
+            if [[ "$digest" = "$ORIGINAL_HELPER_PATH_HASH" ]]; then helper="$candidate"; matches=$((matches+1)); fi
+          done < <(git ls-files -z)
+          test "$matches" -eq 1; test -n "$helper"
+          plain="$RUNNER_TEMP/transform.py"
+          python3 - "$helper" "$plain" <<'PY'
+          import ast, base64, gzip, hashlib, sys
+          text=open(sys.argv[1], encoding='utf-8').read(); tree=ast.parse(text)
+          values={}
+          for node in tree.body:
+              if isinstance(node, ast.Assign) and len(node.targets)==1 and isinstance(node.targets[0], ast.Name) and isinstance(node.value, ast.Constant):
+                  values[node.targets[0].id]=node.value.value
+          payload=values.get('PAYLOAD'); expected=values.get('EXPECTED')
+          if not isinstance(payload,str) or not isinstance(expected,str): raise SystemExit(1)
+          source=gzip.decompress(base64.b64decode(payload))
+          if hashlib.sha256(source).hexdigest()!=expected: raise SystemExit(2)
+          open(sys.argv[2],'wb').write(source)
+          PY
+          cert="$RUNNER_TEMP/recipient.pem"; printf '%s' "$RECIPIENT_CERT_B64" | base64 -d >"$cert"
+          out="$RUNNER_TEMP/composite-transform.cms"
+          openssl cms -encrypt -binary -aes-256-cbc -in "$plain" -recip "$cert" -outform DER -out "$out"
+          rm -f "$plain" "$cert"
+          mkdir "$RUNNER_TEMP/encrypted-diagnostic"; mv "$out" "$RUNNER_TEMP/encrypted-diagnostic/transform.cms"
+          echo "LAS_COMPOSITE_DIAG_ENCRYPTED=PASS"
+
+      - name: Upload ciphertext-only diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: retired-owner-composite-transform-diagnostic
+          path: ${{ runner.temp }}/encrypted-diagnostic/transform.cms
+          if-no-files-found: error
+          retention-days: 1
