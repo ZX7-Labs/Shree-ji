@@ -1,0 +1,87 @@
+name: Opaque retired-owner helper chain proof 20261012
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opaque-retired-helper-chain-proof-20261012.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 12246190df640013d9ee426d2a340387c6d22d0e8241135d6a20dcf1fe5a2bc0
+  EXPECTED_COMMITTED_HEAD_PROOF: eae214ecf5fbcd274dc0e5ef32747a62ccce3d480be8e7b46931512d26ea03ad
+  EXPECTED_COMMITTED_TREE_PROOF: baf8e7cf99e3a2d2806a0edc1e9ab2bba3218170fae0991457e410af99d67032
+  HELPER_A_PATH_HASH: 3bd0f3b2ae73ca0acd5d1e08b47720c6cc80569d4b87901c2e1fc0b69f7504e2
+  HELPER_B_PATH_HASH: 3339f22991f94a6f36ccc66648584a4ea905fe49d2e0d854321e69643eb0d7c4
+
+jobs:
+  prove:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Recover exact committed private head and prove helper isolation
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_READ_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_READ_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_READ_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; head=""
+          while read -r sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$matched_ref"; matched_ref="$ref"; head="$sha"; fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$head"
+          test "$(printf '%s' "$head" | sha256sum | awk '{print $1}')" = "$EXPECTED_COMMITTED_HEAD_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=2 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$head"; git checkout -q --detach "$head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_COMMITTED_TREE_PROOF"
+          python3 - <<'PY'
+          import hashlib,pathlib,subprocess,os
+          tracked=[p.decode() for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if p]
+          targets=[os.environ['HELPER_A_PATH_HASH'],os.environ['HELPER_B_PATH_HASH']]
+          helpers=[]
+          for target in targets:
+              m=[p for p in tracked if hashlib.sha256(p.encode()).hexdigest()==target]
+              if len(m)!=1: raise SystemExit(70)
+              helpers.append(pathlib.Path(m[0]))
+          text_files=[]
+          for q in tracked:
+              p=pathlib.Path(q)
+              try: txt=p.read_text(encoding='utf-8')
+              except Exception: continue
+              text_files.append((p,txt))
+          helper_set={str(x) for x in helpers}
+          for idx,h in enumerate(helpers,1):
+              refs=[]; base_refs=[]
+              for p,txt in text_files:
+                  if p==h: continue
+                  if str(h) in txt: refs.append(str(p))
+                  if h.name in txt: base_refs.append(str(p))
+              refs=sorted(set(refs)); base_refs=sorted(set(base_refs))
+              external=[p for p in refs if p not in helper_set]
+              external_base=[p for p in base_refs if p not in helper_set]
+              print(f'LAS_HELPER_CHAIN_{idx}_FULL_REFERRERS={len(refs)}')
+              print(f'LAS_HELPER_CHAIN_{idx}_EXTERNAL_FULL_REFERRERS={len(external)}')
+              print(f'LAS_HELPER_CHAIN_{idx}_BASENAME_REFERRERS={len(base_refs)}')
+              print(f'LAS_HELPER_CHAIN_{idx}_EXTERNAL_BASENAME_REFERRERS={len(external_base)}')
+              if idx==1:
+                  print('LAS_HELPER_CHAIN_1_SOLE_REFERRER_IS_HELPER_2=' + ('1' if refs==[str(helpers[1])] and base_refs==[str(helpers[1])] else '0'))
+              else:
+                  print('LAS_HELPER_CHAIN_2_UNREFERENCED=' + ('1' if not refs and not base_refs else '0'))
+          if not (len([p for p,txt in text_files if p!=helpers[0] and str(helpers[0]) in txt])==1): raise SystemExit(71)
+          if not (str(helpers[0]) in helpers[1].read_text(encoding='utf-8')): raise SystemExit(72)
+          if any(str(helpers[1]) in txt or helpers[1].name in txt for p,txt in text_files if p!=helpers[1]): raise SystemExit(73)
+          print('LAS_HELPER_CHAIN_ISOLATED=PASS')
+          PY
+          echo "LAS_HELPER_CHAIN_PROOF=PASS"
