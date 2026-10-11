@@ -1,0 +1,2 @@
+Trigger exact private verification for retired bound archive frontier v3.
+Private source identity is bound opaquely by the workflow's ref, snapshot, and tree proofs.
