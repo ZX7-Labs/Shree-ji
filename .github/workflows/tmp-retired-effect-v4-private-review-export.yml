@@ -1,0 +1,110 @@
+name: Temporary opaque retired effect v4 private review export
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/tmp-retired-effect-v4-private-review-export.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Recover exact private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+          TARGET_REF_HASH: a7195b2116dc080ad9d3be4184fef8c5fc791983798984d5fc25cd3f38e878ab
+          EXPECTED_PRIVATE_SNAPSHOT_PROOF: f15eebcfaa8fb997898b97ed632269b2551e308ec1f0f1f889e4b935bdd5d84f
+          EXPECTED_PRIVATE_TREE_PROOF: 9bcaea87c6af2eda91731f2c16526dfb225e6e929ecd62f07c2558e9e632eea7
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$matched_ref"; matched_ref="$ref"; private_head="$candidate_sha"; fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$private_head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$private_head"
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$private_head"; git checkout -q --detach "$private_head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          unset PRIVATE_TOKEN auth matched_ref private_head tree candidate_sha ref
+          echo "LAS_REVIEW_EXACT_RECOVERY=PASS"
+
+      - name: Materialize exact six-file candidate without source output
+        shell: bash
+        env:
+          TRANSFORM_PATH_HASH: b24292ddb8ac88c004949711dfe57ce53a512e522ef6c2d2dbc682e15e124fe9
+          BUILD_REPAIR_PATH_HASH: b32f32788e402a7b6a0cc56d8da35aa7304479e8fbbe01af4344afe96b8685a2
+          DEFAULT_REPAIR_PATH_HASH: 489337a86bc51fa6cc652c44effdc29ddfb61ffa5f91cb66d622b7a37c58500d
+          EXPECTED_PATH_HASHES: |
+            577cbe123ea611e0205c0a595ea25d41e1c43c507c8439264a148f4906dba9a0
+            5b89ebd95ae5bd0a2001acc3da8f2b30646a3a49483966e6f7c71c7538f55336
+            933fb5901ecca40e0c510961bb42f77a92e97a8edd4cf46633dd4b0889a52a73
+            b68c1a40c3bd9e1a111e13782c2040df87dba050dd5e911c0586bc750209a1e9
+            c6dab830b8322ddb21d865595d3d99a36d8457044f9901beecb0df6373ceaaf5
+            f1ed409300b965a0572e7559552f652feba637a9b4363860b0bb3f598c05d566
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          transform=""; build_repair=""; default_repair=""
+          while IFS= read -r -d '' candidate; do
+            digest="$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')"
+            [[ "$digest" = "$TRANSFORM_PATH_HASH" ]] && { test -z "$transform"; transform="$candidate"; }
+            [[ "$digest" = "$BUILD_REPAIR_PATH_HASH" ]] && { test -z "$build_repair"; build_repair="$candidate"; }
+            [[ "$digest" = "$DEFAULT_REPAIR_PATH_HASH" ]] && { test -z "$default_repair"; default_repair="$candidate"; }
+          done < <(git ls-files -z)
+          test -n "$transform"; test -n "$build_repair"; test -n "$default_repair"
+          python3 "$transform" --apply
+          python3 "$build_repair"
+          python3 "$default_repair"
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt >/dev/null
+          cargo +1.98.1 fmt --all
+          changed="$RUNNER_TEMP/changed-paths"; git diff --name-only -z >"$changed"
+          python3 - "$changed" <<'PY'
+          import hashlib, os, sys
+          expected=set(os.environ['EXPECTED_PATH_HASHES'].split())
+          paths=[p for p in open(sys.argv[1],'rb').read().split(b'\0') if p]
+          actual={hashlib.sha256(p).hexdigest() for p in paths}
+          if len(paths)!=6 or len(actual)!=6 or actual!=expected: raise SystemExit('unexpected private review change set')
+          PY
+          echo "LAS_REVIEW_CHANGESET=PASS"
+
+      - name: Encrypt candidate to session-only review certificate
+        shell: bash
+        env:
+          RECIPIENT_CERT_B64: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUVUVENDQXJXZ0F3SUJBZ0lVTklNdG0reE1Ja0s2SmJXSWJoMzNnVmREenA4d0RRWUpLb1pJaHZjTkFRRUwKQlFBd05qRTBNRElHQTFVRUF3d3JURUZUSUhKbGRHbHlaV1FnWldabVpXTjBJSEJ5YVhaaGRHVWdjbVYyYVdWMwpJR1Z3YUdWdFpYSmhiREFlRncweU5qRXdNVEV4TkRJNU1qSmFGdzB5TmpFd01USXhOREk1TWpKYU1EWXhOREF5CkJnTlZCQU1NSzB4QlV5QnlaWFJwY21Wa0lHVm1abVZqZENCd2NtbDJZWFJsSUhKbGRtbGxkeUJsY0dobGJXVnkKWVd3d2dnR2lNQTBHQ1NxR1NJYjNEUUVCQVFVQUE0SUJqd0F3Z2dHS0FvSUJnUURNRnJIQ2pTR0FFN05mQXpSdApKRkltOFlJa0FDNFBFY3FRYkpKOWJWS2RqYytkWWNBZDY3YVU3cGorbVJya0xILytWM05HcThQUzhucHlacTEyCkpWaHR0b29Xa05CZXE4V3N4UkVwSG00blBNUnhFUzFac1l5a2Qvck1adUM5OWFnSndkMUVWU09GTE5CMUtGaU0KN29leVczWkJtMVh0bTNzYldrTGJZOURrN2x0NHBjZTBNbExzVFRlN0JpUUlxV20wQmFCOXNJcHZoUytVT0MwWAp2MkFQWFhjL3pxbDB5cTFEcGc1cjdPejZCZysrSUN2RE9VQ1RQc1FxeUR6TGZZcGN5VU1SSmlTNTFIdDA4WXd5CmlWYXdsWTVFOE02MG5ZQUNLRlluRWpQVEtNdDdwUUdINmRxR0RQa3JUdkg5QTBYNlVLTXhQbzZsZ3NSL2I3b3EKMGZNeW1aZkJzb2puTDVmVStac3JNeS83SU1XTkE2WVExM1RXVU8vUi82RHNGWHBOLzFQeTRiaDNDNVpSajY5Ngpvc2VlNkxqVWdCZEJsUkZWVGxyLzhtNkFRL1ZBcW03Q0dFeDJWVVRGZTZZWW4zUENoN3JkckE3RjNwOXVPRC9TCmJpbFNCSm1xWUxacnFNYytudk82R0xQenArVVBHbFVidlp6K2lpTzlwcnRxa0JFQ0F3RUFBYU5UTUZFd0hRWUQKVlIwT0JCWUVGTmpxUUVlVEwwc0F3bnB2a1d0ZUlRU3RSVGxiTUI4R0ExVWRJd1FZTUJhQUZOanFRRWVUTDBzQQp3bnB2a1d0ZUlRU3RSVGxiTUE4R0ExVWRFd0VCL3dRRk1BTUJBZjh3RFFZSktvWklodmNOQVFFTEJRQURnZ0dCCkFNUDFFSUpJN0pFeE5YUXVUS1Z0SmVReDU5U2lGQVQ0UDJzN1E4dFhHeHlaUkx2MnNpNVBsRUFvQnpKc25pdDYKZ3ZueHBXMDRBUlVjV25vNDNXbUhxc3JZREgyRVZzTXpvMUN3RW5BbmVNeGpKc1hadUNiWmd5NUovUnhYZVJKbApUVTE3R0VlYUplcGF2VmluaEJMWGZ5SlNxUWZuRytPS1NEQXoxd1I4ZkhTbURkdlR1emduMXp4UzJmZTE5VjlnCm5kYmdEWkNHdm4rR0Y5QXRCd3ZRUWhsV1ZqbS84UGVaWWhJOG56Q01SWkl0bDZxMlB2TlZJWkl5TmFuY1BXaVMKV3FNcnlwU1IvNGxKaHV1aXVrdnB5K3RVWnFzY05HbXZoN0lNUWhOdTJNdEJkVUR2T3lXeXQ3SStOZ1M0aXE0aQpucHhHa1pka2ZkWFNsNE9KLzlMWDIrUC95bkdRN1pDYzkvSjNvdndGY0NGNVB5bUhYV013b3JSSThBd1RtRisrCjVNeS9ab05PaVlNNTZ2VHl6bWl6TzVMN0lrcSs4QVIwZUhxNFNrdnV5aG1peGZ6dkxwVTU3TDk4cXlMa3B6Sy8KSCsyZXJVZTM0Z0o5SDVlQlBnVmx5MzU5bklGOXZsRzJadXU4UEV2a3R4em96UlRUak9XVU8xbUNwYzlzWSt0Wgp5QT09Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          cert="$RUNNER_TEMP/review-cert.pem"; printf '%s' "$RECIPIENT_CERT_B64" | base64 -d >"$cert"
+          changed="$RUNNER_TEMP/changed-paths"; git diff --name-only -z >"$changed"
+          tarball="$RUNNER_TEMP/review-candidate.tar.gz"
+          tar --null -T "$changed" -czf "$tarball"
+          cipher="$RUNNER_TEMP/review-candidate.cms"
+          openssl cms -encrypt -binary -aes256 -in "$tarball" -out "$cipher" -outform DER "$cert"
+          rm -f "$tarball" "$cert" "$changed"
+          echo "LAS_REVIEW_CIPHERTEXT_SHA256=$(sha256sum "$cipher" | awk '{print $1}')"
+
+      - name: Upload ciphertext only
+        uses: actions/upload-artifact@v4
+        with:
+          name: retired-effect-v4-private-review
+          path: ${{ runner.temp }}/review-candidate.cms
+          if-no-files-found: error
+          retention-days: 1
