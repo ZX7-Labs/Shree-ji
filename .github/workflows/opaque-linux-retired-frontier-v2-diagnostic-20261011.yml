@@ -60,7 +60,7 @@ jobs:
           test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
           test "$(cargo +1.98.1 --version | awk '{print $2}')" = "1.98.1"
 
-      - name: Apply narrow test fix, format, check, and return encrypted evidence
+      - name: Apply narrow test fix, format, check, and encrypt evidence
         shell: bash
         run: |
           set -euo pipefail
@@ -120,9 +120,15 @@ jobs:
           openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/public.pem" \
             -in "$key" -out "$RUNNER_TEMP/key.enc"
           echo "OPAQUE_BINDING_DIAG_RC=$rc"
-          echo "OPAQUE_BINDING_DIAG_KEY_B64=$(base64 -w0 "$RUNNER_TEMP/key.enc")"
-          echo "OPAQUE_BINDING_DIAG_DATA_B64=$(base64 -w0 "$RUNNER_TEMP/diag.enc")"
           rm -f "$RUNNER_TEMP/diag.tar.gz" "$key" "$RUNNER_TEMP/public.pem" \
-            "$RUNNER_TEMP/key.enc" "$RUNNER_TEMP/diag.enc" "$RUNNER_TEMP/meta.txt" \
-            "$check_stdout" "$check_stderr"
-          exit 0
+            "$RUNNER_TEMP/meta.txt" "$check_stdout" "$check_stderr"
+
+      - name: Upload encrypted diagnostic only
+        uses: actions/upload-artifact@v4
+        with:
+          name: opaque-binding-diagnostic
+          path: |
+            ${{ runner.temp }}/key.enc
+            ${{ runner.temp }}/diag.enc
+          if-no-files-found: error
+          retention-days: 1
