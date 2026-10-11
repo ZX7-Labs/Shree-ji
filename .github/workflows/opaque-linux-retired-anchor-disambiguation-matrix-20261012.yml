@@ -1,4 +1,4 @@
-name: Opaque retired-owner anchor disambiguation matrix 20261012
+name: Opaque retired-owner four-candidate gate matrix 20261012
 
 on:
   push:
@@ -15,9 +15,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        occurrence: [FIRST, SECOND]
+        fifth: [FIRST, SECOND]
+        eleventh: [FIRST, SECOND]
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 90
     steps:
       - name: Recover exact live private head opaquely
         shell: bash
@@ -47,7 +48,7 @@ jobs:
           tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
           test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_TREE_PROOF"
           test -z "$(git status --porcelain)"
-          echo "LAS_DISAMBIG_${{ matrix.occurrence }}_RECOVERY=PASS"
+          echo "LAS_FOUR_${{ matrix.fifth }}_${{ matrix.eleventh }}_RECOVERY=PASS"
 
       - name: Install pinned Rust and Ada toolchains
         shell: bash
@@ -67,12 +68,13 @@ jobs:
           printf '#!/usr/bin/env bash\nset -euo pipefail\ncd %q\nexec %q exec -- gprbuild "$@"\n' "$workspace" "$prefix/bin/alr" >"$gpr_wrapper"
           chmod +x "$gpr_wrapper"; "$gpr_wrapper" --version >/dev/null
           echo "GPRBUILD=$gpr_wrapper" >>"$GITHUB_ENV"
-          echo "LAS_DISAMBIG_${{ matrix.occurrence }}_TOOLCHAINS=PASS"
+          echo "LAS_FOUR_${{ matrix.fifth }}_${{ matrix.eleventh }}_TOOLCHAINS=PASS"
 
-      - name: Materialize one ambiguous-anchor variant opaquely
+      - name: Materialize exact ambiguity candidate opaquely
         shell: bash
         env:
-          VARIANT: ${{ matrix.occurrence }}
+          FIFTH: ${{ matrix.fifth }}
+          ELEVENTH: ${{ matrix.eleventh }}
           ORIGINAL_HELPER_PATH_HASH: 3bd0f3b2ae73ca0acd5d1e08b47720c6cc80569d4b87901c2e1fc0b69f7504e2
           EXPECTED_TRANSFORM_SHA256: d97bb8c1f38b8ceeb9a5814e984947822b76cb2dcf681ead65443ab02c4e8e58
           EXPECTED_PATH_HASH_1: 680761d41ae8315a6bf67b2df5250c8b4ebc93b434b7de42be032b743c37b90a
@@ -82,91 +84,82 @@ jobs:
           cd "$RUNNER_TEMP/private-target"
           python3 - "$RUNNER_TEMP" <<'PY'
           import ast, base64, gzip, hashlib, os, pathlib, subprocess, sys
-          tmp=pathlib.Path(sys.argv[1]); variant=os.environ['VARIANT']
+          tmp=pathlib.Path(sys.argv[1]); choices={5:os.environ['FIFTH'],11:os.environ['ELEVENTH']}; label=f"{choices[5]}_{choices[11]}"
           tracked=[p.decode() for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if p]
           matches=[p for p in tracked if hashlib.sha256(p.encode()).hexdigest()==os.environ['ORIGINAL_HELPER_PATH_HASH']]
           if len(matches)!=1: raise SystemExit(70)
-          helper=pathlib.Path(matches[0]); tree=ast.parse(helper.read_text(encoding='utf-8')); vals={}
+          tree=ast.parse(pathlib.Path(matches[0]).read_text(encoding='utf-8')); vals={}
           for n in tree.body:
               if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name) and isinstance(n.value,ast.Constant): vals[n.targets[0].id]=n.value.value
           payload=vals.get('PAYLOAD'); expected=vals.get('EXPECTED')
           if not isinstance(payload,str) or not isinstance(expected,str): raise SystemExit(71)
           data=gzip.decompress(base64.b64decode(payload)); digest=hashlib.sha256(data).hexdigest()
           if digest!=expected or digest!=os.environ['EXPECTED_TRANSFORM_SHA256']: raise SystemExit(72)
-
-          state={'count':0,'replace':0,'actual_fifth':None,'selected':None}
+          state={'count':0,'replace':0}
+          def selected_replace(obj,old,new,choice):
+              first=obj.find(old); second=obj.find(old,first+len(old)); third=obj.find(old,second+len(old))
+              if first<0 or second<0 or third>=0: raise SystemExit(75)
+              pos=first if choice=='FIRST' else second
+              return obj[:pos]+new+obj[pos+len(old):]
           def las_count(obj,*args):
-              state['count']+=1; actual=obj.count(*args)
-              if state['count']==5:
-                  state['actual_fifth']=actual
+              state['count']+=1; ordinal=state['count']; actual=obj.count(*args)
+              if ordinal in choices:
                   if actual!=2: raise SystemExit(73)
                   return 1
               return actual
           def las_replace(obj,*args):
-              state['replace']+=1
-              if state['replace']!=5: return obj.replace(*args)
-              if len(args)<2: raise SystemExit(74)
-              old,new=args[0],args[1]
-              if not isinstance(obj,str) or not isinstance(old,str) or not isinstance(new,str): raise SystemExit(75)
-              first=obj.find(old)
-              second=obj.find(old,first+len(old)) if first>=0 else -1
-              third=obj.find(old,second+len(old)) if second>=0 else -1
-              if first<0 or second<0 or third>=0: raise SystemExit(76)
-              pos=first if variant=='FIRST' else second
-              state['selected']=1 if variant=='FIRST' else 2
-              return obj[:pos]+new+obj[pos+len(old):]
-
+              state['replace']+=1; ordinal=state['replace']; old=args[0] if args else None; new=args[1] if len(args)>1 else None
+              if ordinal in choices:
+                  if len(args)<2 or not isinstance(obj,str) or not isinstance(old,str) or not isinstance(new,str) or obj.count(old)!=2: raise SystemExit(74)
+                  return selected_replace(obj,old,new,choices[ordinal])
+              return obj.replace(*args)
           class T(ast.NodeTransformer):
               def visit_Call(self,node):
                   self.generic_visit(node)
-                  if node.lineno==6 and isinstance(node.func,ast.Attribute) and node.func.attr=='count':
-                      return ast.copy_location(ast.Call(ast.Name('las_count',ast.Load()),[node.func.value,*node.args],node.keywords),node)
-                  if node.lineno==9 and isinstance(node.func,ast.Attribute) and node.func.attr=='replace':
-                      return ast.copy_location(ast.Call(ast.Name('las_replace',ast.Load()),[node.func.value,*node.args],node.keywords),node)
+                  if node.lineno==6 and isinstance(node.func,ast.Attribute) and node.func.attr=='count': return ast.copy_location(ast.Call(ast.Name('las_count',ast.Load()),[node.func.value,*node.args],node.keywords),node)
+                  if node.lineno==9 and isinstance(node.func,ast.Attribute) and node.func.attr=='replace': return ast.copy_location(ast.Call(ast.Name('las_replace',ast.Load()),[node.func.value,*node.args],node.keywords),node)
                   return node
           parsed=ast.parse(data.decode('utf-8'),filename='<opaque-transform>'); inst=T().visit(parsed); ast.fix_missing_locations(inst)
           ns={'__name__':'__main__','__file__':str(tmp/'opaque-transform.py'),'las_count':las_count,'las_replace':las_replace}
           rc=0
           try: exec(compile(inst,'<opaque-transform>','exec'),ns,ns)
           except SystemExit as e: rc=e.code if isinstance(e.code,int) else 1
-          print(f'LAS_DISAMBIG_{variant}_TRANSFORM_RC={rc}')
-          print(f'LAS_DISAMBIG_{variant}_FIFTH_ACTUAL_COUNT={state["actual_fifth"]}')
-          print(f'LAS_DISAMBIG_{variant}_SELECTED_OCCURRENCE={state["selected"]}')
-          if rc!=0 or state['actual_fifth']!=2 or state['selected'] not in (1,2): raise SystemExit(77)
+          print(f'LAS_FOUR_{label}_TRANSFORM_RC={rc}')
+          print(f'LAS_FOUR_{label}_COUNT_CALLS={state["count"]}')
+          print(f'LAS_FOUR_{label}_REPLACE_CALLS={state["replace"]}')
+          if rc!=0 or state['count']!=11 or state['replace']!=11: raise SystemExit(77)
           PY
           cargo +1.98.1 fmt --all
           changed="$RUNNER_TEMP/changed"; git diff --name-only -z >"$changed"
           python3 - "$changed" <<'PY'
           import hashlib, os, subprocess, sys
-          variant=os.environ['VARIANT']; paths=[p for p in open(sys.argv[1],'rb').read().split(b'\0') if p]
-          hashes=sorted(hashlib.sha256(p).hexdigest() for p in paths)
-          expected=sorted([os.environ['EXPECTED_PATH_HASH_1'],os.environ['EXPECTED_PATH_HASH_2']])
-          print(f'LAS_DISAMBIG_{variant}_CHANGED_COUNT={len(paths)}')
-          print(f'LAS_DISAMBIG_{variant}_EXPECTED_CHANGESET=' + ('1' if hashes==expected else '0'))
-          blobproof=[]
+          label=f"{os.environ['FIFTH']}_{os.environ['ELEVENTH']}"; paths=[p for p in open(sys.argv[1],'rb').read().split(b'\0') if p]
+          hashes=sorted(hashlib.sha256(p).hexdigest() for p in paths); expected=sorted([os.environ['EXPECTED_PATH_HASH_1'],os.environ['EXPECTED_PATH_HASH_2']])
+          blobs=[]
           for p in paths:
-              blob=subprocess.check_output(['git','hash-object','--',p.decode()],text=True).strip()
-              blobproof.append(hashlib.sha256(blob.encode()).hexdigest())
-          print(f'LAS_DISAMBIG_{variant}_BLOBSET_PROOF='+hashlib.sha256('\n'.join(sorted(blobproof)).encode()).hexdigest())
+              blob=subprocess.check_output(['git','hash-object','--',p.decode()],text=True).strip(); blobs.append(hashlib.sha256(blob.encode()).hexdigest())
+          print(f'LAS_FOUR_{label}_CHANGED_COUNT={len(paths)}')
+          print(f'LAS_FOUR_{label}_EXPECTED_CHANGESET=' + ('1' if hashes==expected else '0'))
+          print(f'LAS_FOUR_{label}_BLOBSET_PROOF='+hashlib.sha256('\n'.join(sorted(blobs)).encode()).hexdigest())
           if hashes!=expected: raise SystemExit(78)
           PY
-          rm -f "$changed"
-          git diff --check
-          echo "LAS_DISAMBIG_${{ matrix.occurrence }}_MATERIALIZATION=PASS"
+          rm -f "$changed"; git diff --check
+          echo "LAS_FOUR_${{ matrix.fifth }}_${{ matrix.eleventh }}_MATERIALIZATION=PASS"
 
       - name: Run full transformed candidate gates
         shell: bash
         env:
-          VARIANT: ${{ matrix.occurrence }}
+          FIFTH: ${{ matrix.fifth }}
+          ELEVENTH: ${{ matrix.eleventh }}
           RUSTFLAGS: -Dwarnings
         run: |
           set -euo pipefail
-          cd "$RUNNER_TEMP/private-target"; failures=0
+          cd "$RUNNER_TEMP/private-target"; label="${FIFTH}_${ELEVENTH}"; failures=0
           run_gate() {
-            label="$1"; shift; log="$RUNNER_TEMP/${VARIANT}-${label}.private.log"
+            gate="$1"; shift; log="$RUNNER_TEMP/${label}-${gate}.private.log"
             set +e; "$@" >"$log" 2>&1; rc=$?; set -e
-            echo "LAS_DISAMBIG_${VARIANT}_${label}_RC=$rc"
-            echo "LAS_DISAMBIG_${VARIANT}_${label}_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')"
+            echo "LAS_FOUR_${label}_${gate}_RC=$rc"
+            echo "LAS_FOUR_${label}_${gate}_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')"
             rm -f "$log"; if [[ "$rc" -ne 0 ]]; then failures=$((failures+1)); fi
           }
           run_gate TRUST_CONTRACT python3 tools/verification/root_trust_input_contract.py
@@ -180,6 +173,6 @@ jobs:
           run_gate RETIRED_SINK_TEST cargo +1.98.1 test --locked --lib --features linux-peer-credentials root_supervisor_linux_retired_owner_projection -- --test-threads=1
           run_gate PRODUCTION_LIB_TEST cargo +1.98.1 test --locked --lib --features "root-ffi linux-peer-credentials" -- --test-threads=1
           run_gate RELEASE_CHECK cargo +1.98.1 check --release --locked --all-targets --features "root-ffi linux-peer-credentials"
-          echo "LAS_DISAMBIG_${VARIANT}_FAILURE_COUNT=$failures"
-          if [[ "$failures" -eq 0 ]]; then echo "LAS_DISAMBIG_${VARIANT}_GATE_MATRIX=PASS"; else echo "LAS_DISAMBIG_${VARIANT}_GATE_MATRIX=FAIL"; fi
+          echo "LAS_FOUR_${label}_FAILURE_COUNT=$failures"
+          if [[ "$failures" -eq 0 ]]; then echo "LAS_FOUR_${label}_GATE_MATRIX=PASS"; else echo "LAS_FOUR_${label}_GATE_MATRIX=FAIL"; fi
           test "$failures" -eq 0
