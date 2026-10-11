@@ -1,0 +1,101 @@
+name: Opaque Linux retired archive frontier v2 diagnostic
+
+on:
+  pull_request:
+    paths:
+      - "verification-requests/**"
+      - ".github/workflows/opaque-linux-retired-frontier-v2-diagnostic-20261011.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 535f587822554ff667cbfc2f12d2067eb29413d54436bb8ce8ac21fe636c5f56
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 091872b8cc141271c1a54c32710d950c64cad039b5317d247c99d42b7b288f02
+  EXPECTED_PRIVATE_TREE_PROOF: f467b9596c09950c8141ace8fe3ac5643247de9d6e798000cb17419a7efea436
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Recover exact private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$GITHUB_WORKSPACE/target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"; matched_ref="$ref"; private_head="$candidate_sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$private_head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$private_head"
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$private_head"; git checkout -q --detach "$private_head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          unset PRIVATE_TOKEN auth matched_ref private_head tree candidate_sha ref
+          echo "OPAQUE_DIAG_EXACT_RECOVERY=PASS"
+
+      - name: Install pinned Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          test "$(cargo +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+
+      - name: Produce encrypted compiler diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          stdout="$RUNNER_TEMP/check.stdout"
+          stderr="$RUNNER_TEMP/check.stderr"
+          set +e
+          RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --all-targets \
+            --features linux-peer-credentials --message-format=json >"$stdout" 2>"$stderr"
+          rc=$?
+          set -e
+          printf 'rc=%s\n' "$rc" >"$RUNNER_TEMP/meta.txt"
+          printf 'stdout_sha256=%s\n' "$(sha256sum "$stdout" | awk '{print $1}')" >>"$RUNNER_TEMP/meta.txt"
+          printf 'stderr_sha256=%s\n' "$(sha256sum "$stderr" | awk '{print $1}')" >>"$RUNNER_TEMP/meta.txt"
+          tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/diag.tar.gz" meta.txt check.stdout check.stderr
+          key="$RUNNER_TEMP/diag.key"
+          openssl rand -hex 32 >"$key"
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
+            -pass file:"$key" -in "$RUNNER_TEMP/diag.tar.gz" -out "$RUNNER_TEMP/diag.enc"
+          cat >"$RUNNER_TEMP/public.pem" <<'PEM'
+          -----BEGIN PUBLIC KEY-----
+          MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA44kYG5HNeYX8Njzu4Rlv
+          N4l91Ot/aJ+Wt8sFzQWDM8Sx4EHt7wH6X0NvSVuaoG1kzzi7MjfoqkxJMC7Xr1+w
+          WANFilU7WMu2B/P3c8m+HHuzQ3r16zvnleD3ekkmBVL6pTVMY8aEsRJwcOpZlawV
+          QVZxywhKcxwAOXp5qR4EIy/WP1JJF0SraxpWR4DC0/SbzZCFMYvLlo8bGMjXv7+e
+          Elrt+62hZm8vCmbpV/+pybaJjHR4SOV9d15ZnlVhBGSr1D3DYECoI7iDf9/4JCDb
+          A5O72pkJqb75vRQEw0SINKlLxnZTsWAypNxRG84eNoQcaOGqK0MXzAbmPNQrUUN/
+          7wIDAQAB
+          -----END PUBLIC KEY-----
+          PEM
+          openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/public.pem" \
+            -in "$key" -out "$RUNNER_TEMP/key.enc"
+          echo "OPAQUE_DIAG_RC=$rc"
+          echo "OPAQUE_DIAG_KEY_B64=$(base64 -w0 "$RUNNER_TEMP/key.enc")"
+          echo "OPAQUE_DIAG_DATA_B64=$(base64 -w0 "$RUNNER_TEMP/diag.enc")"
+          rm -f "$stdout" "$stderr" "$RUNNER_TEMP/meta.txt" "$RUNNER_TEMP/diag.tar.gz" \
+            "$key" "$RUNNER_TEMP/public.pem" "$RUNNER_TEMP/key.enc" "$RUNNER_TEMP/diag.enc"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          exit 0
