@@ -1,0 +1,141 @@
+name: Opaque retired-owner post-disambiguation telemetry 20261012
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opaque-linux-retired-post-disambiguation-telemetry-20261012.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trace:
+    strategy:
+      fail-fast: false
+      matrix:
+        occurrence: [FIRST, SECOND]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Recover exact live private head opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+          TARGET_REF_HASH: 12246190df640013d9ee426d2a340387c6d22d0e8241135d6a20dcf1fe5a2bc0
+          EXPECTED_HEAD_PROOF: c1b3b06dc372f212fd256e328c9a0dad282c1b2a44e179879061c15a0a19c99b
+          EXPECTED_TREE_PROOF: 96dd6f1b2d519fe01e22647efa8d4f32f6e53f5badb00b199e9133246e0fc501
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$matched_ref"; matched_ref="$ref"; head="$candidate_sha"; fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$head"
+          test "$(printf '%s' "$head" | sha256sum | awk '{print $1}')" = "$EXPECTED_HEAD_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$head"; git checkout -q --detach "$head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          echo "LAS_POST_DISAMBIG_${{ matrix.occurrence }}_RECOVERY=PASS"
+
+      - name: Trace transform after resolving fifth anchor
+        shell: bash
+        env:
+          VARIANT: ${{ matrix.occurrence }}
+          ORIGINAL_HELPER_PATH_HASH: 3bd0f3b2ae73ca0acd5d1e08b47720c6cc80569d4b87901c2e1fc0b69f7504e2
+          EXPECTED_TRANSFORM_SHA256: d97bb8c1f38b8ceeb9a5814e984947822b76cb2dcf681ead65443ab02c4e8e58
+          EXPECTED_PATH_HASH_1: 680761d41ae8315a6bf67b2df5250c8b4ebc93b434b7de42be032b743c37b90a
+          EXPECTED_PATH_HASH_2: 736cc80e53ddc8c5287113b778e1a8fb5f3973b1b5092cdf665c982b07ce8b6d
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          python3 - "$RUNNER_TEMP" <<'PY'
+          import ast, base64, gzip, hashlib, os, pathlib, subprocess, sys
+          tmp=pathlib.Path(sys.argv[1]); variant=os.environ['VARIANT']
+          tracked=[p.decode() for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if p]
+          matches=[p for p in tracked if hashlib.sha256(p.encode()).hexdigest()==os.environ['ORIGINAL_HELPER_PATH_HASH']]
+          if len(matches)!=1: raise SystemExit(70)
+          tree=ast.parse(pathlib.Path(matches[0]).read_text(encoding='utf-8')); vals={}
+          for n in tree.body:
+              if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name) and isinstance(n.value,ast.Constant): vals[n.targets[0].id]=n.value.value
+          payload=vals.get('PAYLOAD'); expected=vals.get('EXPECTED')
+          if not isinstance(payload,str) or not isinstance(expected,str): raise SystemExit(71)
+          data=gzip.decompress(base64.b64decode(payload)); digest=hashlib.sha256(data).hexdigest()
+          if digest!=expected or digest!=os.environ['EXPECTED_TRANSFORM_SHA256']: raise SystemExit(72)
+
+          events=[]; state={'count':0,'replace':0}
+          def add(kind,line,ident,*fields): events.append((kind,line,ident)+fields)
+          def las_count(line,ident,obj,*args):
+              state['count']+=1; actual=obj.count(*args); arg=args[0] if args else None
+              alen=len(arg) if isinstance(arg,(str,bytes)) else -1; olen=len(obj) if isinstance(obj,(str,bytes,list,tuple)) else -1
+              add('COUNT',line,ident,state['count'],actual,alen,olen)
+              if state['count']==5:
+                  if actual!=2: raise SystemExit(73)
+                  return 1
+              return actual
+          def las_replace(line,ident,obj,*args):
+              state['replace']+=1; old=args[0] if args else None; new=args[1] if len(args)>1 else None
+              before=obj.count(old) if isinstance(obj,(str,bytes)) and isinstance(old,type(obj)) else -1
+              oldlen=len(old) if isinstance(old,(str,bytes)) else -1; newlen=len(new) if isinstance(new,(str,bytes)) else -1
+              if state['replace']==5:
+                  if before!=2 or not isinstance(obj,str) or not isinstance(old,str) or not isinstance(new,str): raise SystemExit(74)
+                  first=obj.find(old); second=obj.find(old,first+len(old)); third=obj.find(old,second+len(old))
+                  if first<0 or second<0 or third>=0: raise SystemExit(75)
+                  pos=first if variant=='FIRST' else second
+                  out=obj[:pos]+new+obj[pos+len(old):]
+              else:
+                  out=obj.replace(*args)
+              add('REPLACE',line,ident,state['replace'],before,oldlen,newlen,int(out!=obj))
+              return out
+          def las_branch(line,ident,value): add('BRANCH',line,ident,int(bool(value))); return value
+          def las_return(line,ident,value):
+              if isinstance(value,bool): add('RETURN_BOOL',line,ident,int(value))
+              elif isinstance(value,int): add('RETURN_INT',line,ident,value)
+              elif value is None: add('RETURN_NONE',line,ident,0)
+              else: add('RETURN_OTHER',line,ident,0)
+              return value
+
+          class T(ast.NodeTransformer):
+              def __init__(self): self.i=0
+              def nid(self): self.i+=1; return self.i
+              def visit_If(self,node):
+                  self.generic_visit(node); ident=self.nid(); node.test=ast.Call(ast.Name('las_branch',ast.Load()),[ast.Constant(node.lineno),ast.Constant(ident),node.test],[]); return node
+              def visit_Call(self,node):
+                  self.generic_visit(node)
+                  if isinstance(node.func,ast.Attribute) and node.func.attr=='count':
+                      ident=self.nid(); return ast.copy_location(ast.Call(ast.Name('las_count',ast.Load()),[ast.Constant(node.lineno),ast.Constant(ident),node.func.value,*node.args],node.keywords),node)
+                  if isinstance(node.func,ast.Attribute) and node.func.attr=='replace':
+                      ident=self.nid(); return ast.copy_location(ast.Call(ast.Name('las_replace',ast.Load()),[ast.Constant(node.lineno),ast.Constant(ident),node.func.value,*node.args],node.keywords),node)
+                  return node
+              def visit_Return(self,node):
+                  self.generic_visit(node); ident=self.nid(); value=node.value if node.value is not None else ast.Constant(None)
+                  node.value=ast.Call(ast.Name('las_return',ast.Load()),[ast.Constant(node.lineno),ast.Constant(ident),value],[]); return node
+
+          parsed=ast.parse(data.decode('utf-8'),filename='<opaque-transform>'); inst=T().visit(parsed); ast.fix_missing_locations(inst)
+          ns={'__name__':'__main__','__file__':str(tmp/'opaque-transform.py'),'las_count':las_count,'las_replace':las_replace,'las_branch':las_branch,'las_return':las_return}
+          rc=0
+          try: exec(compile(inst,'<opaque-transform>','exec'),ns,ns)
+          except SystemExit as e: rc=e.code if isinstance(e.code,int) else 1
+          except BaseException as e: rc=1; add('EXCEPTION',0,0,hash(type(e).__name__) & 0xffff)
+          print(f'LAS_POST_DISAMBIG_{variant}_RC={rc}')
+          print(f'LAS_POST_DISAMBIG_{variant}_COUNT_CALLS={state["count"]}')
+          print(f'LAS_POST_DISAMBIG_{variant}_REPLACE_CALLS={state["replace"]}')
+          paths=[p for p in subprocess.check_output(['git','diff','--name-only','-z']).split(b'\0') if p]
+          hashes=sorted(hashlib.sha256(p).hexdigest() for p in paths); expected_paths=sorted([os.environ['EXPECTED_PATH_HASH_1'],os.environ['EXPECTED_PATH_HASH_2']])
+          print(f'LAS_POST_DISAMBIG_{variant}_CHANGED_COUNT={len(paths)}')
+          print(f'LAS_POST_DISAMBIG_{variant}_EXPECTED_CHANGESET=' + ('1' if hashes==expected_paths else '0'))
+          print(f'LAS_POST_DISAMBIG_{variant}_EVENT_COUNT={len(events)}')
+          for idx,event in enumerate(events[-60:],1): print(f'LAS_POST_DISAMBIG_{variant}_EVENT_{idx:02d}=' + ':'.join(map(str,event)))
+          print(f'LAS_POST_DISAMBIG_{variant}_TRACE_COMPLETE=PASS')
+          PY
