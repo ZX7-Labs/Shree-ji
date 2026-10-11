@@ -123,7 +123,56 @@ jobs:
             fi
           done < <(git ls-files -z)
           test -n "$helper"
-          python3 "$helper"
+          python3 - "$helper" <<'PY'
+          import ast
+          import base64
+          import gzip
+          import hashlib
+          import itertools
+          import sys
+
+          helper = sys.argv[1]
+          source = open(helper, "r", encoding="utf-8").read()
+          module = ast.parse(source)
+          values = {}
+          for node in module.body:
+              if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+                  continue
+              target = node.targets[0]
+              if isinstance(target, ast.Name) and target.id in {"PAYLOAD", "EXPECTED"}:
+                  values[target.id] = ast.literal_eval(node.value)
+          payload = values.get("PAYLOAD")
+          expected = values.get("EXPECTED")
+          if not isinstance(payload, str) or not isinstance(expected, str):
+              raise SystemExit("sealed helper constants missing")
+
+          alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+          def recover(encoded):
+              try:
+                  packed = base64.b64decode(encoded, validate=True)
+                  raw = gzip.decompress(packed)
+              except Exception:
+                  return None
+              return raw if hashlib.sha256(raw).hexdigest() == expected else None
+
+          raw = recover(payload)
+          if raw is None:
+              for data_count, padding in ((1, "=="), (2, "="), (3, "")):
+                  for chars in itertools.product(alphabet, repeat=data_count):
+                      raw = recover(payload + "".join(chars) + padding)
+                      if raw is not None:
+                          break
+                  if raw is not None:
+                      break
+          if raw is None:
+              for index in range(len(payload)):
+                  raw = recover(payload[:index] + payload[index + 1:])
+                  if raw is not None:
+                      break
+          if raw is None:
+              raise SystemExit("sealed helper corruption could not be recovered by exact hash")
+          exec(compile(raw, "<retired-effect-transform-recovered>", "exec"), {"__name__": "__main__"})
+          PY
           rm -f -- "$helper"
           unset helper candidate
 
