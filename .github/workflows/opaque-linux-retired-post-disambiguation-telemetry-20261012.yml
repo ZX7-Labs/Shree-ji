@@ -1,4 +1,4 @@
-name: Opaque retired-owner post-disambiguation telemetry 20261012
+name: Opaque retired-owner ambiguity frontier 20261012
 
 on:
   push:
@@ -15,7 +15,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        occurrence: [FIRST, SECOND]
+        fifth: [FIRST, SECOND]
+        eleventh: [FIRST, SECOND]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -34,10 +35,13 @@ jobs:
           root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
           git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
           auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
-          refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
           matched_ref=""; head=""
           while read -r candidate_sha ref; do
-            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$matched_ref"; matched_ref="$ref"; head="$candidate_sha"; fi
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"; matched_ref="$ref"; head="$candidate_sha"
+            fi
           done <"$refs"
           rm -f "$refs"; test -n "$matched_ref"; test -n "$head"
           echo "::add-mask::$matched_ref"; echo "::add-mask::$head"
@@ -47,12 +51,13 @@ jobs:
           tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
           test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_TREE_PROOF"
           test -z "$(git status --porcelain)"
-          echo "LAS_POST_DISAMBIG_${{ matrix.occurrence }}_RECOVERY=PASS"
+          echo "LAS_AMBIG_${{ matrix.fifth }}_${{ matrix.eleventh }}_RECOVERY=PASS"
 
-      - name: Trace transform after resolving fifth anchor
+      - name: Trace both known ambiguous anchors
         shell: bash
         env:
-          VARIANT: ${{ matrix.occurrence }}
+          FIFTH: ${{ matrix.fifth }}
+          ELEVENTH: ${{ matrix.eleventh }}
           ORIGINAL_HELPER_PATH_HASH: 3bd0f3b2ae73ca0acd5d1e08b47720c6cc80569d4b87901c2e1fc0b69f7504e2
           EXPECTED_TRANSFORM_SHA256: d97bb8c1f38b8ceeb9a5814e984947822b76cb2dcf681ead65443ab02c4e8e58
           EXPECTED_PATH_HASH_1: 680761d41ae8315a6bf67b2df5250c8b4ebc93b434b7de42be032b743c37b90a
@@ -62,13 +67,16 @@ jobs:
           cd "$RUNNER_TEMP/private-target"
           python3 - "$RUNNER_TEMP" <<'PY'
           import ast, base64, gzip, hashlib, os, pathlib, subprocess, sys
-          tmp=pathlib.Path(sys.argv[1]); variant=os.environ['VARIANT']
+
+          tmp=pathlib.Path(sys.argv[1]); choices={5:os.environ['FIFTH'],11:os.environ['ELEVENTH']}
+          label=f"{choices[5]}_{choices[11]}"
           tracked=[p.decode() for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if p]
           matches=[p for p in tracked if hashlib.sha256(p.encode()).hexdigest()==os.environ['ORIGINAL_HELPER_PATH_HASH']]
           if len(matches)!=1: raise SystemExit(70)
           tree=ast.parse(pathlib.Path(matches[0]).read_text(encoding='utf-8')); vals={}
           for n in tree.body:
-              if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name) and isinstance(n.value,ast.Constant): vals[n.targets[0].id]=n.value.value
+              if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name) and isinstance(n.value,ast.Constant):
+                  vals[n.targets[0].id]=n.value.value
           payload=vals.get('PAYLOAD'); expected=vals.get('EXPECTED')
           if not isinstance(payload,str) or not isinstance(expected,str): raise SystemExit(71)
           data=gzip.decompress(base64.b64decode(payload)); digest=hashlib.sha256(data).hexdigest()
@@ -76,27 +84,29 @@ jobs:
 
           events=[]; state={'count':0,'replace':0}
           def add(kind,line,ident,*fields): events.append((kind,line,ident)+fields)
+          def selected_replace(obj,old,new,choice):
+              first=obj.find(old); second=obj.find(old,first+len(old)); third=obj.find(old,second+len(old))
+              if first<0 or second<0 or third>=0: raise SystemExit(75)
+              pos=first if choice=='FIRST' else second
+              return obj[:pos]+new+obj[pos+len(old):]
           def las_count(line,ident,obj,*args):
-              state['count']+=1; actual=obj.count(*args); arg=args[0] if args else None
+              state['count']+=1; ordinal=state['count']; actual=obj.count(*args); arg=args[0] if args else None
               alen=len(arg) if isinstance(arg,(str,bytes)) else -1; olen=len(obj) if isinstance(obj,(str,bytes,list,tuple)) else -1
-              add('COUNT',line,ident,state['count'],actual,alen,olen)
-              if state['count']==5:
+              add('COUNT',line,ident,ordinal,actual,alen,olen)
+              if ordinal in choices:
                   if actual!=2: raise SystemExit(73)
                   return 1
               return actual
           def las_replace(line,ident,obj,*args):
-              state['replace']+=1; old=args[0] if args else None; new=args[1] if len(args)>1 else None
+              state['replace']+=1; ordinal=state['replace']; old=args[0] if args else None; new=args[1] if len(args)>1 else None
               before=obj.count(old) if isinstance(obj,(str,bytes)) and isinstance(old,type(obj)) else -1
               oldlen=len(old) if isinstance(old,(str,bytes)) else -1; newlen=len(new) if isinstance(new,(str,bytes)) else -1
-              if state['replace']==5:
+              if ordinal in choices:
                   if before!=2 or not isinstance(obj,str) or not isinstance(old,str) or not isinstance(new,str): raise SystemExit(74)
-                  first=obj.find(old); second=obj.find(old,first+len(old)); third=obj.find(old,second+len(old))
-                  if first<0 or second<0 or third>=0: raise SystemExit(75)
-                  pos=first if variant=='FIRST' else second
-                  out=obj[:pos]+new+obj[pos+len(old):]
+                  out=selected_replace(obj,old,new,choices[ordinal])
               else:
                   out=obj.replace(*args)
-              add('REPLACE',line,ident,state['replace'],before,oldlen,newlen,int(out!=obj))
+              add('REPLACE',line,ident,ordinal,before,oldlen,newlen,int(out!=obj))
               return out
           def las_branch(line,ident,value): add('BRANCH',line,ident,int(bool(value))); return value
           def las_return(line,ident,value):
@@ -110,7 +120,9 @@ jobs:
               def __init__(self): self.i=0
               def nid(self): self.i+=1; return self.i
               def visit_If(self,node):
-                  self.generic_visit(node); ident=self.nid(); node.test=ast.Call(ast.Name('las_branch',ast.Load()),[ast.Constant(node.lineno),ast.Constant(ident),node.test],[]); return node
+                  self.generic_visit(node); ident=self.nid()
+                  node.test=ast.Call(ast.Name('las_branch',ast.Load()),[ast.Constant(node.lineno),ast.Constant(ident),node.test],[])
+                  return node
               def visit_Call(self,node):
                   self.generic_visit(node)
                   if isinstance(node.func,ast.Attribute) and node.func.attr=='count':
@@ -128,14 +140,23 @@ jobs:
           try: exec(compile(inst,'<opaque-transform>','exec'),ns,ns)
           except SystemExit as e: rc=e.code if isinstance(e.code,int) else 1
           except BaseException as e: rc=1; add('EXCEPTION',0,0,hash(type(e).__name__) & 0xffff)
-          print(f'LAS_POST_DISAMBIG_{variant}_RC={rc}')
-          print(f'LAS_POST_DISAMBIG_{variant}_COUNT_CALLS={state["count"]}')
-          print(f'LAS_POST_DISAMBIG_{variant}_REPLACE_CALLS={state["replace"]}')
+
           paths=[p for p in subprocess.check_output(['git','diff','--name-only','-z']).split(b'\0') if p]
-          hashes=sorted(hashlib.sha256(p).hexdigest() for p in paths); expected_paths=sorted([os.environ['EXPECTED_PATH_HASH_1'],os.environ['EXPECTED_PATH_HASH_2']])
-          print(f'LAS_POST_DISAMBIG_{variant}_CHANGED_COUNT={len(paths)}')
-          print(f'LAS_POST_DISAMBIG_{variant}_EXPECTED_CHANGESET=' + ('1' if hashes==expected_paths else '0'))
-          print(f'LAS_POST_DISAMBIG_{variant}_EVENT_COUNT={len(events)}')
-          for idx,event in enumerate(events[-60:],1): print(f'LAS_POST_DISAMBIG_{variant}_EVENT_{idx:02d}=' + ':'.join(map(str,event)))
-          print(f'LAS_POST_DISAMBIG_{variant}_TRACE_COMPLETE=PASS')
+          hashes=sorted(hashlib.sha256(p).hexdigest() for p in paths)
+          expected_paths=sorted([os.environ['EXPECTED_PATH_HASH_1'],os.environ['EXPECTED_PATH_HASH_2']])
+          blobproof=[]
+          for p in paths:
+              blob=subprocess.check_output(['git','hash-object','--',p.decode()],text=True).strip()
+              blobproof.append(hashlib.sha256(blob.encode()).hexdigest())
+
+          print(f'LAS_AMBIG_{label}_RC={rc}')
+          print(f'LAS_AMBIG_{label}_COUNT_CALLS={state["count"]}')
+          print(f'LAS_AMBIG_{label}_REPLACE_CALLS={state["replace"]}')
+          print(f'LAS_AMBIG_{label}_CHANGED_COUNT={len(paths)}')
+          print(f'LAS_AMBIG_{label}_EXPECTED_CHANGESET=' + ('1' if hashes==expected_paths else '0'))
+          print(f'LAS_AMBIG_{label}_BLOBSET_PROOF='+hashlib.sha256('\n'.join(sorted(blobproof)).encode()).hexdigest())
+          print(f'LAS_AMBIG_{label}_EVENT_COUNT={len(events)}')
+          for idx,event in enumerate(events[-80:],1):
+              print(f'LAS_AMBIG_{label}_EVENT_{idx:02d}=' + ':'.join(map(str,event)))
+          print(f'LAS_AMBIG_{label}_TRACE_COMPLETE=PASS')
           PY
