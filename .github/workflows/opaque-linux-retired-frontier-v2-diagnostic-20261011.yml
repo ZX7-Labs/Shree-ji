@@ -56,25 +56,54 @@ jobs:
         run: |
           set -euo pipefail
           rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt >/dev/null
           test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
           test "$(cargo +1.98.1 --version | awk '{print $2}')" = "1.98.1"
 
-      - name: Produce encrypted compiler diagnostic
+      - name: Validate exact remediation and return encrypted formatted file
         shell: bash
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/target"
-          stdout="$RUNNER_TEMP/check.stdout"
-          stderr="$RUNNER_TEMP/check.stderr"
+          target="src/effect_fabric/root_supervisor_linux_retired_archive_frontier.rs"
+          python3 - "$target" <<'PY'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1])
+          text = p.read_text(encoding="utf-8")
+          needles = [
+          """        verifier
+                      .verify_and_persist(first, &proof(digest(0x10), digest(0x50)))
+                      .unwrap();""",
+          """        verifier
+                      .verify_and_persist(
+                          body(first_retired, 1, digest(0x11)),
+                          &proof(digest(0x10), digest(0x50)),
+                      )
+                      .unwrap();""",
+          ]
+          for needle in needles:
+              if text.count(needle) != 1:
+                  raise SystemExit("expected exact must-use test site not unique")
+              text = text.replace(needle, "        let _ =" + needle[len("        verifier"):], 1)
+          p.write_text(text, encoding="utf-8")
+          PY
+
+          cargo +1.98.1 fmt --all
+          check_stdout="$RUNNER_TEMP/check.stdout"
+          check_stderr="$RUNNER_TEMP/check.stderr"
           set +e
           RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --all-targets \
-            --features linux-peer-credentials --message-format=json >"$stdout" 2>"$stderr"
+            --features linux-peer-credentials --message-format=json >"$check_stdout" 2>"$check_stderr"
           rc=$?
           set -e
           printf 'rc=%s\n' "$rc" >"$RUNNER_TEMP/meta.txt"
-          printf 'stdout_sha256=%s\n' "$(sha256sum "$stdout" | awk '{print $1}')" >>"$RUNNER_TEMP/meta.txt"
-          printf 'stderr_sha256=%s\n' "$(sha256sum "$stderr" | awk '{print $1}')" >>"$RUNNER_TEMP/meta.txt"
-          tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/diag.tar.gz" meta.txt check.stdout check.stderr
+          printf 'formatted_file_sha256=%s\n' "$(sha256sum "$target" | awk '{print $1}')" >>"$RUNNER_TEMP/meta.txt"
+          printf 'check_stdout_sha256=%s\n' "$(sha256sum "$check_stdout" | awk '{print $1}')" >>"$RUNNER_TEMP/meta.txt"
+          printf 'check_stderr_sha256=%s\n' "$(sha256sum "$check_stderr" | awk '{print $1}')" >>"$RUNNER_TEMP/meta.txt"
+          tar -czf "$RUNNER_TEMP/diag.tar.gz" -C "$GITHUB_WORKSPACE/target" "$target" \
+            -C "$RUNNER_TEMP" meta.txt check.stdout check.stderr
+
           key="$RUNNER_TEMP/diag.key"
           openssl rand -hex 32 >"$key"
           openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
@@ -92,10 +121,10 @@ jobs:
           PEM
           openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/public.pem" \
             -in "$key" -out "$RUNNER_TEMP/key.enc"
-          echo "OPAQUE_DIAG_RC=$rc"
-          echo "OPAQUE_DIAG_KEY_B64=$(base64 -w0 "$RUNNER_TEMP/key.enc")"
-          echo "OPAQUE_DIAG_DATA_B64=$(base64 -w0 "$RUNNER_TEMP/diag.enc")"
-          rm -f "$stdout" "$stderr" "$RUNNER_TEMP/meta.txt" "$RUNNER_TEMP/diag.tar.gz" \
-            "$key" "$RUNNER_TEMP/public.pem" "$RUNNER_TEMP/key.enc" "$RUNNER_TEMP/diag.enc"
-          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "OPAQUE_REMEDIATION_RC=$rc"
+          echo "OPAQUE_REMEDIATION_KEY_B64=$(base64 -w0 "$RUNNER_TEMP/key.enc")"
+          echo "OPAQUE_REMEDIATION_DATA_B64=$(base64 -w0 "$RUNNER_TEMP/diag.enc")"
+          rm -f "$RUNNER_TEMP/diag.tar.gz" "$key" "$RUNNER_TEMP/public.pem" \
+            "$RUNNER_TEMP/key.enc" "$RUNNER_TEMP/diag.enc" "$RUNNER_TEMP/meta.txt" \
+            "$check_stdout" "$check_stderr"
           exit 0
