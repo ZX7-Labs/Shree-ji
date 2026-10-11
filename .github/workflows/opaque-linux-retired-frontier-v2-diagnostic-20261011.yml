@@ -85,7 +85,7 @@ jobs:
           for needle in needles:
               if text.count(needle) != 1:
                   raise SystemExit("expected exact must-use test site not unique")
-              text = text.replace(needle, "        let _ =" + needle[len("        verifier"):], 1)
+              text = text.replace(needle, "        let _ = verifier" + needle[len("        verifier"):], 1)
           p.write_text(text, encoding="utf-8")
           PY
 
