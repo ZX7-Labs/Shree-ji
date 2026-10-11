@@ -97,9 +97,10 @@ jobs:
               text = text.replace(old, new, 1)
 
           production_expect = '''    #[expect(\n        clippy::too_many_arguments,\n        reason = "all trust coordinates remain explicit at the high-assurance binding boundary"\n    )]\n    pub(super) fn verify_exact('''
+          production_replacement = '''    #[expect(\n        clippy::result_large_err,\n        reason = "bounded failure-atomic evidence stays stack-owned and allocation-free"\n    )]\n    pub(super) fn verify_exact('''
           if text.count(production_expect) != 1:
               raise SystemExit("production lint expectation not unique")
-          text = text.replace(production_expect, "    pub(super) fn verify_exact(", 1)
+          text = text.replace(production_expect, production_replacement, 1)
 
           helper = '''    fn verifier(\n        transition: DurablyVerifiedLinuxRetiredArchiveTransition,'''
           helper_with_expect = '''    #[expect(\n        clippy::too_many_arguments,\n        reason = "test fixture keeps independent trust coordinates explicit"\n    )]\n    fn verifier(\n        transition: DurablyVerifiedLinuxRetiredArchiveTransition,'''
