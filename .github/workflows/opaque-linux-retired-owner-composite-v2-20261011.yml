@@ -49,28 +49,28 @@ jobs:
       - name: Apply exact private transform opaquely
         shell: bash
         env:
-          HELPER_PATH_HASH: 3339f22991f94a6f36ccc66648584a4ea905fe49d2e0d854321e69643eb0d7c4e
+          HELPER_PATH_HASH: 3339f22991f94a6f36ccc66648584a4ea905fe49d2e0d854321e69643eb0d7c4
           EXPECTED_CHANGED_PATH_HASHES: |
             680761d41ae8315a6bf67b2df5250c8b4ebc93b434b7de42be032b743c37b90a
             736cc80e53ddc8c5287113b778e1a8fb5f3973b1b5092cdf665c982b07ce8b6d
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/private-target"
-          helper=""
+          helper=""; matches=0
           while IFS= read -r -d '' candidate; do
             digest="$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')"
-            if [[ "$digest" = "$HELPER_PATH_HASH" ]]; then test -z "$helper"; helper="$candidate"; fi
+            if [[ "$digest" = "$HELPER_PATH_HASH" ]]; then helper="$candidate"; matches=$((matches+1)); fi
           done < <(git ls-files -z)
-          test -n "$helper"
+          echo "LAS_COMPOSITE_V2_HELPER_MATCH_COUNT=$matches"
+          test "$matches" -eq 1; test -n "$helper"
+          echo "LAS_COMPOSITE_V2_HELPER_DISCOVERY=PASS"
           log="$RUNNER_TEMP/composite-v2-transform.private.log"
-          set +e
-          python3 "$helper" >"$log" 2>&1
-          rc=$?
-          set -e
+          if python3 "$helper" >"$log" 2>&1; then rc=0; else rc=$?; fi
           echo "LAS_COMPOSITE_V2_TRANSFORM_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')"
           echo "LAS_COMPOSITE_V2_TRANSFORM_RC=$rc"
           rm -f "$log"
           test "$rc" -eq 0
+          echo "LAS_COMPOSITE_V2_HELPER_EXECUTION=PASS"
           rustup toolchain install 1.98.1 --profile minimal >/dev/null
           rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
           cargo +1.98.1 fmt --all
@@ -84,7 +84,7 @@ jobs:
               raise SystemExit('unexpected private composite-v2 candidate change set')
           PY
           rm -f "$changed"
-          echo "LAS_COMPOSITE_V2_TRANSFORM=PASS"
+          echo "LAS_COMPOSITE_V2_CHANGESET=PASS"
 
       - name: Install pinned Ada toolchain launcher
         shell: bash
