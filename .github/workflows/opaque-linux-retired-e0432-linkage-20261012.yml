@@ -1,0 +1,182 @@
+name: Opaque retired-owner E0432 linkage 20261012
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opaque-linux-retired-e0432-linkage-20261012.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  link:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Recover exact live private head
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+          TARGET_REF_HASH: 12246190df640013d9ee426d2a340387c6d22d0e8241135d6a20dcf1fe5a2bc0
+          EXPECTED_HEAD_PROOF: c1b3b06dc372f212fd256e328c9a0dad282c1b2a44e179879061c15a0a19c99b
+          EXPECTED_TREE_PROOF: 96dd6f1b2d519fe01e22647efa8d4f32f6e53f5badb00b199e9133246e0fc501
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          ref=""; head=""
+          while read -r sha name; do
+            if [[ "$(printf '%s' "$name" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$ref"; ref="$name"; head="$sha"; fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$ref"; test -n "$head"
+          echo "::add-mask::$ref"; echo "::add-mask::$head"
+          test "$(printf '%s' "$head" | sha256sum | awk '{print $1}')" = "$EXPECTED_HEAD_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$head"; git checkout -q --detach "$head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_TREE_PROOF"
+          echo "LAS_E0432_RECOVERY=PASS"
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt >/dev/null
+          echo "LAS_E0432_RUST=PASS"
+
+      - name: Materialize SECOND-FIRST candidate and map replacement semantics
+        shell: bash
+        env:
+          ORIGINAL_HELPER_PATH_HASH: 3bd0f3b2ae73ca0acd5d1e08b47720c6cc80569d4b87901c2e1fc0b69f7504e2
+          EXPECTED_TRANSFORM_SHA256: d97bb8c1f38b8ceeb9a5814e984947822b76cb2dcf681ead65443ab02c4e8e58
+          EXPECTED_PATH_HASH_1: 680761d41ae8315a6bf67b2df5250c8b4ebc93b434b7de42be032b743c37b90a
+          EXPECTED_PATH_HASH_2: 736cc80e53ddc8c5287113b778e1a8fb5f3973b1b5092cdf665c982b07ce8b6d
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          python3 - "$RUNNER_TEMP/replacement-map.json" <<'PY'
+          import ast,base64,gzip,hashlib,json,os,pathlib,re,subprocess,sys
+          out=sys.argv[1]; choices={5:'SECOND',11:'FIRST'}
+          tracked=[p.decode() for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if p]
+          helper=[p for p in tracked if hashlib.sha256(p.encode()).hexdigest()==os.environ['ORIGINAL_HELPER_PATH_HASH']]
+          if len(helper)!=1: raise SystemExit(70)
+          tree=ast.parse(pathlib.Path(helper[0]).read_text(encoding='utf-8')); vals={}
+          for n in tree.body:
+              if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name) and isinstance(n.value,ast.Constant): vals[n.targets[0].id]=n.value.value
+          data=gzip.decompress(base64.b64decode(vals['PAYLOAD']))
+          if hashlib.sha256(data).hexdigest()!=os.environ['EXPECTED_TRANSFORM_SHA256']: raise SystemExit(71)
+          expected={os.environ['EXPECTED_PATH_HASH_1'],os.environ['EXPECTED_PATH_HASH_2']}
+          files={p:pathlib.Path(p).read_text(encoding='utf-8') for p in tracked if hashlib.sha256(p.encode()).hexdigest() in expected}
+          base_files=dict(files); state={'count':0,'replace':0}; records=[]
+          keywords=set('as break const continue crate else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while async await dyn'.split())
+          def ids(s): return [x for x in re.findall(r'\b[A-Za-z_][A-Za-z0-9_]*\b',s) if x not in keywords]
+          def kwfeatures(s):
+              pats=['use ','pub use ','pub fn ','fn ','pub struct ','struct ','pub enum ','enum ','trait ','impl ','type ','const ','static ','mod ','#[cfg','linux','retired','owner','projection']
+              return {p.strip():s.count(p) for p in pats if s.count(p)}
+          def target_for(obj):
+              m=[p for p,v in files.items() if v==obj]
+              if len(m)!=1: raise SystemExit(72)
+              return m[0]
+          def chosen(obj,old,new,which):
+              a=obj.find(old); b=obj.find(old,a+len(old)); c=obj.find(old,b+len(old))
+              if a<0 or b<0 or c>=0: raise SystemExit(73)
+              p=a if which=='FIRST' else b
+              return obj[:p]+new+obj[p+len(old):]
+          def cnt(obj,*args):
+              state['count']+=1; o=state['count']; actual=obj.count(*args)
+              if o in choices:
+                  if actual!=2: raise SystemExit(74)
+                  return 1
+              return actual
+          def rep(obj,*args):
+              state['replace']+=1; o=state['replace']; old,new=args[0],args[1]; p=target_for(obj)
+              if o in choices: new_obj=chosen(obj,old,new,choices[o])
+              else: new_obj=obj.replace(*args)
+              files[p]=new_obj
+              toks=ids(new)
+              records.append({'ordinal':o,'path_hash':hashlib.sha256(p.encode()).hexdigest(),'old_len':len(old),'new_len':len(new),'new_id_hashes':sorted(set(hashlib.sha256(x.encode()).hexdigest() for x in toks)),'features':kwfeatures(new)})
+              return new_obj
+          class T(ast.NodeTransformer):
+              def visit_Call(self,n):
+                  self.generic_visit(n)
+                  if n.lineno==6 and isinstance(n.func,ast.Attribute) and n.func.attr=='count': return ast.copy_location(ast.Call(ast.Name('cnt',ast.Load()),[n.func.value,*n.args],n.keywords),n)
+                  if n.lineno==9 and isinstance(n.func,ast.Attribute) and n.func.attr=='replace': return ast.copy_location(ast.Call(ast.Name('rep',ast.Load()),[n.func.value,*n.args],n.keywords),n)
+                  return n
+          p=T().visit(ast.parse(data.decode('utf-8'))); ast.fix_missing_locations(p)
+          ns={'__name__':'__main__','cnt':cnt,'rep':rep}; rc=0
+          try: exec(compile(p,'<opaque>','exec'),ns,ns)
+          except SystemExit as e: rc=e.code if isinstance(e.code,int) else 1
+          if rc!=0 or state!={'count':11,'replace':11}: raise SystemExit(75)
+          json.dump({'records':records,'base':{hashlib.sha256(p.encode()).hexdigest():v for p,v in base_files.items()}},open(out,'w'),separators=(',',':'))
+          for r in records:
+              feats=','.join(f'{k}:{v}' for k,v in sorted(r['features'].items())) or 'NONE'
+              print(f"LAS_E0432_REPL_{r['ordinal']}_PATH={r['path_hash']}")
+              print(f"LAS_E0432_REPL_{r['ordinal']}_LENS={r['old_len']}:{r['new_len']}")
+              print(f"LAS_E0432_REPL_{r['ordinal']}_FEATURES={feats}")
+          print('LAS_E0432_TRANSFORM=PASS')
+          PY
+          cargo +1.98.1 fmt --all
+          echo "LAS_E0432_FORMAT=PASS"
+
+      - name: Link unresolved highlighted identifiers to transform replacements
+        shell: bash
+        env:
+          EXPECTED_PATH_HASH_1: 680761d41ae8315a6bf67b2df5250c8b4ebc93b434b7de42be032b743c37b90a
+          EXPECTED_PATH_HASH_2: 736cc80e53ddc8c5287113b778e1a8fb5f3973b1b5092cdf665c982b07ce8b6d
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          json="$RUNNER_TEMP/check.json"; err="$RUNNER_TEMP/check.stderr"
+          set +e
+          cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials --message-format=json >"$json" 2>"$err"
+          rc=$?
+          set -e
+          test "$rc" -eq 101
+          python3 - "$json" "$RUNNER_TEMP/replacement-map.json" <<'PY'
+          import collections,hashlib,json,os,re,subprocess,sys
+          diag,mapfile=sys.argv[1:]; m=json.load(open(mapfile)); records=m['records']
+          unresolved=[]
+          for line in open(diag,encoding='utf-8',errors='replace'):
+              try:x=json.loads(line)
+              except:continue
+              if x.get('reason')!='compiler-message':continue
+              msg=x.get('message') or {}; code=(msg.get('code') or {}).get('code')
+              if code!='E0432':continue
+              for s in msg.get('spans') or []:
+                  if not s.get('is_primary'):continue
+                  for t in s.get('text') or []:
+                      raw=t.get('text') or ''; a=max(0,int(t.get('highlight_start') or 1)-1); b=max(a,int(t.get('highlight_end') or 1)-1)
+                      frag=raw[a:b]
+                      unresolved += re.findall(r'\b[A-Za-z_][A-Za-z0-9_]*\b',frag)
+          stop=set('use pub crate self super as'.split()); unresolved=[x for x in unresolved if x not in stop]
+          uniq=sorted(set(unresolved)); uh={x:hashlib.sha256(x.encode()).hexdigest() for x in uniq}
+          print('LAS_E0432_UNRESOLVED_TOKEN_COUNT='+str(len(uniq)))
+          print('LAS_E0432_UNRESOLVED_TOKEN_HASHES='+','.join(sorted(uh.values())))
+          for r in records:
+              overlap=sorted(set(r['new_id_hashes']) & set(uh.values()))
+              print(f"LAS_E0432_REPL_{r['ordinal']}_UNRESOLVED_OVERLAP={len(overlap)}")
+              if overlap: print(f"LAS_E0432_REPL_{r['ordinal']}_OVERLAP_HASHES="+','.join(overlap))
+          # Search candidate files for declaration-like contexts of each unresolved token without exposing names.
+          changed=[p.decode() for p in subprocess.check_output(['git','diff','--name-only','-z']).split(b'\0') if p]
+          for tok in uniq:
+              h=uh[tok]; print('LAS_E0432_TOKEN='+h)
+              for p in changed:
+                  ph=hashlib.sha256(p.encode()).hexdigest(); text=open(p,encoding='utf-8').read()
+                  occ=len(re.findall(r'\b'+re.escape(tok)+r'\b',text))
+                  decl=len(re.findall(r'(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum|fn|trait|type|const|static|mod)\s+'+re.escape(tok)+r'\b',text))
+                  use=len(re.findall(r'(?m)^\s*(?:pub\s+)?use\b[^;]*\b'+re.escape(tok)+r'\b',text))
+                  impl=len(re.findall(r'\bimpl\b[^\n{]*\b'+re.escape(tok)+r'\b',text))
+                  print(f'LAS_E0432_TOKEN_{h}_PATH_{ph}=O{occ}:D{decl}:U{use}:I{impl}')
+          print('LAS_E0432_LINKAGE=PASS')
+          PY
+          echo "LAS_E0432_STDERR_SHA256=$(sha256sum "$err" | awk '{print $1}')"
+          rm -f "$json" "$err" "$RUNNER_TEMP/replacement-map.json"
