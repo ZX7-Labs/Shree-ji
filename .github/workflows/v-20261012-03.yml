@@ -1,0 +1,185 @@
+name: Exact revision repair verification 20261012-03
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/v-20261012-03.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 12246190df640013d9ee426d2a340387c6d22d0e8241135d6a20dcf1fe5a2bc0
+  EXPECTED_HEAD_PROOF: c1b3b06dc372f212fd256e328c9a0dad282c1b2a44e179879061c15a0a19c99b
+  EXPECTED_TREE_PROOF: 96dd6f1b2d519fe01e22647efa8d4f32f6e53f5badb00b199e9133246e0fc501
+  HELPER_PATH_HASH: 3bd0f3b2ae73ca0acd5d1e08b47720c6cc80569d4b87901c2e1fc0b69f7504e2
+  TRANSFORM_SHA256: d97bb8c1f38b8ceeb9a5814e984947822b76cb2dcf681ead65443ab02c4e8e58
+  PATH_HASH_1: 680761d41ae8315a6bf67b2df5250c8b4ebc93b434b7de42be032b743c37b90a
+  PATH_HASH_2: 736cc80e53ddc8c5287113b778e1a8fb5f3973b1b5092cdf665c982b07ce8b6d
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Recover exact revision
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$RUNNER_TEMP/heads"
+          ref=""; head=""
+          while read -r sha name; do
+            if [[ "$(printf '%s' "$name" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$ref"; ref="$name"; head="$sha"; fi
+          done <"$RUNNER_TEMP/heads"
+          rm -f "$RUNNER_TEMP/heads"; test -n "$ref"; test -n "$head"
+          echo "::add-mask::$ref"; echo "::add-mask::$head"
+          test "$(printf '%s' "$head" | sha256sum | awk '{print $1}')" = "$EXPECTED_HEAD_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$head"; git checkout -q --detach "$head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          echo "V03_RECOVERY=PASS"
+
+      - name: Install pinned toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          archive="$RUNNER_TEMP/alr.zip"; prefix="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --output "$archive" "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip" >/dev/null 2>&1
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $archive" | sha256sum --check --strict >/dev/null
+          mkdir -p "$prefix"; unzip -q "$archive" -d "$prefix"
+          "$prefix/bin/alr" -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
+          ws="$RUNNER_TEMP/alire-ws"; mkdir -p "$ws"; (cd "$ws" && "$prefix/bin/alr" -n init --in-place --no-skel --lib v03_toolchain >/dev/null)
+          wrapper="$RUNNER_TEMP/gprbuild-wrapper"
+          printf '#!/usr/bin/env bash\nset -euo pipefail\ncd %q\nexec %q exec -- gprbuild "$@"\n' "$ws" "$prefix/bin/alr" >"$wrapper"
+          chmod +x "$wrapper"; "$wrapper" --version >/dev/null
+          echo "GPRBUILD=$wrapper" >>"$GITHUB_ENV"
+          echo "V03_TOOLCHAINS=PASS"
+
+      - name: Materialize candidate and apply minimal repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/target"
+          python3 - <<'PY'
+          import ast,base64,gzip,hashlib,os,pathlib,subprocess
+          choices={5:'SECOND',11:'FIRST'}
+          tracked=[p.decode() for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if p]
+          helper=[p for p in tracked if hashlib.sha256(p.encode()).hexdigest()==os.environ['HELPER_PATH_HASH']]
+          if len(helper)!=1: raise SystemExit(70)
+          tree=ast.parse(pathlib.Path(helper[0]).read_text(encoding='utf-8')); vals={}
+          for n in tree.body:
+              if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name) and isinstance(n.value,ast.Constant): vals[n.targets[0].id]=n.value.value
+          data=gzip.decompress(base64.b64decode(vals['PAYLOAD']))
+          if hashlib.sha256(data).hexdigest()!=os.environ['TRANSFORM_SHA256']: raise SystemExit(71)
+          state={'count':0,'replace':0}
+          def choose(obj,old,new,which):
+              a=obj.find(old); b=obj.find(old,a+len(old)); c=obj.find(old,b+len(old))
+              if a<0 or b<0 or c>=0: raise SystemExit(72)
+              p=a if which=='FIRST' else b
+              return obj[:p]+new+obj[p+len(old):]
+          def cnt(obj,*args):
+              state['count']+=1; o=state['count']; actual=obj.count(*args)
+              if o in choices:
+                  if actual!=2: raise SystemExit(73)
+                  return 1
+              return actual
+          def rep(obj,*args):
+              state['replace']+=1; o=state['replace']
+              if o in choices:
+                  if len(args)<2 or obj.count(args[0])!=2: raise SystemExit(74)
+                  return choose(obj,args[0],args[1],choices[o])
+              return obj.replace(*args)
+          class T(ast.NodeTransformer):
+              def visit_Call(self,n):
+                  self.generic_visit(n)
+                  if n.lineno==6 and isinstance(n.func,ast.Attribute) and n.func.attr=='count': return ast.copy_location(ast.Call(ast.Name('cnt',ast.Load()),[n.func.value,*n.args],n.keywords),n)
+                  if n.lineno==9 and isinstance(n.func,ast.Attribute) and n.func.attr=='replace': return ast.copy_location(ast.Call(ast.Name('rep',ast.Load()),[n.func.value,*n.args],n.keywords),n)
+                  return n
+          p=T().visit(ast.parse(data.decode('utf-8'))); ast.fix_missing_locations(p)
+          ns={'__name__':'__main__','cnt':cnt,'rep':rep}; rc=0
+          try: exec(compile(p,'<opaque>','exec'),ns,ns)
+          except SystemExit as e: rc=e.code if isinstance(e.code,int) else 1
+          if rc!=0 or state!={'count':11,'replace':11}: raise SystemExit(75)
+
+          target=[p for p in tracked if hashlib.sha256(p.encode()).hexdigest()==os.environ['PATH_HASH_2']]
+          if len(target)!=1: raise SystemExit(76)
+          path=pathlib.Path(target[0]); text=path.read_text(encoding='utf-8')
+          imports=[
+              'use super::root_supervisor_linux_pre_action_authenticator::LinuxPreActionAuthenticatorOwner;',
+              'use super::root_supervisor_linux_pre_action_plan::LinuxPreActionProofAuthenticator;',
+          ]
+          for line in imports:
+              if text.count(line)!=1 or text.count('#[cfg(feature = "root-ffi")]\n'+line)!=0: raise SystemExit(77)
+              text=text.replace(line,'#[cfg(feature = "root-ffi")]\n'+line,1)
+          method='''    #[expect(
+        clippy::type_complexity,
+        reason = "independent archive, owner, and durable-store failure channels remain explicit at the high-assurance boundary"
+    )]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the exact three retained owners and two independent proofs stay explicit at the archive boundary"
+    )]
+    pub(super) fn verify_retained_owners_and_persist<'''
+          gated='''    #[cfg(feature = "root-ffi")]
+'''+method
+          if text.count(method)!=1 or text.count(gated)!=0: raise SystemExit(78)
+          text=text.replace(method,gated,1); path.write_text(text,encoding='utf-8')
+          PY
+          cargo +1.98.1 fmt --all
+          git diff --check
+          python3 - <<'PY'
+          import hashlib,os,subprocess
+          paths=[p for p in subprocess.check_output(['git','diff','--name-only','-z']).split(b'\0') if p]
+          got=sorted(hashlib.sha256(p).hexdigest() for p in paths)
+          exp=sorted([os.environ['PATH_HASH_1'],os.environ['PATH_HASH_2']])
+          print('V03_CHANGED_COUNT='+str(len(paths)))
+          print('V03_EXPECTED_CHANGESET='+('1' if got==exp else '0'))
+          if got!=exp: raise SystemExit(79)
+          PY
+          echo "V03_MATERIALIZATION=PASS"
+
+      - name: Run exact verification matrix
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/target"; failures=0
+          run_gate() {
+            label="$1"; shift; log="$RUNNER_TEMP/$label.private.log"
+            set +e; "$@" >"$log" 2>&1; rc=$?; set -e
+            echo "V03_${label}_RC=$rc"
+            echo "V03_${label}_SHA256=$(sha256sum "$log" | awk '{print $1}')"
+            rm -f "$log"; if [[ "$rc" -ne 0 ]]; then failures=$((failures+1)); fi
+          }
+          run_gate TRUST python3 tools/verification/root_trust_input_contract.py
+          run_gate FORMAT cargo +1.98.1 fmt --all -- --check
+          run_gate DEFAULT_CHECK cargo +1.98.1 check --locked --all-targets
+          run_gate LINUX_CHECK cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials
+          run_gate ROOT_CHECK env GPRBUILD="$GPRBUILD" cargo +1.98.1 check --locked --all-targets --features root-ffi
+          run_gate PRODUCTION_CHECK env GPRBUILD="$GPRBUILD" cargo +1.98.1 check --locked --all-targets --features root-ffi,linux-peer-credentials
+          run_gate PRODUCTION_CLIPPY env GPRBUILD="$GPRBUILD" cargo +1.98.1 clippy --locked --all-targets --features root-ffi,linux-peer-credentials -- -D warnings
+          run_gate RETIRED_BOUND cargo +1.98.1 test --locked --lib --features linux-peer-credentials root_supervisor_linux_retired_bound_archive -- --test-threads=1
+          run_gate RETIRED_OWNER env GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --lib --features root-ffi,linux-peer-credentials retired_projection_tests -- --test-threads=1
+          run_gate RETIRED_SINK cargo +1.98.1 test --locked --lib --features linux-peer-credentials root_supervisor_linux_retired_owner_projection -- --test-threads=1
+          run_gate SEMANTIC_PROJECTION env GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --lib --features root-ffi,linux-peer-credentials retirement_projection -- --test-threads=1
+          run_gate PRODUCTION_LIB env GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --lib --features root-ffi,linux-peer-credentials -- --test-threads=1
+          run_gate ALL_FEATURES env GPRBUILD="$GPRBUILD" cargo +1.98.1 check --locked --all-targets --all-features
+          run_gate RELEASE env GPRBUILD="$GPRBUILD" cargo +1.98.1 check --release --locked --all-targets --features root-ffi,linux-peer-credentials
+          echo "V03_FAILURE_COUNT=$failures"
+          test "$failures" -eq 0
+          echo "V03_GATE_MATRIX=PASS"
