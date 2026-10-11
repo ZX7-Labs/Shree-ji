@@ -1,0 +1,154 @@
+name: Opaque retired-owner fifth-anchor diagnostic codes 20261012
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opaque-linux-retired-fifth-diagnostic-codes-20261012.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    strategy:
+      fail-fast: false
+      matrix:
+        fifth: [FIRST, SECOND]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Recover exact live private head opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+          TARGET_REF_HASH: 12246190df640013d9ee426d2a340387c6d22d0e8241135d6a20dcf1fe5a2bc0
+          EXPECTED_HEAD_PROOF: c1b3b06dc372f212fd256e328c9a0dad282c1b2a44e179879061c15a0a19c99b
+          EXPECTED_TREE_PROOF: 96dd6f1b2d519fe01e22647efa8d4f32f6e53f5badb00b199e9133246e0fc501
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$matched_ref"; matched_ref="$ref"; head="$candidate_sha"; fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$head"
+          test "$(printf '%s' "$head" | sha256sum | awk '{print $1}')" = "$EXPECTED_HEAD_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$head"; git checkout -q --detach "$head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_TREE_PROOF"
+          echo "LAS_FIFTH_${{ matrix.fifth }}_RECOVERY=PASS"
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          echo "LAS_FIFTH_${{ matrix.fifth }}_RUST=PASS"
+
+      - name: Materialize candidate and classify Linux compiler diagnostics
+        shell: bash
+        env:
+          FIFTH: ${{ matrix.fifth }}
+          ELEVENTH: FIRST
+          ORIGINAL_HELPER_PATH_HASH: 3bd0f3b2ae73ca0acd5d1e08b47720c6cc80569d4b87901c2e1fc0b69f7504e2
+          EXPECTED_TRANSFORM_SHA256: d97bb8c1f38b8ceeb9a5814e984947822b76cb2dcf681ead65443ab02c4e8e58
+          EXPECTED_PATH_HASH_1: 680761d41ae8315a6bf67b2df5250c8b4ebc93b434b7de42be032b743c37b90a
+          EXPECTED_PATH_HASH_2: 736cc80e53ddc8c5287113b778e1a8fb5f3973b1b5092cdf665c982b07ce8b6d
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          python3 - "$RUNNER_TEMP" <<'PY'
+          import ast,base64,gzip,hashlib,os,pathlib,subprocess,sys
+          tmp=pathlib.Path(sys.argv[1]); choices={5:os.environ['FIFTH'],11:os.environ['ELEVENTH']}
+          tracked=[p.decode() for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if p]
+          matches=[p for p in tracked if hashlib.sha256(p.encode()).hexdigest()==os.environ['ORIGINAL_HELPER_PATH_HASH']]
+          if len(matches)!=1: raise SystemExit(70)
+          tree=ast.parse(pathlib.Path(matches[0]).read_text(encoding='utf-8')); vals={}
+          for n in tree.body:
+              if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name) and isinstance(n.value,ast.Constant): vals[n.targets[0].id]=n.value.value
+          data=gzip.decompress(base64.b64decode(vals['PAYLOAD']))
+          if hashlib.sha256(data).hexdigest()!=vals['EXPECTED'] or hashlib.sha256(data).hexdigest()!=os.environ['EXPECTED_TRANSFORM_SHA256']: raise SystemExit(71)
+          state={'count':0,'replace':0}
+          def sel(obj,old,new,choice):
+              a=obj.find(old); b=obj.find(old,a+len(old)); c=obj.find(old,b+len(old))
+              if a<0 or b<0 or c>=0: raise SystemExit(72)
+              p=a if choice=='FIRST' else b
+              return obj[:p]+new+obj[p+len(old):]
+          def ccount(obj,*args):
+              state['count']+=1; n=state['count']; actual=obj.count(*args)
+              if n in choices:
+                  if actual!=2: raise SystemExit(73)
+                  return 1
+              return actual
+          def rreplace(obj,*args):
+              state['replace']+=1; n=state['replace']; old,new=args[0],args[1]; before=obj.count(old)
+              if n in choices:
+                  if before!=2: raise SystemExit(74)
+                  return sel(obj,old,new,choices[n])
+              return obj.replace(*args)
+          class T(ast.NodeTransformer):
+              def visit_Call(self,node):
+                  self.generic_visit(node)
+                  if isinstance(node.func,ast.Attribute) and node.func.attr=='count': return ast.copy_location(ast.Call(ast.Name('ccount',ast.Load()),[node.func.value,*node.args],node.keywords),node)
+                  if isinstance(node.func,ast.Attribute) and node.func.attr=='replace': return ast.copy_location(ast.Call(ast.Name('rreplace',ast.Load()),[node.func.value,*node.args],node.keywords),node)
+                  return node
+          inst=T().visit(ast.parse(data.decode())); ast.fix_missing_locations(inst)
+          exec(compile(inst,'<opaque-transform>','exec'),{'__name__':'__main__','__file__':str(tmp/'opaque.py'),'ccount':ccount,'rreplace':rreplace})
+          if state!={'count':11,'replace':11}: raise SystemExit(75)
+          PY
+          cargo +1.98.1 fmt --all
+          json="$RUNNER_TEMP/linux-${FIFTH}.json"; err="$RUNNER_TEMP/linux-${FIFTH}.stderr"
+          set +e
+          cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials --message-format=json >"$json" 2>"$err"
+          rc=$?
+          set -e
+          echo "LAS_FIFTH_${FIFTH}_LINUX_RC=$rc"
+          python3 - "$json" <<'PY'
+          import collections,hashlib,json,os,re,sys
+          label=os.environ['FIFTH']; errors=[]
+          for line in open(sys.argv[1],encoding='utf-8',errors='replace'):
+              try: obj=json.loads(line)
+              except Exception: continue
+              if obj.get('reason')!='compiler-message': continue
+              msg=obj.get('message') or {}
+              if msg.get('level')!='error': continue
+              code=(msg.get('code') or {}).get('code') or 'NO_CODE'
+              text=msg.get('message') or ''
+              # Preserve diagnostic grammar while redacting identifiers/literals/paths/numbers.
+              text=re.sub(r'`[^`]*`','`<id>`',text)
+              text=re.sub(r'"[^"]*"','"<str>"',text)
+              text=re.sub(r"'[^']*'","'<lit>'",text)
+              text=re.sub(r'\b\d+\b','<n>',text)
+              text=re.sub(r'[^\s]+\.rs\b','<path>.rs',text)
+              spans=[s for s in msg.get('spans',[]) if s.get('is_primary')]
+              primary=[]
+              for s in spans:
+                  fp=hashlib.sha256((s.get('file_name') or '').encode()).hexdigest()
+                  primary.append((fp,s.get('line_start'),s.get('column_start'),s.get('column_end')))
+              errors.append((code,text,tuple(primary)))
+          print(f'LAS_FIFTH_{label}_ERROR_COUNT={len(errors)}')
+          counts=collections.Counter(e[0] for e in errors)
+          print(f'LAS_FIFTH_{label}_ERROR_CODES=' + ','.join(f'{k}:{v}' for k,v in sorted(counts.items())))
+          for i,(code,text,primary) in enumerate(errors[:20],1):
+              print(f'LAS_FIFTH_{label}_ERR_{i:02d}_CODE={code}')
+              print(f'LAS_FIFTH_{label}_ERR_{i:02d}_SANITIZED={text}')
+              print(f'LAS_FIFTH_{label}_ERR_{i:02d}_PRIMARY={primary}')
+              print(f'LAS_FIFTH_{label}_ERR_{i:02d}_MESSAGE_SHA256={hashlib.sha256((code+"\n"+text).encode()).hexdigest()}')
+          PY
+          echo "LAS_FIFTH_${FIFTH}_STDERR_SHA256=$(sha256sum "$err" | awk '{print $1}')"
+          rm -f "$json" "$err"
+          test "$rc" -ne 0
+          echo "LAS_FIFTH_${FIFTH}_DIAGNOSTIC=PASS"
