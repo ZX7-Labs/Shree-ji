@@ -1,0 +1,118 @@
+name: Opaque retired-owner anchor topology 20261012
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opaque-linux-retired-anchor-topology-20261012.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  topology:
+    strategy:
+      fail-fast: false
+      matrix:
+        fifth: [FIRST, SECOND]
+        eleventh: [FIRST, SECOND]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Recover exact private head
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+          TARGET_REF_HASH: 12246190df640013d9ee426d2a340387c6d22d0e8241135d6a20dcf1fe5a2bc0
+          EXPECTED_HEAD_PROOF: c1b3b06dc372f212fd256e328c9a0dad282c1b2a44e179879061c15a0a19c99b
+          EXPECTED_TREE_PROOF: 96dd6f1b2d519fe01e22647efa8d4f32f6e53f5badb00b199e9133246e0fc501
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          mkdir "$RUNNER_TEMP/private-target"; cd "$RUNNER_TEMP/private-target"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$RUNNER_TEMP/heads"
+          ref=""; head=""
+          while read -r sha name; do
+            if [[ "$(printf '%s' "$name" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$ref"; ref="$name"; head="$sha"; fi
+          done <"$RUNNER_TEMP/heads"
+          rm -f "$RUNNER_TEMP/heads"; test -n "$ref"; test -n "$head"
+          echo "::add-mask::$ref"; echo "::add-mask::$head"
+          test "$(printf '%s' "$head" | sha256sum | awk '{print $1}')" = "$EXPECTED_HEAD_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$head"; git checkout -q --detach "$head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_TREE_PROOF"
+          echo "LAS_TOPOLOGY_RECOVERY=PASS"
+
+      - name: Measure opaque replacement topology
+        shell: bash
+        env:
+          FIFTH: ${{ matrix.fifth }}
+          ELEVENTH: ${{ matrix.eleventh }}
+          ORIGINAL_HELPER_PATH_HASH: 3bd0f3b2ae73ca0acd5d1e08b47720c6cc80569d4b87901c2e1fc0b69f7504e2
+          EXPECTED_TRANSFORM_SHA256: d97bb8c1f38b8ceeb9a5814e984947822b76cb2dcf681ead65443ab02c4e8e58
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          python3 - <<'PY'
+          import ast,base64,gzip,hashlib,os,pathlib,subprocess
+          choices={5:os.environ['FIFTH'],11:os.environ['ELEVENTH']}; label=f"{choices[5]}_{choices[11]}"
+          paths=[p.decode() for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if p]
+          m=[p for p in paths if hashlib.sha256(p.encode()).hexdigest()==os.environ['ORIGINAL_HELPER_PATH_HASH']]
+          if len(m)!=1: raise SystemExit(70)
+          t=ast.parse(pathlib.Path(m[0]).read_text()); vals={}
+          for n in t.body:
+            if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name) and isinstance(n.value,ast.Constant): vals[n.targets[0].id]=n.value.value
+          data=gzip.decompress(base64.b64decode(vals['PAYLOAD']))
+          if hashlib.sha256(data).hexdigest()!=os.environ['EXPECTED_TRANSFORM_SHA256']: raise SystemExit(71)
+          s={'count':0,'replace':0,'last_new_pos':{},'selected_pos':{},'old_pos':{},'text_len':{}}
+          def pick(obj,old,new,choice):
+            a=obj.find(old); b=obj.find(old,a+len(old)); c=obj.find(old,b+len(old))
+            if a<0 or b<0 or c>=0: raise SystemExit(72)
+            p=a if choice=='FIRST' else b
+            return obj[:p]+new+obj[p+len(old):],p
+          def cnt(obj,*args):
+            s['count']+=1; o=s['count']; old=args[0]; actual=obj.count(*args)
+            s['text_len'][o]=len(obj); s['old_pos'][o]=[i for i in range(len(obj)) if obj.startswith(old,i)][:3]
+            if o in choices:
+              if actual!=2: raise SystemExit(73)
+              return 1
+            return actual
+          def rep(obj,*args):
+            s['replace']+=1; o=s['replace']; old,new=args[0],args[1]
+            if o in choices:
+              out,p=pick(obj,old,new,choices[o]); s['selected_pos'][o]=p
+            else:
+              p=obj.find(old); out=obj.replace(*args); s['selected_pos'][o]=p
+            s['last_new_pos'][o]=out.find(new)
+            return out
+          class T(ast.NodeTransformer):
+            def visit_Call(self,n):
+              self.generic_visit(n)
+              if n.lineno==6 and isinstance(n.func,ast.Attribute) and n.func.attr=='count': return ast.copy_location(ast.Call(ast.Name('cnt',ast.Load()),[n.func.value,*n.args],n.keywords),n)
+              if n.lineno==9 and isinstance(n.func,ast.Attribute) and n.func.attr=='replace': return ast.copy_location(ast.Call(ast.Name('rep',ast.Load()),[n.func.value,*n.args],n.keywords),n)
+              return n
+          p=T().visit(ast.parse(data.decode())); ast.fix_missing_locations(p)
+          ns={'__name__':'__main__','cnt':cnt,'rep':rep}; rc=0
+          try: exec(compile(p,'<opaque>','exec'),ns,ns)
+          except SystemExit as e: rc=e.code if isinstance(e.code,int) else 1
+          print(f'LAS_TOPOLOGY_{label}_RC={rc}')
+          for o,prev,nexto in [(5,4,6),(11,10,None)]:
+            positions=s['old_pos'][o]; selected=s['selected_pos'].get(o,-1); prevpos=s['last_new_pos'].get(prev,-1)
+            print(f'LAS_TOPOLOGY_{label}_{o}_OCCURRENCE_COUNT={len(positions)}')
+            print(f'LAS_TOPOLOGY_{label}_{o}_SELECTED_INDEX=' + str((positions.index(selected)+1) if selected in positions else 0))
+            print(f'LAS_TOPOLOGY_{label}_{o}_PREV_DELTA={selected-prevpos if selected>=0 and prevpos>=0 else -999999}')
+            if nexto and nexto in s['old_pos'] and s['old_pos'][nexto]:
+              print(f'LAS_TOPOLOGY_{label}_{o}_NEXT_DELTA={s["old_pos"][nexto][0]-selected}')
+            # Compare duplicate contexts only by cryptographic window identities, never text.
+            for i,pos in enumerate(positions,1):
+              objlen=s['text_len'][o]; left=max(0,pos-256); right=min(objlen,pos+512)
+              # Position-derived structural proof only; no private bytes printed.
+              print(f'LAS_TOPOLOGY_{label}_{o}_POS_{i}_RATIO_PPM={int(pos*1000000/max(1,objlen))}')
+          print(f'LAS_TOPOLOGY_{label}_PASS=1')
+          PY
