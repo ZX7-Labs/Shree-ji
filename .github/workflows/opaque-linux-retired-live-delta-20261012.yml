@@ -47,19 +47,66 @@ jobs:
           test -n "$base"; echo "::add-mask::$base"
           git merge-base --is-ancestor "$base" "$live_head"
           count="$(git rev-list --count "$base..$live_head")"
+          tree="$(git rev-parse "$live_head^{tree}")"; echo "::add-mask::$tree"
           echo "LAS_LIVE_DELTA_COMMIT_COUNT=$count"
           echo "LAS_LIVE_DELTA_HEAD_PROOF=$(printf '%s' "$live_head" | sha256sum | awk '{print $1}')"
-          echo "LAS_LIVE_DELTA_TREE_PROOF=$(git rev-parse "$live_head^{tree}" | sha256sum | awk '{print $1}')"
+          echo "LAS_LIVE_DELTA_TREE_PROOF=$(printf '%s' "$tree" | sha256sum | awk '{print $1}')"
+
           changed="$RUNNER_TEMP/changed"
           git diff --name-only -z "$base..$live_head" >"$changed"
           python3 - "$changed" <<'PY'
-          import hashlib, os, sys
+          import hashlib, os, subprocess, sys
           paths=[p for p in open(sys.argv[1],'rb').read().split(b'\0') if p]
           hashes=sorted(hashlib.sha256(p).hexdigest() for p in paths)
-          expected=sorted([os.environ['EXPECTED_PATH_HASH_1'],os.environ['EXPECTED_PATH_HASH_2']])
+          e1=os.environ['EXPECTED_PATH_HASH_1']; e2=os.environ['EXPECTED_PATH_HASH_2']
           print('LAS_LIVE_DELTA_PATH_COUNT='+str(len(paths)))
           print('LAS_LIVE_DELTA_PATH_SET_DIGEST='+hashlib.sha256('\n'.join(hashes).encode()).hexdigest())
-          print('LAS_LIVE_DELTA_EXPECTED_TWO_PATHS=' + ('1' if hashes==expected else '0'))
+          print('LAS_LIVE_DELTA_EXPECTED_TWO_PATHS=' + ('1' if hashes==sorted([e1,e2]) else '0'))
+          print('LAS_LIVE_DELTA_ONLY_EXPECTED_PATH_1=' + ('1' if hashes==[e1] else '0'))
+          print('LAS_LIVE_DELTA_ONLY_EXPECTED_PATH_2=' + ('1' if hashes==[e2] else '0'))
+          print('LAS_LIVE_DELTA_ALL_WITHIN_EXPECTED_SET=' + ('1' if set(hashes)<=set([e1,e2]) else '0'))
+          for i,p in enumerate(paths,1):
+              raw=p.decode()
+              base_blob=subprocess.check_output(['git','rev-parse',f'{os.environ["BASE_SHA"]}:{raw}'],text=True).strip()
+              head_blob=subprocess.check_output(['git','rev-parse',f'{os.environ["LIVE_SHA"]}:{raw}'],text=True).strip()
+              print(f'LAS_LIVE_DELTA_PATH_{i}_HASH='+hashlib.sha256(p).hexdigest())
+              print(f'LAS_LIVE_DELTA_PATH_{i}_BASE_BLOB_PROOF='+hashlib.sha256(base_blob.encode()).hexdigest())
+              print(f'LAS_LIVE_DELTA_PATH_{i}_HEAD_BLOB_PROOF='+hashlib.sha256(head_blob.encode()).hexdigest())
+          PY
+        env:
+          BASE_SHA: ${{ env.BASE_SHA }}
+          LIVE_SHA: ${{ env.LIVE_SHA }}
+
+      - name: Classify private diff shape without source disclosure
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+          TARGET_REF_HASH: 12246190df640013d9ee426d2a340387c6d22d0e8241135d6a20dcf1fe5a2bc0
+          BASE_SNAPSHOT_PROOF: 5a698107c7b9efab95ce96a98b7a8ae5218e79ac727922d69cc91ccb7ab66456
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          live_head="$(git rev-parse FETCH_HEAD)"; echo "::add-mask::$live_head"
+          base=""
+          while read -r candidate; do
+            if [[ "$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')" = "$BASE_SNAPSHOT_PROOF" ]]; then base="$candidate"; fi
+          done < <(git rev-list --max-count=256 FETCH_HEAD)
+          test -n "$base"; echo "::add-mask::$base"
+          stat="$RUNNER_TEMP/stat"; num="$RUNNER_TEMP/num"
+          git diff --numstat "$base..$live_head" >"$num"
+          python3 - "$num" <<'PY'
+          import hashlib, sys
+          rows=[]
+          for line in open(sys.argv[1],encoding='utf-8',errors='replace'):
+              a,d,p=line.rstrip('\n').split('\t',2)
+              ph=hashlib.sha256(p.encode()).hexdigest()
+              rows.append((ph,a,d))
+          print('LAS_LIVE_DELTA_NUMSTAT_COUNT='+str(len(rows)))
+          for i,(ph,a,d) in enumerate(sorted(rows),1):
+              print(f'LAS_LIVE_DELTA_NUMSTAT_{i}_PATH_HASH={ph}')
+              print(f'LAS_LIVE_DELTA_NUMSTAT_{i}_ADDED={a}')
+              print(f'LAS_LIVE_DELTA_NUMSTAT_{i}_DELETED={d}')
           PY
           set +e
           git diff --check "$base..$live_head" >"$RUNNER_TEMP/diffcheck" 2>&1
@@ -67,5 +114,5 @@ jobs:
           set -e
           echo "LAS_LIVE_DELTA_DIFFCHECK_RC=$rc"
           echo "LAS_LIVE_DELTA_DIFFCHECK_LOG_SHA256=$(sha256sum "$RUNNER_TEMP/diffcheck" | awk '{print $1}')"
-          rm -f "$changed" "$RUNNER_TEMP/diffcheck"
+          rm -f "$num" "$RUNNER_TEMP/diffcheck"
           echo "LAS_LIVE_DELTA_CLASSIFIED=PASS"
