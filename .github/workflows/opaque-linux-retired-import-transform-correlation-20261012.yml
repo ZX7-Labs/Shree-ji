@@ -1,0 +1,152 @@
+name: Opaque retired-owner import transform correlation 20261012
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opaque-linux-retired-import-transform-correlation-20261012.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  correlate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Recover exact live private head opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+          TARGET_REF_HASH: 12246190df640013d9ee426d2a340387c6d22d0e8241135d6a20dcf1fe5a2bc0
+          EXPECTED_HEAD_PROOF: c1b3b06dc372f212fd256e328c9a0dad282c1b2a44e179879061c15a0a19c99b
+          EXPECTED_TREE_PROOF: 96dd6f1b2d519fe01e22647efa8d4f32f6e53f5badb00b199e9133246e0fc501
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$matched_ref"; matched_ref="$ref"; head="$candidate_sha"; fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$head"
+          test "$(printf '%s' "$head" | sha256sum | awk '{print $1}')" = "$EXPECTED_HEAD_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$head"; git checkout -q --detach "$head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_TREE_PROOF"
+          echo "LAS_IMPORT_CORRELATION_RECOVERY=PASS"
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          echo "LAS_IMPORT_CORRELATION_RUST=PASS"
+
+      - name: Correlate unresolved imports to transform operations opaquely
+        shell: bash
+        env:
+          ORIGINAL_HELPER_PATH_HASH: 3bd0f3b2ae73ca0acd5d1e08b47720c6cc80569d4b87901c2e1fc0b69f7504e2
+          EXPECTED_TRANSFORM_SHA256: d97bb8c1f38b8ceeb9a5814e984947822b76cb2dcf681ead65443ab02c4e8e58
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          python3 - "$RUNNER_TEMP" <<'PY'
+          import ast,base64,gzip,hashlib,json,os,pathlib,re,subprocess,sys
+          tmp=pathlib.Path(sys.argv[1])
+          tracked=[p.decode() for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if p]
+          matches=[p for p in tracked if hashlib.sha256(p.encode()).hexdigest()==os.environ['ORIGINAL_HELPER_PATH_HASH']]
+          if len(matches)!=1: raise SystemExit(70)
+          tree=ast.parse(pathlib.Path(matches[0]).read_text(encoding='utf-8')); vals={}
+          for n in tree.body:
+              if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name) and isinstance(n.value,ast.Constant): vals[n.targets[0].id]=n.value.value
+          data=gzip.decompress(base64.b64decode(vals['PAYLOAD'])); digest=hashlib.sha256(data).hexdigest()
+          if digest!=vals['EXPECTED'] or digest!=os.environ['EXPECTED_TRANSFORM_SHA256']: raise SystemExit(71)
+
+          choices={5:'SECOND',11:'FIRST'}; state={'count':0,'replace':0}; ops=[]
+          def selected(obj,old,new,choice):
+              a=obj.find(old); b=obj.find(old,a+len(old)); c=obj.find(old,b+len(old))
+              if a<0 or b<0 or c>=0: raise SystemExit(72)
+              p=a if choice=='FIRST' else b
+              return obj[:p]+new+obj[p+len(old):]
+          def ccount(obj,*args):
+              state['count']+=1; n=state['count']; actual=obj.count(*args)
+              if n in choices:
+                  if actual!=2: raise SystemExit(73)
+                  return 1
+              return actual
+          def rreplace(obj,*args):
+              state['replace']+=1; n=state['replace']; old,new=args[0],args[1]; before=obj.count(old)
+              if n in choices:
+                  if before!=2: raise SystemExit(74)
+                  out=selected(obj,old,new,choices[n])
+              else: out=obj.replace(*args)
+              ops.append((n,old,new))
+              return out
+          class T(ast.NodeTransformer):
+              def visit_Call(self,node):
+                  self.generic_visit(node)
+                  if isinstance(node.func,ast.Attribute) and node.func.attr=='count': return ast.copy_location(ast.Call(ast.Name('ccount',ast.Load()),[node.func.value,*node.args],node.keywords),node)
+                  if isinstance(node.func,ast.Attribute) and node.func.attr=='replace': return ast.copy_location(ast.Call(ast.Name('rreplace',ast.Load()),[node.func.value,*node.args],node.keywords),node)
+                  return node
+          inst=T().visit(ast.parse(data.decode())); ast.fix_missing_locations(inst)
+          exec(compile(inst,'<opaque-transform>','exec'),{'__name__':'__main__','__file__':str(tmp/'opaque.py'),'ccount':ccount,'rreplace':rreplace})
+          if state!={'count':11,'replace':11} or len(ops)!=11: raise SystemExit(75)
+          subprocess.run(['cargo','+1.98.1','fmt','--all'],check=True,stdout=subprocess.DEVNULL)
+          out=tmp/'linux.json'; err=tmp/'linux.stderr'
+          with out.open('w') as o,err.open('w') as e:
+              result=subprocess.run(['cargo','+1.98.1','check','--locked','--all-targets','--features','linux-peer-credentials','--message-format=json'],stdout=o,stderr=e,env={**os.environ,'RUSTFLAGS':'-Dwarnings'})
+          if result.returncode==0: raise SystemExit(76)
+          unresolved=[]
+          for line in out.read_text(encoding='utf-8',errors='replace').splitlines():
+              try: obj=json.loads(line)
+              except Exception: continue
+              if obj.get('reason')!='compiler-message': continue
+              msg=obj.get('message') or {}; code=(msg.get('code') or {}).get('code')
+              if msg.get('level')!='error' or code!='E0432': continue
+              ids=re.findall(r'`([^`]*)`',msg.get('message') or '')
+              if ids: unresolved.append(ids[0])
+          unresolved=list(dict.fromkeys(unresolved))
+          print('LAS_IMPORT_CORRELATION_UNIQUE_IMPORTS='+str(len(unresolved)))
+          rs=[]
+          for p in pathlib.Path('.').rglob('*.rs'):
+              try: rs.append((p,p.read_text(encoding='utf-8')))
+              except Exception: pass
+          for i,imp in enumerate(unresolved,1):
+              tokens=[t for t in re.findall(r'[A-Za-z_][A-Za-z0-9_]*',imp) if t not in {'crate','self','super'}]
+              print(f'LAS_IMPORT_{i:02d}_FULL_HASH='+hashlib.sha256(imp.encode()).hexdigest())
+              print(f'LAS_IMPORT_{i:02d}_TOKEN_COUNT={len(tokens)}')
+              for j,tok in enumerate(tokens,1):
+                  th=hashlib.sha256(tok.encode()).hexdigest(); in_new=[]; def_new=[]
+                  dpat=re.compile(r'\b(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum|trait|type|fn|const|static|mod)\s+'+re.escape(tok)+r'\b')
+                  for n,old,new in ops:
+                      c=len(re.findall(r'\b'+re.escape(tok)+r'\b',new))
+                      d=len(dpat.findall(new))
+                      if c: in_new.append((n,c))
+                      if d: def_new.append((n,d))
+                  repo_occ=repo_defs=0; sites=[]
+                  for p,txt in rs:
+                      repo_occ+=len(re.findall(r'\b'+re.escape(tok)+r'\b',txt))
+                      for m in dpat.finditer(txt):
+                          repo_defs+=1; sites.append((hashlib.sha256(str(p).encode()).hexdigest(),txt.count('\n',0,m.start())+1))
+                  print(f'LAS_IMPORT_{i:02d}_TOKEN_{j:02d}_HASH={th}')
+                  print(f'LAS_IMPORT_{i:02d}_TOKEN_{j:02d}_NEW_OCCURRENCES={in_new}')
+                  print(f'LAS_IMPORT_{i:02d}_TOKEN_{j:02d}_NEW_DEFINITIONS={def_new}')
+                  print(f'LAS_IMPORT_{i:02d}_TOKEN_{j:02d}_REPO_OCCURRENCES={repo_occ}')
+                  print(f'LAS_IMPORT_{i:02d}_TOKEN_{j:02d}_REPO_DEFINITIONS={repo_defs}')
+                  print(f'LAS_IMPORT_{i:02d}_TOKEN_{j:02d}_DEFSITES={sites[:8]}')
+          print('LAS_IMPORT_CORRELATION_STDERR_SHA256='+hashlib.sha256(err.read_bytes()).hexdigest())
+          out.unlink(missing_ok=True); err.unlink(missing_ok=True)
+          print('LAS_IMPORT_CORRELATION=PASS')
+          PY
