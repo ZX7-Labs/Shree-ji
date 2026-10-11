@@ -75,80 +75,75 @@ jobs:
           set -euo pipefail
           cd "$RUNNER_TEMP/target"
           python3 - <<'PY'
-          import ast,base64,gzip,hashlib,os,pathlib,subprocess
-          choices={5:'SECOND',11:'FIRST'}
-          tracked=[p.decode() for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if p]
-          helper=[p for p in tracked if hashlib.sha256(p.encode()).hexdigest()==os.environ['HELPER_PATH_HASH']]
-          if len(helper)!=1: raise SystemExit(70)
-          tree=ast.parse(pathlib.Path(helper[0]).read_text(encoding='utf-8')); vals={}
+          import ast, base64, gzip, hashlib, os, pathlib, subprocess
+          choices = {5: 'SECOND', 11: 'FIRST'}
+          tracked = [p.decode() for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if p]
+          helper = [p for p in tracked if hashlib.sha256(p.encode()).hexdigest() == os.environ['HELPER_PATH_HASH']]
+          if len(helper) != 1: raise SystemExit(70)
+          tree = ast.parse(pathlib.Path(helper[0]).read_text(encoding='utf-8')); vals = {}
           for n in tree.body:
-              if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name) and isinstance(n.value,ast.Constant): vals[n.targets[0].id]=n.value.value
-          data=gzip.decompress(base64.b64decode(vals['PAYLOAD']))
-          if hashlib.sha256(data).hexdigest()!=os.environ['TRANSFORM_SHA256']: raise SystemExit(71)
-          state={'count':0,'replace':0}
-          def choose(obj,old,new,which):
-              a=obj.find(old); b=obj.find(old,a+len(old)); c=obj.find(old,b+len(old))
-              if a<0 or b<0 or c>=0: raise SystemExit(72)
-              p=a if which=='FIRST' else b
-              return obj[:p]+new+obj[p+len(old):]
-          def cnt(obj,*args):
-              state['count']+=1; o=state['count']; actual=obj.count(*args)
-              if o in choices:
-                  if actual!=2: raise SystemExit(73)
+              if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name) and isinstance(n.value, ast.Constant):
+                  vals[n.targets[0].id] = n.value.value
+          data = gzip.decompress(base64.b64decode(vals['PAYLOAD']))
+          if hashlib.sha256(data).hexdigest() != os.environ['TRANSFORM_SHA256']: raise SystemExit(71)
+          state = {'count': 0, 'replace': 0}
+          def choose(obj, old, new, which):
+              a = obj.find(old); b = obj.find(old, a + len(old)); c = obj.find(old, b + len(old))
+              if a < 0 or b < 0 or c >= 0: raise SystemExit(72)
+              p = a if which == 'FIRST' else b
+              return obj[:p] + new + obj[p + len(old):]
+          def cnt(obj, *args):
+              state['count'] += 1; ordinal = state['count']; actual = obj.count(*args)
+              if ordinal in choices:
+                  if actual != 2: raise SystemExit(73)
                   return 1
               return actual
-          def rep(obj,*args):
-              state['replace']+=1; o=state['replace']
-              if o in choices:
-                  if len(args)<2 or obj.count(args[0])!=2: raise SystemExit(74)
-                  return choose(obj,args[0],args[1],choices[o])
+          def rep(obj, *args):
+              state['replace'] += 1; ordinal = state['replace']
+              if ordinal in choices:
+                  if len(args) < 2 or obj.count(args[0]) != 2: raise SystemExit(74)
+                  return choose(obj, args[0], args[1], choices[ordinal])
               return obj.replace(*args)
           class T(ast.NodeTransformer):
-              def visit_Call(self,n):
-                  self.generic_visit(n)
-                  if n.lineno==6 and isinstance(n.func,ast.Attribute) and n.func.attr=='count': return ast.copy_location(ast.Call(ast.Name('cnt',ast.Load()),[n.func.value,*n.args],n.keywords),n)
-                  if n.lineno==9 and isinstance(n.func,ast.Attribute) and n.func.attr=='replace': return ast.copy_location(ast.Call(ast.Name('rep',ast.Load()),[n.func.value,*n.args],n.keywords),n)
-                  return n
-          p=T().visit(ast.parse(data.decode('utf-8'))); ast.fix_missing_locations(p)
-          ns={'__name__':'__main__','cnt':cnt,'rep':rep}; rc=0
-          try: exec(compile(p,'<opaque>','exec'),ns,ns)
-          except SystemExit as e: rc=e.code if isinstance(e.code,int) else 1
-          if rc!=0 or state!={'count':11,'replace':11}: raise SystemExit(75)
-
-          target=[p for p in tracked if hashlib.sha256(p.encode()).hexdigest()==os.environ['PATH_HASH_2']]
-          if len(target)!=1: raise SystemExit(76)
-          path=pathlib.Path(target[0]); text=path.read_text(encoding='utf-8')
-          imports=[
+              def visit_Call(self, node):
+                  self.generic_visit(node)
+                  if node.lineno == 6 and isinstance(node.func, ast.Attribute) and node.func.attr == 'count':
+                      return ast.copy_location(ast.Call(ast.Name('cnt', ast.Load()), [node.func.value, *node.args], node.keywords), node)
+                  if node.lineno == 9 and isinstance(node.func, ast.Attribute) and node.func.attr == 'replace':
+                      return ast.copy_location(ast.Call(ast.Name('rep', ast.Load()), [node.func.value, *node.args], node.keywords), node)
+                  return node
+          parsed = T().visit(ast.parse(data.decode('utf-8'))); ast.fix_missing_locations(parsed)
+          ns = {'__name__': '__main__', 'cnt': cnt, 'rep': rep}; rc = 0
+          try: exec(compile(parsed, '<opaque>', 'exec'), ns, ns)
+          except SystemExit as e: rc = e.code if isinstance(e.code, int) else 1
+          if rc != 0 or state != {'count': 11, 'replace': 11}: raise SystemExit(75)
+          target = [p for p in tracked if hashlib.sha256(p.encode()).hexdigest() == os.environ['PATH_HASH_2']]
+          if len(target) != 1: raise SystemExit(76)
+          path = pathlib.Path(target[0]); text = path.read_text(encoding='utf-8')
+          imports = [
               'use super::root_supervisor_linux_pre_action_authenticator::LinuxPreActionAuthenticatorOwner;',
               'use super::root_supervisor_linux_pre_action_plan::LinuxPreActionProofAuthenticator;',
           ]
           for line in imports:
-              if text.count(line)!=1 or text.count('#[cfg(feature = "root-ffi")]\n'+line)!=0: raise SystemExit(77)
-              text=text.replace(line,'#[cfg(feature = "root-ffi")]\n'+line,1)
-          method='''    #[expect(
-        clippy::type_complexity,
-        reason = "independent archive, owner, and durable-store failure channels remain explicit at the high-assurance boundary"
-    )]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the exact three retained owners and two independent proofs stay explicit at the archive boundary"
-    )]
-    pub(super) fn verify_retained_owners_and_persist<'''
-          gated='''    #[cfg(feature = "root-ffi")]
-'''+method
-          if text.count(method)!=1 or text.count(gated)!=0: raise SystemExit(78)
-          text=text.replace(method,gated,1); path.write_text(text,encoding='utf-8')
+              gated = '#[cfg(feature = "root-ffi")]\n' + line
+              if text.count(line) != 1 or text.count(gated) != 0: raise SystemExit(77)
+              text = text.replace(line, gated, 1)
+          method = '    #[expect(\n        clippy::type_complexity,\n        reason = "independent archive, owner, and durable-store failure channels remain explicit at the high-assurance boundary"\n    )]\n    #[expect(\n        clippy::too_many_arguments,\n        reason = "the exact three retained owners and two independent proofs stay explicit at the archive boundary"\n    )]\n    pub(super) fn verify_retained_owners_and_persist<'
+          gated_method = '    #[cfg(feature = "root-ffi")]\n' + method
+          if text.count(method) != 1 or text.count(gated_method) != 0: raise SystemExit(78)
+          text = text.replace(method, gated_method, 1)
+          path.write_text(text, encoding='utf-8')
           PY
           cargo +1.98.1 fmt --all
           git diff --check
           python3 - <<'PY'
-          import hashlib,os,subprocess
-          paths=[p for p in subprocess.check_output(['git','diff','--name-only','-z']).split(b'\0') if p]
-          got=sorted(hashlib.sha256(p).hexdigest() for p in paths)
-          exp=sorted([os.environ['PATH_HASH_1'],os.environ['PATH_HASH_2']])
-          print('V03_CHANGED_COUNT='+str(len(paths)))
-          print('V03_EXPECTED_CHANGESET='+('1' if got==exp else '0'))
-          if got!=exp: raise SystemExit(79)
+          import hashlib, os, subprocess
+          paths = [p for p in subprocess.check_output(['git','diff','--name-only','-z']).split(b'\0') if p]
+          got = sorted(hashlib.sha256(p).hexdigest() for p in paths)
+          expected = sorted([os.environ['PATH_HASH_1'], os.environ['PATH_HASH_2']])
+          print('V03_CHANGED_COUNT=' + str(len(paths)))
+          print('V03_EXPECTED_CHANGESET=' + ('1' if got == expected else '0'))
+          if got != expected: raise SystemExit(79)
           PY
           echo "V03_MATERIALIZATION=PASS"
 
