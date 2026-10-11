@@ -1,0 +1,71 @@
+name: Opaque retired-owner live delta 20261012
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opaque-linux-retired-live-delta-20261012.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  classify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Recover live branch and classify exact delta
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+          TARGET_REF_HASH: 12246190df640013d9ee426d2a340387c6d22d0e8241135d6a20dcf1fe5a2bc0
+          BASE_SNAPSHOT_PROOF: 5a698107c7b9efab95ce96a98b7a8ae5218e79ac727922d69cc91ccb7ab66456
+          EXPECTED_PATH_HASH_1: 680761d41ae8315a6bf67b2df5250c8b4ebc93b434b7de42be032b743c37b90a
+          EXPECTED_PATH_HASH_2: 736cc80e53ddc8c5287113b778e1a8fb5f3973b1b5092cdf665c982b07ce8b6d
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; live_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$matched_ref"; matched_ref="$ref"; live_head="$candidate_sha"; fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$live_head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$live_head"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=256 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$live_head"
+          base=""
+          while read -r candidate; do
+            if [[ "$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')" = "$BASE_SNAPSHOT_PROOF" ]]; then test -z "$base"; base="$candidate"; fi
+          done < <(git rev-list --max-count=256 FETCH_HEAD)
+          test -n "$base"; echo "::add-mask::$base"
+          git merge-base --is-ancestor "$base" "$live_head"
+          count="$(git rev-list --count "$base..$live_head")"
+          echo "LAS_LIVE_DELTA_COMMIT_COUNT=$count"
+          echo "LAS_LIVE_DELTA_HEAD_PROOF=$(printf '%s' "$live_head" | sha256sum | awk '{print $1}')"
+          echo "LAS_LIVE_DELTA_TREE_PROOF=$(git rev-parse "$live_head^{tree}" | sha256sum | awk '{print $1}')"
+          changed="$RUNNER_TEMP/changed"
+          git diff --name-only -z "$base..$live_head" >"$changed"
+          python3 - "$changed" <<'PY'
+          import hashlib, os, sys
+          paths=[p for p in open(sys.argv[1],'rb').read().split(b'\0') if p]
+          hashes=sorted(hashlib.sha256(p).hexdigest() for p in paths)
+          expected=sorted([os.environ['EXPECTED_PATH_HASH_1'],os.environ['EXPECTED_PATH_HASH_2']])
+          print('LAS_LIVE_DELTA_PATH_COUNT='+str(len(paths)))
+          print('LAS_LIVE_DELTA_PATH_SET_DIGEST='+hashlib.sha256('\n'.join(hashes).encode()).hexdigest())
+          print('LAS_LIVE_DELTA_EXPECTED_TWO_PATHS=' + ('1' if hashes==expected else '0'))
+          PY
+          set +e
+          git diff --check "$base..$live_head" >"$RUNNER_TEMP/diffcheck" 2>&1
+          rc=$?
+          set -e
+          echo "LAS_LIVE_DELTA_DIFFCHECK_RC=$rc"
+          echo "LAS_LIVE_DELTA_DIFFCHECK_LOG_SHA256=$(sha256sum "$RUNNER_TEMP/diffcheck" | awk '{print $1}')"
+          rm -f "$changed" "$RUNNER_TEMP/diffcheck"
+          echo "LAS_LIVE_DELTA_CLASSIFIED=PASS"
