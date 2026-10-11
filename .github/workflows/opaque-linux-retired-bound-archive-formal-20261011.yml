@@ -12,8 +12,8 @@ permissions:
 
 env:
   TARGET_REF_HASH: 796fcd5332e4e54fde6aca1fe8943840f55e4289c8cf44aba13138cd796cf13d
-  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 366a09f913f2dfaff527a90c1b0e3b65c980b6382ca0216f7d74d5e4c17a8abe
-  EXPECTED_PRIVATE_TREE_PROOF: 3da2b051922a9d349f8a11128c28c5cb6bb73c8465de55a1d7057e68594a6759
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 53e1242ebfe4b4604023a319d283c4e5a5f8d1e0aaf7e14c04c48a8950194008
+  EXPECTED_PRIVATE_TREE_PROOF: 67285ae5e609041486a2777a4153eefe0a3628d0a87aabe548aaecd21580c312
 
 jobs:
   verify:
@@ -131,6 +131,7 @@ jobs:
           run_sany SANY_EVIDENCE spec/root_authority/RootSupervisorLinuxRetiredEvidenceArchive.tla || failures=$((failures + 1))
           run_sany SANY_OWNER spec/root_authority/RootSupervisorLinuxRetiredOwnerArchiveBinding.tla || failures=$((failures + 1))
           run_sany SANY_BOUND spec/root_authority/RootSupervisorLinuxRetiredBoundArchive.tla || failures=$((failures + 1))
+          run_sany SANY_BOUND_CRASH spec/root_authority/RootSupervisorLinuxRetiredBoundArchiveCrashAmbiguity.tla || failures=$((failures + 1))
           echo "OPAQUE_BOUND_FORMAL_SANY_FAILURE_COUNT=$failures"
           test "$failures" -eq 0
           echo "OPAQUE_BOUND_FORMAL_SANY=PASS"
@@ -161,6 +162,7 @@ jobs:
           run_tlc TLC_EVIDENCE spec/root_authority/RootSupervisorLinuxRetiredEvidenceArchive.cfg spec/root_authority/RootSupervisorLinuxRetiredEvidenceArchive.tla || failures=$((failures + 1))
           run_tlc TLC_OWNER spec/root_authority/RootSupervisorLinuxRetiredOwnerArchiveBinding.cfg spec/root_authority/RootSupervisorLinuxRetiredOwnerArchiveBinding.tla || failures=$((failures + 1))
           run_tlc TLC_BOUND spec/root_authority/RootSupervisorLinuxRetiredBoundArchive.cfg spec/root_authority/RootSupervisorLinuxRetiredBoundArchive.tla || failures=$((failures + 1))
+          run_tlc TLC_BOUND_CRASH spec/root_authority/RootSupervisorLinuxRetiredBoundArchiveCrashAmbiguity.cfg spec/root_authority/RootSupervisorLinuxRetiredBoundArchiveCrashAmbiguity.tla || failures=$((failures + 1))
           echo "OPAQUE_BOUND_FORMAL_TLC_FAILURE_COUNT=$failures"
           test -z "$(git status --porcelain --untracked-files=no)"
           test "$failures" -eq 0
