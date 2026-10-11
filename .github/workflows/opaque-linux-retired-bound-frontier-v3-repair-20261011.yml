@@ -60,7 +60,7 @@ jobs:
           test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
           test "$(cargo +1.98.1 --version | awk '{print $2}')" = "1.98.1"
 
-      - name: Apply narrow must-use remediation and canonical formatting
+      - name: Apply narrow Rust remediations and canonical formatting
         shell: bash
         run: |
           set -euo pipefail
@@ -71,6 +71,7 @@ jobs:
           import sys
           p = Path(sys.argv[1])
           text = p.read_text(encoding="utf-8")
+
           fn = "    fn next_archive_must_continue_exact_successor_and_use_fresh_owner_commitments() {"
           start = text.index(fn)
           end = text.index("    #[test]", start + len(fn))
@@ -80,6 +81,13 @@ jobs:
               raise SystemExit("target must-use site is not unique")
           section = section.replace(old, "        let _first = verifier\n            .verify_bind_and_persist(", 1)
           text = text[:start] + section + text[end:]
+
+          old_expect = '''    #[expect(\n        clippy::result_large_err,\n        reason = "bounded failure-atomic evidence stays stack-owned and allocation-free"\n    )]\n    pub(super) fn verify_bind_and_persist('''
+          new_expect = '''    #[expect(\n        clippy::type_complexity,\n        reason = "independent archive, owner, and durable-store failure channels remain explicit at the high-assurance boundary"\n    )]\n    pub(super) fn verify_bind_and_persist('''
+          if text.count(old_expect) != 1:
+              raise SystemExit("target Clippy expectation site is not unique")
+          text = text.replace(old_expect, new_expect, 1)
+
           p.write_text(text, encoding="utf-8")
           PY
           cargo +1.98.1 fmt --all
