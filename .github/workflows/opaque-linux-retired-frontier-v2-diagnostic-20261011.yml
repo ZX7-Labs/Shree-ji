@@ -60,7 +60,7 @@ jobs:
           test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
           test "$(cargo +1.98.1 --version | awk '{print $2}')" = "1.98.1"
 
-      - name: Validate exact remediation and return encrypted formatted file
+      - name: Validate exact remediation and return encrypted diff
         shell: bash
         run: |
           set -euo pipefail
@@ -97,12 +97,15 @@ jobs:
             --features linux-peer-credentials --message-format=json >"$check_stdout" 2>"$check_stderr"
           rc=$?
           set -e
+          git diff -- "$target" >"$RUNNER_TEMP/target.diff"
+          test -s "$RUNNER_TEMP/target.diff"
           printf 'rc=%s\n' "$rc" >"$RUNNER_TEMP/meta.txt"
           printf 'formatted_file_sha256=%s\n' "$(sha256sum "$target" | awk '{print $1}')" >>"$RUNNER_TEMP/meta.txt"
+          printf 'diff_sha256=%s\n' "$(sha256sum "$RUNNER_TEMP/target.diff" | awk '{print $1}')" >>"$RUNNER_TEMP/meta.txt"
           printf 'check_stdout_sha256=%s\n' "$(sha256sum "$check_stdout" | awk '{print $1}')" >>"$RUNNER_TEMP/meta.txt"
           printf 'check_stderr_sha256=%s\n' "$(sha256sum "$check_stderr" | awk '{print $1}')" >>"$RUNNER_TEMP/meta.txt"
-          tar -czf "$RUNNER_TEMP/diag.tar.gz" -C "$GITHUB_WORKSPACE/target" "$target" \
-            -C "$RUNNER_TEMP" meta.txt check.stdout check.stderr
+          tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/diag.tar.gz" \
+            meta.txt target.diff check.stdout check.stderr
 
           key="$RUNNER_TEMP/diag.key"
           openssl rand -hex 32 >"$key"
@@ -126,5 +129,5 @@ jobs:
           echo "OPAQUE_REMEDIATION_DATA_B64=$(base64 -w0 "$RUNNER_TEMP/diag.enc")"
           rm -f "$RUNNER_TEMP/diag.tar.gz" "$key" "$RUNNER_TEMP/public.pem" \
             "$RUNNER_TEMP/key.enc" "$RUNNER_TEMP/diag.enc" "$RUNNER_TEMP/meta.txt" \
-            "$check_stdout" "$check_stderr"
+            "$RUNNER_TEMP/target.diff" "$check_stdout" "$check_stderr"
           exit 0
