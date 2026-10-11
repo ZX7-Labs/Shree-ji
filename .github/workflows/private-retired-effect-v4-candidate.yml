@@ -1,4 +1,4 @@
-name: Private retired effect v4 candidate
+name: Private retired effect v4 canonicalize
 
 on:
   push:
@@ -9,30 +9,36 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: private-retired-effect-v4-canonicalize
+  cancel-in-progress: false
+
 jobs:
-  candidate:
+  canonicalize:
     runs-on: ubuntu-24.04
-    timeout-minutes: 50
+    timeout-minutes: 60
     steps:
       - name: Recover exact private revision opaquely
         shell: bash
         env:
           PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
-          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
           TARGET_REF_HASH: a7195b2116dc080ad9d3be4184fef8c5fc791983798984d5fc25cd3f38e878ab
           EXPECTED_PRIVATE_SNAPSHOT_PROOF: f15eebcfaa8fb997898b97ed632269b2551e308ec1f0f1f889e4b935bdd5d84f
           EXPECTED_PRIVATE_TREE_PROOF: 9bcaea87c6af2eda91731f2c16526dfb225e6e929ecd62f07c2558e9e632eea7
         run: |
           set -euo pipefail
-          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
-          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_READ_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_READ_TOKEN"
           root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
           git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
-          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_READ_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
           refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
           matched_ref=""; private_head=""
           while read -r candidate_sha ref; do
-            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$matched_ref"; matched_ref="$ref"; private_head="$candidate_sha"; fi
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"; matched_ref="$ref"; private_head="$candidate_sha"
+            fi
           done <"$refs"
           rm -f "$refs"; test -n "$matched_ref"; test -n "$private_head"
           echo "::add-mask::$matched_ref"; echo "::add-mask::$private_head"
@@ -42,10 +48,13 @@ jobs:
           tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
           test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
           test -z "$(git status --porcelain)"
-          unset PRIVATE_TOKEN auth matched_ref private_head tree candidate_sha ref
+          printf '%s' "$matched_ref" >"$RUNNER_TEMP/private-ref"
+          printf '%s' "$private_head" >"$RUNNER_TEMP/private-start-sha"
+          chmod 600 "$RUNNER_TEMP/private-ref" "$RUNNER_TEMP/private-start-sha"
+          unset PRIVATE_READ_TOKEN auth matched_ref private_head tree candidate_sha ref
           echo "LAS_EFFECT_V4_EXACT_RECOVERY=PASS"
 
-      - name: Apply exact transform and two narrow build repairs
+      - name: Apply exact verified transform and narrow repairs
         shell: bash
         env:
           TRANSFORM_PATH_HASH: b24292ddb8ac88c004949711dfe57ce53a512e522ef6c2d2dbc682e15e124fe9
@@ -81,8 +90,10 @@ jobs:
           expected=set(os.environ['EXPECTED_PATH_HASHES'].split())
           paths=[p for p in open(sys.argv[1],'rb').read().split(b'\0') if p]
           actual={hashlib.sha256(p).hexdigest() for p in paths}
-          if len(paths)!=6 or len(actual)!=6 or actual!=expected: raise SystemExit('unexpected private v4 candidate change set')
+          if len(paths)!=6 or len(actual)!=6 or actual!=expected:
+              raise SystemExit('unexpected private v4 candidate change set')
           PY
+          rm -f "$changed"
           echo "LAS_EFFECT_V4_TRANSFORM=PASS"
 
       - name: Install pinned Ada toolchain launcher
@@ -92,23 +103,23 @@ jobs:
           archive="$RUNNER_TEMP/alr.zip"; prefix="$RUNNER_TEMP/alr"
           curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --output "$archive" "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip"
           echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $archive" | sha256sum --check --strict >/dev/null
-          mkdir -p "$prefix"; unzip -q "$archive" -d "$prefix"; echo "$prefix/bin" >> "$GITHUB_PATH"
+          mkdir -p "$prefix"; unzip -q "$archive" -d "$prefix"; echo "$prefix/bin" >>"$GITHUB_PATH"
           "$prefix/bin/alr" -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
           alr_bin="$prefix/bin/alr"; workspace="$RUNNER_TEMP/root-production-toolchain"; mkdir -p "$workspace"; cd "$workspace"
           "$alr_bin" -n init --in-place --no-skel --lib root_production_toolchain >/dev/null
           gpr_wrapper="$RUNNER_TEMP/gprbuild-wrapper"
           printf '#!/usr/bin/env bash\nset -euo pipefail\ncd %q\nexec %q exec -- gprbuild "$@"\n' "$workspace" "$alr_bin" >"$gpr_wrapper"
-          chmod +x "$gpr_wrapper"; "$gpr_wrapper" --version >/dev/null; echo "GPRBUILD=$gpr_wrapper" >> "$GITHUB_ENV"
+          chmod +x "$gpr_wrapper"; "$gpr_wrapper" --version >/dev/null; echo "GPRBUILD=$gpr_wrapper" >>"$GITHUB_ENV"
           echo "LAS_EFFECT_V4_ADA=PASS"
 
-      - name: Run exact private production gates without private logs
+      - name: Run transformed candidate production gates
         shell: bash
         env:
           RUSTFLAGS: -Dwarnings
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/private-target"; failures=0
-          run_gate() { label="$1"; shift; log="$RUNNER_TEMP/${label}.private.log"; set +e; "$@" >"$log" 2>&1; rc=$?; set -e; printf 'LAS_EFFECT_V4_%s_LOG_SHA256=%s\n' "$label" "$(sha256sum "$log" | awk '{print $1}')"; printf 'LAS_EFFECT_V4_%s_RC=%s\n' "$label" "$rc"; rm -f "$log"; if [[ "$rc" -ne 0 ]]; then failures=$((failures+1)); fi; }
+          run_gate() { label="$1"; shift; log="$RUNNER_TEMP/pre-${label}.private.log"; set +e; "$@" >"$log" 2>&1; rc=$?; set -e; printf 'LAS_EFFECT_V4_PRE_%s_LOG_SHA256=%s\n' "$label" "$(sha256sum "$log" | awk '{print $1}')"; printf 'LAS_EFFECT_V4_PRE_%s_RC=%s\n' "$label" "$rc"; rm -f "$log"; if [[ "$rc" -ne 0 ]]; then failures=$((failures+1)); fi; }
           run_gate TRUST_CONTRACT python3 tools/verification/root_trust_input_contract.py
           run_gate FORMAT cargo +1.98.1 fmt --all -- --check
           run_gate DEFAULT_CHECK cargo +1.98.1 check --locked --all-targets
@@ -119,25 +130,106 @@ jobs:
           run_gate EFFECT_OWNER_TEST cargo +1.98.1 test --locked --lib --features "root-ffi linux-peer-credentials" retired_projection_tests -- --test-threads=1
           run_gate PRODUCTION_LIB_TEST cargo +1.98.1 test --locked --lib --features "root-ffi linux-peer-credentials" -- --test-threads=1
           run_gate RELEASE_CHECK cargo +1.98.1 check --release --locked --all-targets --features "root-ffi linux-peer-credentials"
-          echo "LAS_EFFECT_V4_FAILURE_COUNT=$failures"; test "$failures" -eq 0; echo "LAS_EFFECT_V4_GATES=PASS"
+          echo "LAS_EFFECT_V4_PRE_FAILURE_COUNT=$failures"; test "$failures" -eq 0
+          echo "LAS_EFFECT_V4_PRE_GATES=PASS"
 
-      - name: Encrypt exact six-file candidate
+      - name: Commit exact candidate and remove staging helpers
         shell: bash
         env:
-          RECIPIENT_CERT_B64: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURSVENDQWkyZ0F3SUJBZ0lVT0JBNG5aWXdXU1hVdm9TSFVMMWgrYmNqWXBBd0RRWUpLb1pJaHZjTkFRRUwKQlFBd01qRXdNQzRHQTFVRUF3d25URUZUSUhKbGRHbHlaV1FnWldabVpXTjBJR1JwWVdkdWIzTjBhV01nWlhCbwpaVzFsY21Gc01CNFhEVEkyTVRBeE1URXpNemt3TmxvWERUSTJNVEF4TWpFek16a3dObG93TWpFd01DNEdBMVVFCkF3d25URUZUSUhKbGRHbHlaV1FnWldabVpXTjBJR1JwWVdkdWIzTjBhV01nWlhCb1pXMWxjbUZzTUlJQklqQU4KQmdrcWhraUc5dzBCQVFFRkFBT0NBUThBTUlJQkNnS0NBUUVBd3ZwZGRoL0hEQklsbXJnSGl5RThxUk5RUmdWdQpIQThPMk9UNFBDaFR6MkhUNGFta1E2dmMwaCtleEwvQ1FLaC8vaXdpUUNwR2dDcWpYY3NZNE5IdDJhYW5JbXk2CkRqVzRWR3pVQTQ5UlF5UTd1STlPZm9IakVBSStLNHlkQVA0aXRrVTNKV2JLeEc4dXBVTjE0dUthWXA3TzhGYXUKVVFiS2tGZkpzZ0dxTHRjSmQvOGFUMXQxeFVZTm44RzE4d2NHQitRbXRoanJQdU5od3M1VlcySmFkeTZxTEdhYwpwOFF5WlJZZzR1alN3QzFpSExJQXJTL1pweFRZREo3RnBtMGt1eHUxRkVEcnRrRzh5NHFDQTE3VjhUMXJsR24yCk82QW94Y0xpamRuUVBxSHZzekRSZkZ4RkM0Q0FOdTlTUFJDbzRzUGdzWjhCczN4eG5tZGxUa1ltelFJREFRQUIKbzFNd1VUQWRCZ05WSFE0RUZnUVVMK011UzdyQWlFTFg4UEY2clR4TFBaWWx0Ull3SHdZRFZSMGpCQmd3Rm9BVQpMK011UzdyQWlFTFg4UEY2clR4TFBaWWx0Ull3RHdZRFZSMFRBUUgvQkFVd0F3RUIvekFOQmdrcWhraUc5dzBCCkFRc0ZBQU9DQVFFQVczQUUvTnJmcjBBSWkxQnRrdEdqOGJqdEVXVU5qdEliVjJCTk9LaE1hZjA1NDNmWDl6ckcKdDFNVXA1c29xTFJ5T0I1cGhJb2xWMmZZNml1K0xGTWdYMG1nSjM0SjRDcGlvWVdEY0hmTUkvNDVvRUFzNkQ1dQpuS205cHRiRUtKYVB3dkNoNTBVd2tuODBYeERRNDNxbERmWTdNcUdyUzFEQVgzK1ZGVjU2Tmp2MXI0L0JYb0NnCnFFVWNGVEJwVk9VS0hxSS9Jdkdmc1l6cTVZOGJkb3dXdlVvSlVzSHplZ0FzeXdIY3JveGd1R3JsOEp5WFJOdDUKaUFXL2xMSFozZ29kdW9HTU1aUWZXN0RweFJuV1hFU1YrdzRXU05qK0ZBeG11NXpvaitDcmxSVXBwM3dCMXpLMwpkUlZlM2Z0dkhTcVVwOGp2dWczeHA1M2k1czdrQ2ZVcFpRPT0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
+          TRANSFORM_PATH_HASH: b24292ddb8ac88c004949711dfe57ce53a512e522ef6c2d2dbc682e15e124fe9
+          TRANSFORM_V2_PATH_HASH: af659ab32493763b515ace9f0e1006c7926ce7e6d269b6dc7673cd9f0b251130
+          BUILD_REPAIR_PATH_HASH: b32f32788e402a7b6a0cc56d8da35aa7304479e8fbbe01af4344afe96b8685a2
+          DEFAULT_REPAIR_PATH_HASH: 489337a86bc51fa6cc652c44effdc29ddfb61ffa5f91cb66d622b7a37c58500d
+          EXPECTED_STAGED_PATH_HASHES: |
+            577cbe123ea611e0205c0a595ea25d41e1c43c507c8439264a148f4906dba9a0
+            5b89ebd95ae5bd0a2001acc3da8f2b30646a3a49483966e6f7c71c7538f55336
+            933fb5901ecca40e0c510961bb42f77a92e97a8edd4cf46633dd4b0889a52a73
+            b68c1a40c3bd9e1a111e13782c2040df87dba050dd5e911c0586bc750209a1e9
+            c6dab830b8322ddb21d865595d3d99a36d8457044f9901beecb0df6373ceaaf5
+            f1ed409300b965a0572e7559552f652feba637a9b4363860b0bb3f598c05d566
+            b24292ddb8ac88c004949711dfe57ce53a512e522ef6c2d2dbc682e15e124fe9
+            af659ab32493763b515ace9f0e1006c7926ce7e6d269b6dc7673cd9f0b251130
+            b32f32788e402a7b6a0cc56d8da35aa7304479e8fbbe01af4344afe96b8685a2
+            489337a86bc51fa6cc652c44effdc29ddfb61ffa5f91cb66d622b7a37c58500d
         run: |
           set -euo pipefail
-          cd "$RUNNER_TEMP/private-target"; list="$RUNNER_TEMP/candidate-paths"; git diff --name-only -z >"$list"
-          tarball="$RUNNER_TEMP/retired-effect-v4.tgz"; tar --null -czf "$tarball" -T "$list"
-          cert="$RUNNER_TEMP/recipient.pem"; printf '%s' "$RECIPIENT_CERT_B64" | base64 -d >"$cert"; openssl x509 -in "$cert" -noout >/dev/null
-          cipher="$RUNNER_TEMP/retired-effect-v4.cms"; openssl cms -encrypt -binary -aes-256-cbc -outform DER -in "$tarball" -out "$cipher" "$cert"
-          echo "LAS_EFFECT_V4_TARBALL_SHA256=$(sha256sum "$tarball" | awk '{print $1}')"; echo "LAS_EFFECT_V4_CIPHER_SHA256=$(sha256sum "$cipher" | awk '{print $1}')"
-          mkdir "$RUNNER_TEMP/export"; cp "$cipher" "$RUNNER_TEMP/export/candidate.cms"
+          cd "$RUNNER_TEMP/private-target"
+          transform=""; transform_v2=""; build_repair=""; default_repair=""
+          while IFS= read -r -d '' candidate; do
+            digest="$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')"
+            [[ "$digest" = "$TRANSFORM_PATH_HASH" ]] && { test -z "$transform"; transform="$candidate"; }
+            [[ "$digest" = "$TRANSFORM_V2_PATH_HASH" ]] && { test -z "$transform_v2"; transform_v2="$candidate"; }
+            [[ "$digest" = "$BUILD_REPAIR_PATH_HASH" ]] && { test -z "$build_repair"; build_repair="$candidate"; }
+            [[ "$digest" = "$DEFAULT_REPAIR_PATH_HASH" ]] && { test -z "$default_repair"; default_repair="$candidate"; }
+          done < <(git ls-files -z)
+          test -n "$transform"; test -n "$transform_v2"; test -n "$build_repair"; test -n "$default_repair"
+          git rm -q -- "$transform" "$transform_v2" "$build_repair" "$default_repair"
+          git add -u
+          staged="$RUNNER_TEMP/staged-paths"; git diff --cached --name-only -z >"$staged"
+          python3 - "$staged" <<'PY'
+          import hashlib, os, sys
+          expected=set(os.environ['EXPECTED_STAGED_PATH_HASHES'].split())
+          paths=[p for p in open(sys.argv[1],'rb').read().split(b'\0') if p]
+          actual={hashlib.sha256(p).hexdigest() for p in paths}
+          if len(paths)!=10 or len(actual)!=10 or actual!=expected:
+              raise SystemExit('unexpected canonicalization change set')
+          PY
+          rm -f "$staged"
+          git diff --cached --check
+          git config user.name "LAS Verification Canonicalizer"
+          git config user.email "las-verification@users.noreply.github.com"
+          git commit -q -m "Materialize verified retired effect owner projection"
+          test -z "$(git status --porcelain)"
+          new_sha="$(git rev-parse HEAD)"; tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$new_sha"; echo "::add-mask::$tree"
+          printf '%s' "$new_sha" >"$RUNNER_TEMP/private-new-sha"
+          printf '%s' "$tree" >"$RUNNER_TEMP/private-new-tree"
+          chmod 600 "$RUNNER_TEMP/private-new-sha" "$RUNNER_TEMP/private-new-tree"
+          echo "LAS_EFFECT_V4_CANONICAL_COMMIT_READY=PASS"
 
-      - name: Upload ciphertext only
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: retired-effect-v4-candidate
-          path: ${{ runner.temp }}/export/candidate.cms
-          if-no-files-found: error
-          retention-days: 1
+      - name: Re-run exact gates on committed canonical tree
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"; failures=0
+          test "$(git rev-parse HEAD)" = "$(cat "$RUNNER_TEMP/private-new-sha")"
+          test -z "$(git status --porcelain)"
+          run_gate() { label="$1"; shift; log="$RUNNER_TEMP/post-${label}.private.log"; set +e; "$@" >"$log" 2>&1; rc=$?; set -e; printf 'LAS_EFFECT_V4_POST_%s_LOG_SHA256=%s\n' "$label" "$(sha256sum "$log" | awk '{print $1}')"; printf 'LAS_EFFECT_V4_POST_%s_RC=%s\n' "$label" "$rc"; rm -f "$log"; if [[ "$rc" -ne 0 ]]; then failures=$((failures+1)); fi; }
+          run_gate TRUST_CONTRACT python3 tools/verification/root_trust_input_contract.py
+          run_gate FORMAT cargo +1.98.1 fmt --all -- --check
+          run_gate DEFAULT_CHECK cargo +1.98.1 check --locked --all-targets
+          run_gate LINUX_CHECK cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials
+          run_gate PRODUCTION_CHECK cargo +1.98.1 check --locked --all-targets --features "root-ffi linux-peer-credentials"
+          run_gate PRODUCTION_CLIPPY cargo +1.98.1 clippy --locked --all-targets --features "root-ffi linux-peer-credentials" -- -D warnings
+          run_gate SINK_TEST cargo +1.98.1 test --locked --lib --features linux-peer-credentials root_supervisor_linux_retired_owner_projection -- --test-threads=1
+          run_gate EFFECT_OWNER_TEST cargo +1.98.1 test --locked --lib --features "root-ffi linux-peer-credentials" retired_projection_tests -- --test-threads=1
+          run_gate PRODUCTION_LIB_TEST cargo +1.98.1 test --locked --lib --features "root-ffi linux-peer-credentials" -- --test-threads=1
+          run_gate RELEASE_CHECK cargo +1.98.1 check --release --locked --all-targets --features "root-ffi linux-peer-credentials"
+          echo "LAS_EFFECT_V4_POST_FAILURE_COUNT=$failures"; test "$failures" -eq 0
+          echo "LAS_EFFECT_V4_POST_GATES=PASS"
+
+      - name: Lease-check and fast-forward exact private ref
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_WRITE_TOKEN: ${{ secrets.LAS_PRIVATE_WRITE_TOKEN }}
+          EXPECTED_PRIVATE_SNAPSHOT_PROOF: f15eebcfaa8fb997898b97ed632269b2551e308ec1f0f1f889e4b935bdd5d84f
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_WRITE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_WRITE_TOKEN"
+          cd "$RUNNER_TEMP/private-target"
+          ref="$(cat "$RUNNER_TEMP/private-ref")"; start_sha="$(cat "$RUNNER_TEMP/private-start-sha")"; new_sha="$(cat "$RUNNER_TEMP/private-new-sha")"; tree="$(cat "$RUNNER_TEMP/private-new-tree")"
+          echo "::add-mask::$ref"; echo "::add-mask::$start_sha"; echo "::add-mask::$new_sha"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$start_sha" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          test "$(git rev-parse HEAD^)" = "$start_sha"; test "$(git rev-parse HEAD)" = "$new_sha"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_WRITE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          remote_sha="$(git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote origin "$ref" | awk '{print $1}')"; echo "::add-mask::$remote_sha"
+          test "$remote_sha" = "$start_sha"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" push -q origin HEAD:"$ref"
+          post_sha="$(git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote origin "$ref" | awk '{print $1}')"; echo "::add-mask::$post_sha"; test "$post_sha" = "$new_sha"
+          echo "LAS_EFFECT_V4_CANONICAL_COMMIT_PROOF=$(printf '%s' "$new_sha" | sha256sum | awk '{print $1}')"
+          echo "LAS_EFFECT_V4_CANONICAL_TREE_PROOF=$(printf '%s' "$tree" | sha256sum | awk '{print $1}')"
+          echo "LAS_EFFECT_V4_CANONICALIZE=PASS"
