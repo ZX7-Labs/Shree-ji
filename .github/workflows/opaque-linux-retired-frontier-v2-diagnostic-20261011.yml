@@ -3,7 +3,7 @@ name: Opaque Linux retired archive frontier v2 diagnostic
 on:
   pull_request:
     paths:
-      - "verification-requests/**"
+      - "verification-requests/linux-retired-frontier-v2-20261011.txt"
       - ".github/workflows/opaque-linux-retired-frontier-v2-diagnostic-20261011.yml"
   workflow_dispatch:
 
