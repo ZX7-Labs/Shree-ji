@@ -1,0 +1,112 @@
+name: Private retired effect recovery export
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/private-retired-effect-recovery-export.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Recover exact private source and export exact candidate
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+          TARGET_REF_HASH: a7195b2116dc080ad9d3be4184fef8c5fc791983798984d5fc25cd3f38e878ab
+          EXPECTED_PRIVATE_SNAPSHOT_PROOF: 6b39f0c68657653bdc2f3d458cd83f4228df854d82fb12f9a4a1aed46a0e2a13
+          EXPECTED_PRIVATE_TREE_PROOF: 8819d7713034902981c505690c3cc303d81852f700ea76bc5c4e314c10333e0b
+          HELPER_PATH_HASH: b24292ddb8ac88c004949711dfe57ce53a512e522ef6c2d2dbc682e15e124fe9
+          EXPECTED_PATH_HASHES: |
+            577cbe123ea611e0205c0a595ea25d41e1c43c507c8439264a148f4906dba9a0
+            5b89ebd95ae5bd0a2001acc3da8f2b30646a3a49483966e6f7c71c7538f55336
+            933fb5901ecca40e0c510961bb42f77a92e97a8edd4cf46633dd4b0889a52a73
+            b24292ddb8ac88c004949711dfe57ce53a512e522ef6c2d2dbc682e15e124fe9
+            b68c1a40c3bd9e1a111e13782c2040df87dba050dd5e911c0586bc750209a1e9
+            c6dab830b8322ddb21d865595d3d99a36d8457044f9901beecb0df6373ceaaf5
+            f1ed409300b965a0572e7559552f652feba637a9b4363860b0bb3f598c05d566
+          RECIPIENT_CERT_B64: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURSekNDQWkrZ0F3SUJBZ0lVRUkxZVg5dHRWNlBCZE1qZVdnOXlvVFA3MTY4d0RRWUpLb1pJaHZjTkFRRUwKQlFBd016RXhNQzhHQTFVRUF3d29URUZUSUdWbVptVmpkQ0JqWVc1a2FXUmhkR1VnWlhCb1pXMWxjbUZzSUhKbApZMmx3YVdWdWREQWVGdzB5TmpFd01URXhNekl3TkRGYUZ3MHlOakV3TVRJeE16SXdOREZhTURNeE1UQXZCZ05WCkJBTU1LRXhCVXlCbFptWmxZM1FnWTJGdVpHbGtZWFJsSUdWd2FHVnRaWEpoYkNCeVpXTnBjR2xsYm5Rd2dnRWkKTUEwR0NTcUdTSWIzRFFFQkFRVUFBNElCRHdBd2dnRUtBb0lCQVFEVVVucDBPdHUyamhzRk5WVDIvZUF4b1VOZgprRE5TbWF3STF2bGNTbktOZmFjalV2NVNIb0hYc08yQkJ5WHVlSnJWalV3MFhaSWZmQWNrSUk1aVAzbEhYWEovCjg2SUlzWjJDaDFJd3dkOTVVWFI1VHc3clRSVnBQNUFBMVNxZEtlTnVSUVRicGlOYmVXcDVPSENFTllJVXA1S1YKWXhnSDRjN1B6aElHYytUV3JIMEZxc2VwOEdqcng1WHNPRmRiMkdubFBXNzBVcUdPY2xuMEtCZzRrVUtGUjNmUQpTdkY0M0Q4MDJSdENZSklzUyt0cmFidGg4OGl3TWtyT0xsSmJnVGFKVXhFMEM4U1RKeEhxaWNlOTBEMnlsWXA2ClV6TFBtVzI3a1l0OGRscWVCdHREdjB1T1MrYjdVNmM4M2dyc0xPUkF5ZlY5RWsvZUhjN1dnS0xmbHhNREFnTUIKQUFHalV6QlJNQjBHQTFVZERnUVdCQlNFeXdYamJNbmJ1V2dBVmxwTGYzT01sRlhMUERBZkJnTlZIU01FR0RBVwpnQlNFeXdYamJNbmJ1V2dBVmxwTGYzT01sRlhMUERBUEJnTlZIUk1CQWY4RUJUQURBUUgvTUEwR0NTcUdTSWIzCkRRRUJDd1VBQTRJQkFRQytGUVJHQmdBejdGZ2IwdmNzREhKcy9kY0kzc21FcjZuVUJPZUhady9vOEQ5cS8vRUgKR1Y1dU9nSHVCUWdCRS94VytTRFhnZU55OWp1SnVGSXQ1N3NVMkJsUXBIWlN3RlFNL2FFSGFPNWl1WTZ0RFpsOQpkUG5YMUVDeXp6Q0k4RWdTY1J4alNPbTEyRERNQXh6UFhib0Vkelk4QzBLeFd0VFFoVyszeHlWb0F0dVRDWWljCm9QUzRVSGg1VEZmMVh2RmFLbWpvR2RqOVBpNG0ySkpYdEdBMmJ2aWVGNXpsd1AzdWl2WEVEaC82YTViUWs0ZXUKS3I5OEdUdk00elNnT2pDODRZcGRMVDF5dUJJY0ttY2hpYjdubXI1dElqNzFsemIyQVpidEluc2EzbnY5Yy9DQgpXYktJZEFlamxhRDJwTGszYUhKVFhZNURnMW9SNkM1LzVUT1YKLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched=""; head=""
+          while read -r sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched"; matched="$ref"; head="$sha"
+            fi
+          done <"$refs"; rm -f "$refs"; test -n "$matched"; test -n "$head"
+          echo "::add-mask::$matched"; echo "::add-mask::$head"
+          test "$(printf '%s' "$head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched"
+          test "$(git rev-parse FETCH_HEAD)" = "$head"; git checkout -q --detach "$head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"; unset PRIVATE_TOKEN auth matched head tree sha ref
+          echo "LAS_EFFECT_EXACT_RECOVERY=PASS"
+
+          helper=""
+          while IFS= read -r -d '' candidate; do
+            if [[ "$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')" = "$HELPER_PATH_HASH" ]]; then test -z "$helper"; helper="$candidate"; fi
+          done < <(git ls-files -z); test -n "$helper"
+          python3 - "$helper" <<'PYREC'
+          import ast, base64, gzip, hashlib, sys
+          path=sys.argv[1]; mod=ast.parse(open(path,encoding='utf-8').read()); v={}
+          for n in mod.body:
+              if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name) and n.targets[0].id in {'PAYLOAD','EXPECTED'}:
+                  v[n.targets[0].id]=ast.literal_eval(n.value)
+          payload=v.get('PAYLOAD'); expected=v.get('EXPECTED')
+          if not isinstance(payload,str) or not isinstance(expected,str): raise SystemExit('sealed constants missing')
+          alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+          def check(s):
+              try:
+                  b=base64.b64decode(s + '='*(-len(s)%4), validate=True); raw=gzip.decompress(b)
+              except Exception: return None
+              return raw if hashlib.sha256(raw).hexdigest()==expected else None
+          raw=check(payload); kind='exact' if raw is not None else None
+          if raw is None:
+              for i in range(len(payload)+1):
+                  a,b=payload[:i],payload[i:]
+                  for c in alphabet:
+                      raw=check(a+c+b)
+                      if raw is not None: kind='single-missing-character'; break
+                  if raw is not None: break
+          if raw is None:
+              for i in range(len(payload)):
+                  raw=check(payload[:i]+payload[i+1:])
+                  if raw is not None: kind='single-extra-character'; break
+          if raw is None: raise SystemExit('exact hash recovery failed')
+          print('LAS_EFFECT_HELPER_RECOVERY='+kind)
+          exec(compile(raw,'<recovered-retired-effect-transform>','exec'),{'__name__':'__main__'})
+          PYREC
+          rm -f -- "$helper"; unset helper candidate
+
+          changed="$RUNNER_TEMP/paths"; git diff --name-only -z >"$changed"
+          python3 - "$changed" <<'PYPATH'
+          import hashlib, os, sys
+          expected=set(os.environ['EXPECTED_PATH_HASHES'].split()); helper=os.environ['HELPER_PATH_HASH']
+          paths=[p for p in open(sys.argv[1],'rb').read().split(b'\0') if p]
+          actual={hashlib.sha256(p).hexdigest() for p in paths}
+          if len(paths)!=7 or len(actual)!=7 or actual!=expected: raise SystemExit('unexpected candidate change set')
+          live=[p for p in paths if hashlib.sha256(p).hexdigest()!=helper]
+          if len(live)!=6: raise SystemExit('unexpected live file count')
+          open(sys.argv[1]+'.live','wb').write(b'\0'.join(live)+b'\0')
+          PYPATH
+          echo "LAS_EFFECT_CHANGESET=PASS"
+
+          tarball="$RUNNER_TEMP/effect-candidate.tgz"; tar --null -czf "$tarball" -T "$changed.live"
+          cert="$RUNNER_TEMP/cert.pem"; printf '%s' "$RECIPIENT_CERT_B64" | base64 -d >"$cert"; openssl x509 -in "$cert" -noout >/dev/null
+          cipher="$RUNNER_TEMP/effect-candidate.cms"; openssl cms -encrypt -binary -aes-256-cbc -outform DER -in "$tarball" -out "$cipher" "$cert"
+          echo "LAS_EFFECT_CANDIDATE_TARBALL_SHA256=$(sha256sum "$tarball" | awk '{print $1}')"
+          echo "LAS_EFFECT_CANDIDATE_CIPHERTEXT_SHA256=$(sha256sum "$cipher" | awk '{print $1}')"
+          echo LAS_EFFECT_CIPHERTEXT_BEGIN; base64 -w0 "$cipher" | fold -w 1000; echo; echo LAS_EFFECT_CIPHERTEXT_END
