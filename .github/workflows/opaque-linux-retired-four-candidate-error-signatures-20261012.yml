@@ -1,0 +1,174 @@
+name: Opaque retired-owner four-candidate compiler signatures 20261012
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opaque-linux-retired-four-candidate-error-signatures-20261012.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  classify:
+    strategy:
+      fail-fast: false
+      matrix:
+        fifth: [FIRST, SECOND]
+        eleventh: [FIRST, SECOND]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Recover exact live private head
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+          TARGET_REF_HASH: 12246190df640013d9ee426d2a340387c6d22d0e8241135d6a20dcf1fe5a2bc0
+          EXPECTED_HEAD_PROOF: c1b3b06dc372f212fd256e328c9a0dad282c1b2a44e179879061c15a0a19c99b
+          EXPECTED_TREE_PROOF: 96dd6f1b2d519fe01e22647efa8d4f32f6e53f5badb00b199e9133246e0fc501
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; head=""
+          while read -r sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$matched_ref"; matched_ref="$ref"; head="$sha"; fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$head"
+          test "$(printf '%s' "$head" | sha256sum | awk '{print $1}')" = "$EXPECTED_HEAD_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$head"; git checkout -q --detach "$head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          echo "LAS_SIG_${{ matrix.fifth }}_${{ matrix.eleventh }}_RECOVERY=PASS"
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          echo "LAS_SIG_${{ matrix.fifth }}_${{ matrix.eleventh }}_RUST=PASS"
+
+      - name: Materialize exact candidate
+        shell: bash
+        env:
+          FIFTH: ${{ matrix.fifth }}
+          ELEVENTH: ${{ matrix.eleventh }}
+          ORIGINAL_HELPER_PATH_HASH: 3bd0f3b2ae73ca0acd5d1e08b47720c6cc80569d4b87901c2e1fc0b69f7504e2
+          EXPECTED_TRANSFORM_SHA256: d97bb8c1f38b8ceeb9a5814e984947822b76cb2dcf681ead65443ab02c4e8e58
+          EXPECTED_PATH_HASH_1: 680761d41ae8315a6bf67b2df5250c8b4ebc93b434b7de42be032b743c37b90a
+          EXPECTED_PATH_HASH_2: 736cc80e53ddc8c5287113b778e1a8fb5f3973b1b5092cdf665c982b07ce8b6d
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          python3 - <<'PY'
+          import ast,base64,gzip,hashlib,os,pathlib,subprocess
+          choices={5:os.environ['FIFTH'],11:os.environ['ELEVENTH']}
+          paths=[p.decode() for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if p]
+          m=[p for p in paths if hashlib.sha256(p.encode()).hexdigest()==os.environ['ORIGINAL_HELPER_PATH_HASH']]
+          if len(m)!=1: raise SystemExit(70)
+          t=ast.parse(pathlib.Path(m[0]).read_text(encoding='utf-8')); vals={}
+          for n in t.body:
+              if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name) and isinstance(n.value,ast.Constant): vals[n.targets[0].id]=n.value.value
+          data=gzip.decompress(base64.b64decode(vals['PAYLOAD']))
+          if hashlib.sha256(data).hexdigest()!=os.environ['EXPECTED_TRANSFORM_SHA256']: raise SystemExit(71)
+          state={'count':0,'replace':0}
+          def chosen(obj,old,new,which):
+              a=obj.find(old); b=obj.find(old,a+len(old)); c=obj.find(old,b+len(old))
+              if a<0 or b<0 or c>=0: raise SystemExit(72)
+              p=a if which=='FIRST' else b
+              return obj[:p]+new+obj[p+len(old):]
+          def cnt(obj,*args):
+              state['count']+=1; o=state['count']; actual=obj.count(*args)
+              if o in choices:
+                  if actual!=2: raise SystemExit(73)
+                  return 1
+              return actual
+          def rep(obj,*args):
+              state['replace']+=1; o=state['replace']
+              if o in choices:
+                  if len(args)<2 or obj.count(args[0])!=2: raise SystemExit(74)
+                  return chosen(obj,args[0],args[1],choices[o])
+              return obj.replace(*args)
+          class T(ast.NodeTransformer):
+              def visit_Call(self,n):
+                  self.generic_visit(n)
+                  if n.lineno==6 and isinstance(n.func,ast.Attribute) and n.func.attr=='count': return ast.copy_location(ast.Call(ast.Name('cnt',ast.Load()),[n.func.value,*n.args],n.keywords),n)
+                  if n.lineno==9 and isinstance(n.func,ast.Attribute) and n.func.attr=='replace': return ast.copy_location(ast.Call(ast.Name('rep',ast.Load()),[n.func.value,*n.args],n.keywords),n)
+                  return n
+          p=T().visit(ast.parse(data.decode('utf-8'))); ast.fix_missing_locations(p)
+          ns={'__name__':'__main__','cnt':cnt,'rep':rep}; rc=0
+          try: exec(compile(p,'<opaque>','exec'),ns,ns)
+          except SystemExit as e: rc=e.code if isinstance(e.code,int) else 1
+          if rc!=0 or state!={'count':11,'replace':11}: raise SystemExit(75)
+          PY
+          cargo +1.98.1 fmt --all
+          python3 - <<'PY'
+          import hashlib,os,subprocess
+          paths=[p for p in subprocess.check_output(['git','diff','--name-only','-z']).split(b'\0') if p]
+          hashes=sorted(hashlib.sha256(p).hexdigest() for p in paths)
+          exp=sorted([os.environ['EXPECTED_PATH_HASH_1'],os.environ['EXPECTED_PATH_HASH_2']])
+          if hashes!=exp: raise SystemExit(76)
+          print('LAS_SIG_CHANGESET=PASS')
+          PY
+
+      - name: Emit privacy-safe compiler signature
+        shell: bash
+        env:
+          FIFTH: ${{ matrix.fifth }}
+          ELEVENTH: ${{ matrix.eleventh }}
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          json="$RUNNER_TEMP/check.json"; err="$RUNNER_TEMP/check.stderr"
+          set +e
+          cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials --message-format=json >"$json" 2>"$err"
+          rc=$?
+          set -e
+          echo "LAS_SIG_${FIFTH}_${ELEVENTH}_CHECK_RC=$rc"
+          python3 - "$json" <<'PY'
+          import collections,hashlib,json,os,re,sys
+          rows=[]; codes=collections.Counter(); paths=collections.Counter(); levels=collections.Counter(); primaries=0
+          for line in open(sys.argv[1],encoding='utf-8',errors='replace'):
+              try: x=json.loads(line)
+              except Exception: continue
+              if x.get('reason')!='compiler-message': continue
+              m=x.get('message') or {}; level=m.get('level') or 'unknown'
+              if level not in {'error','warning'}: continue
+              levels[level]+=1
+              code=(m.get('code') or {}).get('code') or 'NO_CODE'; codes[code]+=1
+              msg=m.get('message') or ''
+              child_levels=collections.Counter((c.get('level') or 'unknown') for c in (m.get('children') or []))
+              span_rows=[]
+              for s in m.get('spans') or []:
+                  if not s.get('is_primary'): continue
+                  primaries+=1
+                  p=s.get('file_name') or ''
+                  ph=hashlib.sha256(p.encode()).hexdigest(); paths[ph]+=1
+                  span_rows.append((ph, int(s.get('line_start') or 0)//25, int(s.get('column_start') or 0)//8))
+              row=(level,code,hashlib.sha256(msg.encode()).hexdigest(),tuple(sorted(child_levels.items())),tuple(sorted(span_rows)))
+              rows.append(row)
+          label=f"{os.environ['FIFTH']}_{os.environ['ELEVENTH']}"
+          print(f'LAS_SIG_{label}_LEVELS=' + ','.join(f'{k}:{v}' for k,v in sorted(levels.items())))
+          print(f'LAS_SIG_{label}_CODES=' + ','.join(f'{k}:{v}' for k,v in sorted(codes.items())))
+          print(f'LAS_SIG_{label}_PRIMARY_SPANS={primaries}')
+          print(f'LAS_SIG_{label}_PATH_HASHES=' + ','.join(f'{k}:{v}' for k,v in sorted(paths.items())))
+          canon='\n'.join(map(repr,sorted(rows)))
+          print(f'LAS_SIG_{label}_DIAGNOSTIC_DIGEST='+hashlib.sha256(canon.encode()).hexdigest())
+          print(f'LAS_SIG_{label}_DIAGNOSTIC_COUNT={len(rows)}')
+          PY
+          echo "LAS_SIG_${FIFTH}_${ELEVENTH}_STDERR_SHA256=$(sha256sum "$err" | awk '{print $1}')"
+          rm -f "$json" "$err"
+          test "$rc" -ne 0
+          echo "LAS_SIG_${FIFTH}_${ELEVENTH}_CLASSIFIED=PASS"
