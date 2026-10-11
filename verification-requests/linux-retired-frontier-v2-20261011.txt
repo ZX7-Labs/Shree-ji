@@ -1,1 +1,2 @@
 verification-only trigger for exact private retired-archive frontier v2 gate
+request-sequence: 2
