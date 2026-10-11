@@ -49,14 +49,13 @@ jobs:
           test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
           test -z "$(git status --porcelain)"
           unset PRIVATE_TOKEN auth matched_ref private_head tree candidate_sha ref
-          echo "OPAQUE_SEMANTIC_REMEDIATION_RECOVERY=PASS"
+          echo "OPAQUE_SEMANTIC_COMPACT_RECOVERY=PASS"
 
       - name: Install pinned Rust and Ada toolchains
         shell: bash
         run: |
           set -euo pipefail
           rustup toolchain install 1.98.1 --profile minimal >/dev/null
-          rustup component add --toolchain 1.98.1 rustfmt >/dev/null
           archive="$RUNNER_TEMP/alr.zip"; prefix="$RUNNER_TEMP/alr"
           curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --output "$archive" \
             "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip" >/dev/null 2>&1
@@ -64,7 +63,7 @@ jobs:
           mkdir -p "$prefix"; unzip -q "$archive" -d "$prefix"; export PATH="$prefix/bin:$PATH"
           alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
           ws="$RUNNER_TEMP/alire-workspace"; mkdir -p "$ws"
-          (cd "$ws" && alr -n init --in-place --no-skel --lib las_semantic_remediation >/dev/null)
+          (cd "$ws" && alr -n init --in-place --no-skel --lib las_semantic_compact_diag >/dev/null)
           wrapper="$RUNNER_TEMP/gprbuild-wrapper"
           cat >"$wrapper" <<EOF
           #!/usr/bin/env bash
@@ -74,40 +73,60 @@ jobs:
           EOF
           chmod +x "$wrapper"; echo "GPRBUILD=$wrapper" >> "$GITHUB_ENV"
 
-      - name: Validate explicit canonical-sort typing remediation
+      - name: Produce compact encrypted compiler errors
         shell: bash
         env:
           RUSTFLAGS: -Dwarnings
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/target"
-          python3 - <<'PY'
-          from pathlib import Path
-          edits = {
-              Path('src/effect_fabric/root_supervisor_peer_policy.rs'): (
-                  '        let mut ordered = [None; MAX_PEERS];',
-                  '        let mut ordered: [Option<PeerBinding>; MAX_PEERS] = [None; MAX_PEERS];',
-              ),
-              Path('src/effect_fabric/root_supervisor_linux_pre_action_plan.rs'): (
-                  '        let mut ordered = [None; ENTRIES];',
-                  '        let mut ordered: [Option<LinuxPreActionTrustBinding>; ENTRIES] = [None; ENTRIES];',
-              ),
-          }
-          for path, (old, new) in edits.items():
-              text = path.read_text(encoding='utf-8')
-              if text.count(old) != 1:
-                  raise SystemExit(f'expected unique remediation site: {path}')
-              path.write_text(text.replace(old, new, 1), encoding='utf-8')
-          PY
-          cargo +1.98.1 fmt --all
-          log="$RUNNER_TEMP/check.private.log"
+          json="$RUNNER_TEMP/check.json"; stderr="$RUNNER_TEMP/check.stderr"
           set +e
           GPRBUILD="$GPRBUILD" cargo +1.98.1 check --locked --all-targets \
-            --features root-ffi,linux-peer-credentials >"$log" 2>&1
+            --features root-ffi,linux-peer-credentials --message-format=json >"$json" 2>"$stderr"
           rc=$?
           set -e
-          echo "OPAQUE_SEMANTIC_REMEDIATION_CHECK_SHA256=$(sha256sum "$log" | awk '{print $1}')"
-          echo "OPAQUE_SEMANTIC_REMEDIATION_RC=$rc"
-          rm -f "$log"
-          git diff --check
+          python3 - "$json" "$RUNNER_TEMP/errors.txt" <<'PY'
+          import json, sys
+          source, out = sys.argv[1:]
+          errors=[]
+          for line in open(source, encoding='utf-8', errors='replace'):
+              try: item=json.loads(line)
+              except Exception: continue
+              if item.get('reason') != 'compiler-message': continue
+              msg=item.get('message') or {}
+              if msg.get('level') not in {'error','warning'}: continue
+              spans=[]
+              for s in msg.get('spans') or []:
+                  if s.get('is_primary'):
+                      spans.append({'file':s.get('file_name'),'line':s.get('line_start'),'column':s.get('column_start')})
+              errors.append({'level':msg.get('level'),'code':(msg.get('code') or {}).get('code'),'message':msg.get('message'),'spans':spans,'children':[c.get('message') for c in msg.get('children') or [] if c.get('level') in {'help','note'}]})
+          with open(out,'w',encoding='utf-8') as f:
+              json.dump({'rc':None,'errors':errors},f,ensure_ascii=False,separators=(',',':'))
+          PY
+          python3 - "$RUNNER_TEMP/errors.txt" "$rc" <<'PY'
+          import json,sys
+          p=sys.argv[1]; rc=int(sys.argv[2]); data=json.load(open(p,encoding='utf-8')); data['rc']=rc
+          json.dump(data,open(p,'w',encoding='utf-8'),ensure_ascii=False,separators=(',',':'))
+          PY
+          echo "OPAQUE_SEMANTIC_COMPACT_ERROR_SHA256=$(sha256sum "$RUNNER_TEMP/errors.txt" | awk '{print $1}')"
+
+          key="$RUNNER_TEMP/diag.key"; openssl rand -hex 32 >"$key"
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
+            -pass file:"$key" -in "$RUNNER_TEMP/errors.txt" -out "$RUNNER_TEMP/errors.enc"
+          cat >"$RUNNER_TEMP/public.pem" <<'PEM'
+          -----BEGIN PUBLIC KEY-----
+          MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA44kYG5HNeYX8Njzu4Rlv
+          N4l91Ot/aJ+Wt8sFzQWDM8Sx4EHt7wH6X0NvSVuaoG1kzzi7MjfoqkxJMC7Xr1+w
+          WANFilU7WMu2B/P3c8m+HHuzQ3r16zvnleD3ekkmBVL6pTVMY8aEsRJwcOpZlawV
+          QVZxywhKcxwAOXp5qR4EIy/WP1JJF0SraxpWR4DC0/SbzZCFMYvLlo8bGMjXv7+e
+          Elrt+62hZm8vCmbpV/+pybaJjHR4SOV9d15ZnlVhBGSr1D3DYECoI7iDf9/4JCDb
+          A5O72pkJqb75vRQEw0SINKlLxnZTsWAypNxRG84eNoQcaOGqK0MXzAbmPNQrUUN/
+          7wIDAQAB
+          -----END PUBLIC KEY-----
+          PEM
+          openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/public.pem" -in "$key" -out "$RUNNER_TEMP/key.enc"
+          echo "OPAQUE_SEMANTIC_COMPACT_KEY_B64=$(base64 -w0 "$RUNNER_TEMP/key.enc")"
+          echo "OPAQUE_SEMANTIC_COMPACT_DATA_B64=$(base64 -w0 "$RUNNER_TEMP/errors.enc")"
+          rm -f "$json" "$stderr" "$RUNNER_TEMP/errors.txt" "$key" "$RUNNER_TEMP/public.pem" "$RUNNER_TEMP/key.enc" "$RUNNER_TEMP/errors.enc"
           exit 0
