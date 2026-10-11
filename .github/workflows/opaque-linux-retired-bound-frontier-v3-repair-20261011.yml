@@ -1,0 +1,154 @@
+name: Opaque Linux retired bound frontier v3 repair candidate
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/opaque-linux-retired-bound-frontier-v3-repair-20261011.yml"
+      - "verification-requests/linux-retired-bound-frontier-v3-20261011.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 64acb92f533de14d70efc0a74479ee0912c0baedd38b97df084a1acb45a9be85
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 31f730cbb2c51e8a9022b13d3f67ac0ee18af68633deb58beb34fdd9125918ff
+  EXPECTED_PRIVATE_TREE_PROOF: 1e1b2c03bf797c25f1a89daeb69c7d501adbe46d893f247ed5259158fa92da23
+
+jobs:
+  repair-candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Recover exact private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$GITHUB_WORKSPACE/target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"; matched_ref="$ref"; private_head="$candidate_sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$private_head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$private_head"
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$private_head"; git checkout -q --detach "$private_head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          unset PRIVATE_TOKEN auth matched_ref private_head tree candidate_sha ref
+          echo "OPAQUE_BOUND_V3_REPAIR_EXACT_RECOVERY=PASS"
+
+      - name: Install pinned Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          test "$(cargo +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+
+      - name: Apply narrow must-use remediation and canonical formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          target="src/effect_fabric/root_supervisor_linux_retired_bound_archive.rs"
+          python3 - "$target" <<'PY'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1])
+          text = p.read_text(encoding="utf-8")
+          fn = "    fn next_archive_must_continue_exact_successor_and_use_fresh_owner_commitments() {"
+          start = text.index(fn)
+          end = text.index("    #[test]", start + len(fn))
+          section = text[start:end]
+          old = "        verifier\n            .verify_bind_and_persist("
+          if section.count(old) != 1:
+              raise SystemExit("target must-use site is not unique")
+          section = section.replace(old, "        let _first = verifier\n            .verify_bind_and_persist(", 1)
+          text = text[:start] + section + text[end:]
+          p.write_text(text, encoding="utf-8")
+          PY
+          cargo +1.98.1 fmt --all
+          changed="$(git diff --name-only)"
+          test "$changed" = "$target"
+          echo "OPAQUE_BOUND_V3_REPAIR_TARGET_SHA256=$(sha256sum "$target" | awk '{print $1}')"
+
+      - name: Verify repair candidate without private logs
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          failures=0
+          run_gate() {
+            label="$1"; shift
+            log="$RUNNER_TEMP/${label}.private.log"
+            set +e
+            "$@" >"$log" 2>&1
+            rc=$?
+            set -e
+            printf 'OPAQUE_BOUND_V3_REPAIR_%s_LOG_SHA256=%s\n' "$label" "$(sha256sum "$log" | awk '{print $1}')"
+            printf 'OPAQUE_BOUND_V3_REPAIR_%s_RC=%s\n' "$label" "$rc"
+            rm -f "$log"
+            if [[ "$rc" -ne 0 ]]; then failures=$((failures + 1)); fi
+          }
+          run_gate FORMAT cargo +1.98.1 fmt --all -- --check
+          run_gate CHECK cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials
+          run_gate CLIPPY cargo +1.98.1 clippy --locked --all-targets --features linux-peer-credentials -- -D warnings
+          run_gate TEST cargo +1.98.1 test --locked --lib --features linux-peer-credentials root_supervisor_linux_retired_bound_archive -- --test-threads=1
+          echo "OPAQUE_BOUND_V3_REPAIR_FAILURE_COUNT=$failures"
+          test "$failures" -eq 0
+
+      - name: Encrypt green formatted source candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          target="src/effect_fabric/root_supervisor_linux_retired_bound_archive.rs"
+          printf 'target_sha256=%s\n' "$(sha256sum "$target" | awk '{print $1}')" >"$RUNNER_TEMP/candidate.meta"
+          tar -czf "$RUNNER_TEMP/candidate.tar.gz" "$target" -C "$RUNNER_TEMP" candidate.meta
+          key="$RUNNER_TEMP/candidate.key"
+          openssl rand -hex 32 >"$key"
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
+            -pass file:"$key" -in "$RUNNER_TEMP/candidate.tar.gz" -out "$RUNNER_TEMP/candidate.enc"
+          cat >"$RUNNER_TEMP/public.pem" <<'PEM'
+          -----BEGIN PUBLIC KEY-----
+          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAhwbR84KPZDtlrulbbIo7
+          tB4nF0oz/tX6K6pkuLFLtSiFYImYCQQgdZGXLw77mtuoe+7dDKRH/4FgqB9/sOlF
+          eKfXIgqb7J5l6gtAV0JT/XKevXrUNY5tpNcbT61chnZ7PSUjA2Q+ZPddM0oMXDWI
+          SYTyaMMA++2qiNecEUCGClnj0kC073gbYV6IstH8TVn0+QbE9S7VKbC7WRl4w+Up
+          FBVgDsghWDJ0PFwt7hPUtHsLFd/rQ5bRlw/YIJI+qeOIbxdrdcr6ZxMCjpP+rv6P
+          fAOAteTZI9HMtYmWCADke6JwLICPq1d/fk4rzXBpo5e8pjfQVrWlogz0gDF0hqGk
+          K9bZ7NNpuvk5bbGSicgw0NU881Jp1asBcbDycAohoFlMGuA+WrFQPNsC5Ssk8ooj
+          /mt9HqOBPKSNf1IGXjM7zCqBY8yi5svW1XcrQQLxSpO4LxGN/TJdTyCuLu/7i3QL
+          TBPbb+2ksio1aVYducBek/MgjuXSlo1+GW2PysYhTD+NAgMBAAE=
+          -----END PUBLIC KEY-----
+          PEM
+          openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/public.pem" \
+            -in "$key" -out "$RUNNER_TEMP/key.enc"
+          rm -f "$RUNNER_TEMP/candidate.tar.gz" "$key" "$RUNNER_TEMP/public.pem" "$RUNNER_TEMP/candidate.meta"
+
+      - name: Upload encrypted green candidate only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: opaque-bound-v3-green-candidate
+          path: |
+            ${{ runner.temp }}/key.enc
+            ${{ runner.temp }}/candidate.enc
+          if-no-files-found: error
+          retention-days: 1
