@@ -1,0 +1,144 @@
+name: Opaque retired-owner current helper candidate 20261012
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opaque-linux-retired-owner-current-helper-candidate-20261012.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    steps:
+      - name: Recover exact live private head opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+          TARGET_REF_HASH: 12246190df640013d9ee426d2a340387c6d22d0e8241135d6a20dcf1fe5a2bc0
+          EXPECTED_HEAD_PROOF: c1b3b06dc372f212fd256e328c9a0dad282c1b2a44e179879061c15a0a19c99b
+          EXPECTED_TREE_PROOF: 96dd6f1b2d519fe01e22647efa8d4f32f6e53f5badb00b199e9133246e0fc501
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$matched_ref"; matched_ref="$ref"; head="$candidate_sha"; fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$head"
+          test "$(printf '%s' "$head" | sha256sum | awk '{print $1}')" = "$EXPECTED_HEAD_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$head"; git checkout -q --detach "$head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          echo "LAS_CURRENT_HELPER_EXACT_RECOVERY=PASS"
+
+      - name: Apply current helper and prove candidate change set
+        shell: bash
+        env:
+          HELPER_PATH_HASH: 3339f22991f94a6f36ccc66648584a4ea905fe49d2e0d854321e69643eb0d7c4
+          EXPECTED_HELPER_BLOB_PROOF: f21d8fe802e0c15054fa47ae4b909c79fc841f76f16d1399a02d2ec5247ef978
+          EXPECTED_PATH_HASH_1: 680761d41ae8315a6bf67b2df5250c8b4ebc93b434b7de42be032b743c37b90a
+          EXPECTED_PATH_HASH_2: 736cc80e53ddc8c5287113b778e1a8fb5f3973b1b5092cdf665c982b07ce8b6d
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          helper=""; matches=0
+          while IFS= read -r -d '' candidate; do
+            digest="$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')"
+            if [[ "$digest" = "$HELPER_PATH_HASH" ]]; then helper="$candidate"; matches=$((matches+1)); fi
+          done < <(git ls-files -z)
+          echo "LAS_CURRENT_HELPER_MATCH_COUNT=$matches"
+          test "$matches" -eq 1; test -n "$helper"
+          helper_blob="$(git hash-object -- "$helper")"; echo "::add-mask::$helper_blob"
+          test "$(printf '%s' "$helper_blob" | sha256sum | awk '{print $1}')" = "$EXPECTED_HELPER_BLOB_PROOF"
+          echo "LAS_CURRENT_HELPER_IDENTITY=PASS"
+          log="$RUNNER_TEMP/current-helper.private.log"
+          set +e
+          python3 "$helper" >"$log" 2>&1
+          rc=$?
+          set -e
+          echo "LAS_CURRENT_HELPER_RC=$rc"
+          echo "LAS_CURRENT_HELPER_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')"
+          rm -f "$log"
+          test "$rc" -eq 0
+          echo "LAS_CURRENT_HELPER_EXECUTION=PASS"
+
+          changed="$RUNNER_TEMP/changed"
+          git diff --name-only -z >"$changed"
+          python3 - "$changed" <<'PY'
+          import hashlib, os, sys
+          paths=[p for p in open(sys.argv[1],'rb').read().split(b'\0') if p]
+          hashes=sorted(hashlib.sha256(p).hexdigest() for p in paths)
+          expected=sorted([os.environ['EXPECTED_PATH_HASH_1'],os.environ['EXPECTED_PATH_HASH_2']])
+          print('LAS_CURRENT_HELPER_CHANGED_COUNT='+str(len(paths)))
+          print('LAS_CURRENT_HELPER_CHANGESET_DIGEST='+hashlib.sha256('\n'.join(hashes).encode()).hexdigest())
+          print('LAS_CURRENT_HELPER_EXPECTED_CHANGESET=' + ('1' if hashes==expected else '0'))
+          if len(paths)!=2 or hashes!=expected:
+              raise SystemExit(41)
+          PY
+          rm -f "$changed"
+          echo "LAS_CURRENT_HELPER_CHANGESET=PASS"
+
+      - name: Install pinned Rust and Ada toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          archive="$RUNNER_TEMP/alr.zip"; prefix="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --output "$archive" "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip" >/dev/null 2>&1
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $archive" | sha256sum --check --strict >/dev/null
+          mkdir -p "$prefix"; unzip -q "$archive" -d "$prefix"
+          "$prefix/bin/alr" -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
+          workspace="$RUNNER_TEMP/root-production-toolchain"; mkdir -p "$workspace"; cd "$workspace"
+          "$prefix/bin/alr" -n init --in-place --no-skel --lib root_production_toolchain >/dev/null
+          gpr_wrapper="$RUNNER_TEMP/gprbuild-wrapper"
+          printf '#!/usr/bin/env bash\nset -euo pipefail\ncd %q\nexec %q exec -- gprbuild "$@"\n' "$workspace" "$prefix/bin/alr" >"$gpr_wrapper"
+          chmod +x "$gpr_wrapper"; "$gpr_wrapper" --version >/dev/null
+          echo "GPRBUILD=$gpr_wrapper" >>"$GITHUB_ENV"
+          echo "LAS_CURRENT_HELPER_TOOLCHAINS=PASS"
+
+      - name: Run transformed candidate production gate matrix
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"; failures=0
+          run_gate() {
+            label="$1"; shift
+            log="$RUNNER_TEMP/${label}.private.log"
+            set +e; "$@" >"$log" 2>&1; rc=$?; set -e
+            echo "LAS_CURRENT_CANDIDATE_${label}_RC=$rc"
+            echo "LAS_CURRENT_CANDIDATE_${label}_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')"
+            rm -f "$log"
+            if [[ "$rc" -ne 0 ]]; then failures=$((failures+1)); fi
+          }
+          run_gate TRUST_CONTRACT python3 tools/verification/root_trust_input_contract.py
+          run_gate FORMAT cargo +1.98.1 fmt --all -- --check
+          run_gate DEFAULT_CHECK cargo +1.98.1 check --locked --all-targets
+          run_gate LINUX_CHECK cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials
+          run_gate PRODUCTION_CHECK cargo +1.98.1 check --locked --all-targets --features "root-ffi linux-peer-credentials"
+          run_gate PRODUCTION_CLIPPY cargo +1.98.1 clippy --locked --all-targets --features "root-ffi linux-peer-credentials" -- -D warnings
+          run_gate RETIRED_BOUND_TEST cargo +1.98.1 test --locked --lib --features linux-peer-credentials root_supervisor_linux_retired_bound_archive -- --test-threads=1
+          run_gate RETIRED_OWNER_TEST cargo +1.98.1 test --locked --lib --features "root-ffi linux-peer-credentials" retired_projection_tests -- --test-threads=1
+          run_gate RETIRED_SINK_TEST cargo +1.98.1 test --locked --lib --features linux-peer-credentials root_supervisor_linux_retired_owner_projection -- --test-threads=1
+          run_gate PRODUCTION_LIB_TEST cargo +1.98.1 test --locked --lib --features "root-ffi linux-peer-credentials" -- --test-threads=1
+          run_gate RELEASE_CHECK cargo +1.98.1 check --release --locked --all-targets --features "root-ffi linux-peer-credentials"
+          echo "LAS_CURRENT_CANDIDATE_FAILURE_COUNT=$failures"
+          if [[ "$failures" -eq 0 ]]; then echo "LAS_CURRENT_CANDIDATE_GATE_MATRIX=PASS"; else echo "LAS_CURRENT_CANDIDATE_GATE_MATRIX=FAIL"; fi
+          test "$failures" -eq 0
