@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/opaque-linux-retired-frontier-v2-20261011.yml"
+      - "verification-requests/**"
   workflow_dispatch:
 
 permissions:
