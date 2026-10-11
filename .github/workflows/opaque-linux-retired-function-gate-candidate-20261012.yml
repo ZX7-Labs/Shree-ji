@@ -1,0 +1,224 @@
+name: Opaque retired-owner function-gate candidate 20261012
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opaque-linux-retired-function-gate-candidate-20261012.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Recover exact live private head opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+          TARGET_REF_HASH: 12246190df640013d9ee426d2a340387c6d22d0e8241135d6a20dcf1fe5a2bc0
+          EXPECTED_HEAD_PROOF: c1b3b06dc372f212fd256e328c9a0dad282c1b2a44e179879061c15a0a19c99b
+          EXPECTED_TREE_PROOF: 96dd6f1b2d519fe01e22647efa8d4f32f6e53f5badb00b199e9133246e0fc501
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$matched_ref"; matched_ref="$ref"; head="$candidate_sha"; fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$head"
+          test "$(printf '%s' "$head" | sha256sum | awk '{print $1}')" = "$EXPECTED_HEAD_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$head"; git checkout -q --detach "$head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_TREE_PROOF"
+          echo "LAS_FUNCTION_GATE_RECOVERY=PASS"
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          echo "LAS_FUNCTION_GATE_RUST=PASS"
+
+      - name: Reproduce repaired base and gate exact root-ffi function
+        shell: bash
+        env:
+          ORIGINAL_HELPER_PATH_HASH: 3bd0f3b2ae73ca0acd5d1e08b47720c6cc80569d4b87901c2e1fc0b69f7504e2
+          EXPECTED_TRANSFORM_SHA256: d97bb8c1f38b8ceeb9a5814e984947822b76cb2dcf681ead65443ab02c4e8e58
+          EXPECTED_PATH_HASH_1: 680761d41ae8315a6bf67b2df5250c8b4ebc93b434b7de42be032b743c37b90a
+          EXPECTED_PATH_HASH_2: 736cc80e53ddc8c5287113b778e1a8fb5f3973b1b5092cdf665c982b07ce8b6d
+          EXPECTED_REPAIRED_BLOBSET_PROOF: a067be3181e555721127676a465c7c4cfbab7985f71e229e100b35a63967d2e8
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          python3 - "$RUNNER_TEMP" <<'PY'
+          import ast,base64,gzip,hashlib,json,os,pathlib,re,subprocess,sys
+          tmp=pathlib.Path(sys.argv[1]); tracked=[p.decode() for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if p]
+          matches=[p for p in tracked if hashlib.sha256(p.encode()).hexdigest()==os.environ['ORIGINAL_HELPER_PATH_HASH']]
+          if len(matches)!=1: raise SystemExit(70)
+          tree=ast.parse(pathlib.Path(matches[0]).read_text(encoding='utf-8')); vals={}
+          for n in tree.body:
+              if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name) and isinstance(n.value,ast.Constant): vals[n.targets[0].id]=n.value.value
+          data=gzip.decompress(base64.b64decode(vals['PAYLOAD'])); digest=hashlib.sha256(data).hexdigest()
+          if digest!=vals['EXPECTED'] or digest!=os.environ['EXPECTED_TRANSFORM_SHA256']: raise SystemExit(71)
+          state={'count':0,'replace':0}
+          def second_only(obj,old,new):
+              a=obj.find(old); b=obj.find(old,a+len(old)); c=obj.find(old,b+len(old))
+              if a<0 or b<0 or c>=0: raise SystemExit(72)
+              return obj[:b]+new+obj[b+len(old):]
+          def ccount(obj,*args):
+              state['count']+=1; n=state['count']; actual=obj.count(*args)
+              if n in (5,11):
+                  if actual!=2: raise SystemExit(73)
+                  return 1
+              return actual
+          def rreplace(obj,*args):
+              state['replace']+=1; n=state['replace']; old,new=args[0],args[1]; before=obj.count(old)
+              if n==5:
+                  if before!=2: raise SystemExit(74)
+                  return second_only(obj,old,new)
+              if n==11:
+                  if before!=2: raise SystemExit(75)
+                  return obj.replace(old,new)
+              return obj.replace(*args)
+          class T(ast.NodeTransformer):
+              def visit_Call(self,node):
+                  self.generic_visit(node)
+                  if isinstance(node.func,ast.Attribute) and node.func.attr=='count': return ast.copy_location(ast.Call(ast.Name('ccount',ast.Load()),[node.func.value,*node.args],node.keywords),node)
+                  if isinstance(node.func,ast.Attribute) and node.func.attr=='replace': return ast.copy_location(ast.Call(ast.Name('rreplace',ast.Load()),[node.func.value,*node.args],node.keywords),node)
+                  return node
+          inst=T().visit(ast.parse(data.decode())); ast.fix_missing_locations(inst)
+          exec(compile(inst,'<opaque-transform>','exec'),{'__name__':'__main__','__file__':str(tmp/'opaque.py'),'ccount':ccount,'rreplace':rreplace})
+          if state!={'count':11,'replace':11}: raise SystemExit(76)
+          subprocess.run(['cargo','+1.98.1','fmt','--all'],check=True,stdout=subprocess.DEVNULL)
+
+          # Apply the already-proven import gating based on the prepatch E0432 spans.
+          pre=tmp/'pre.json'; preerr=tmp/'pre.err'
+          with pre.open('w') as o,preerr.open('w') as e:
+              r=subprocess.run(['cargo','+1.98.1','check','--locked','--all-targets','--features','linux-peer-credentials','--message-format=json'],stdout=o,stderr=e,env={**os.environ,'RUSTFLAGS':'-Dwarnings'})
+          if r.returncode==0: raise SystemExit(77)
+          errors=[]; import_sites=[]
+          for line in pre.read_text(encoding='utf-8',errors='replace').splitlines():
+              try: obj=json.loads(line)
+              except Exception: continue
+              if obj.get('reason')!='compiler-message': continue
+              msg=obj.get('message') or {}; code=(msg.get('code') or {}).get('code')
+              if msg.get('level')!='error': continue
+              errors.append(code or 'NO_CODE')
+              if code=='E0432':
+                  for s in msg.get('spans',[]):
+                      if s.get('is_primary'): import_sites.append((s.get('file_name'),s.get('line_start')))
+          from collections import Counter
+          if Counter(errors)!=Counter({'E0432':4}): raise SystemExit(78)
+          unique=[]
+          for s in import_sites:
+              if s not in unique: unique.append(s)
+          if len(unique)!=2: raise SystemExit(79)
+          grouped={}
+          for f,line in unique: grouped.setdefault(f,[]).append(line)
+          for f,lines in grouped.items():
+              p=pathlib.Path(f); rows=p.read_text(encoding='utf-8').splitlines(keepends=True)
+              for line in sorted(set(lines),reverse=True):
+                  raw=rows[line-1]; stripped=raw.strip()
+                  if not re.match(r'^(?:pub\s+)?use\b',stripped): raise SystemExit(80)
+                  indent=raw[:len(raw)-len(raw.lstrip())]
+                  rows.insert(line-1,indent+'#[cfg(feature = "root-ffi")]\n')
+              p.write_text(''.join(rows),encoding='utf-8')
+          subprocess.run(['cargo','+1.98.1','fmt','--all'],check=True,stdout=subprocess.DEVNULL)
+          pre.unlink(missing_ok=True); preerr.unlink(missing_ok=True)
+
+          # Confirm exact repaired-base proof before the new function-scope repair.
+          paths=[p for p in subprocess.check_output(['git','diff','--name-only','-z']).split(b'\0') if p]
+          expected=sorted([os.environ['EXPECTED_PATH_HASH_1'],os.environ['EXPECTED_PATH_HASH_2']]); hashes=sorted(hashlib.sha256(p).hexdigest() for p in paths)
+          if len(paths)!=2 or hashes!=expected: raise SystemExit(81)
+          blobs=[]
+          for p in paths:
+              b=subprocess.check_output(['git','hash-object','--',p.decode()],text=True).strip(); blobs.append(hashlib.sha256(b.encode()).hexdigest())
+          if hashlib.sha256('\n'.join(sorted(blobs)).encode()).hexdigest()!=os.environ['EXPECTED_REPAIRED_BLOBSET_PROOF']: raise SystemExit(82)
+
+          # Recover the two residual Linux sites and require they share exactly one containing function.
+          out=tmp/'linux.json'; err=tmp/'linux.err'
+          with out.open('w') as o,err.open('w') as e:
+              r=subprocess.run(['cargo','+1.98.1','check','--locked','--all-targets','--features','linux-peer-credentials','--message-format=json'],stdout=o,stderr=e,env={**os.environ,'RUSTFLAGS':'-Dwarnings'})
+          if r.returncode==0: raise SystemExit(83)
+          sites=[]
+          for line in out.read_text(encoding='utf-8',errors='replace').splitlines():
+              try: obj=json.loads(line)
+              except Exception: continue
+              if obj.get('reason')!='compiler-message': continue
+              msg=obj.get('message') or {}; code=(msg.get('code') or {}).get('code')
+              if msg.get('level')!='error' or code not in ('E0405','E0425'): continue
+              for s in msg.get('spans',[]):
+                  if s.get('is_primary'): sites.append((s.get('file_name'),s.get('line_start')))
+          uniq=[]
+          for s in sites:
+              if s not in uniq: uniq.append(s)
+          if len(uniq)!=2 or len({f for f,_ in uniq})!=1: raise SystemExit(84)
+          f=uniq[0][0]; target_lines=sorted(line for _,line in uniq); p=pathlib.Path(f); rows=p.read_text(encoding='utf-8').splitlines(keepends=True)
+          fn_re=re.compile(r'^(\s*)(?:(?:pub(?:\([^)]*\))?\s+)?)(?:(?:async|unsafe|const)\s+)*fn\s+[A-Za-z_][A-Za-z0-9_]*')
+          fn_start=None; fn_indent=None
+          for idx in range(min(target_lines)-1,-1,-1):
+              m=fn_re.match(rows[idx])
+              if m:
+                  fn_start=idx; fn_indent=len(m.group(1)); break
+          if fn_start is None: raise SystemExit(85)
+          if not all((len(rows[line-1])-len(rows[line-1].lstrip()))>fn_indent for line in target_lines): raise SystemExit(86)
+          # Find the function body close using a conservative brace scanner from fn_start.
+          depth=0; seen_open=False; fn_end=None
+          for idx in range(fn_start,len(rows)):
+              text=re.sub(r'//.*$','',rows[idx])
+              opens=text.count('{'); closes=text.count('}')
+              if opens: seen_open=True
+              depth += opens-closes
+              if seen_open and depth==0:
+                  fn_end=idx; break
+          if fn_end is None or not all(fn_start<=line-1<=fn_end for line in target_lines): raise SystemExit(87)
+          # Include an existing contiguous attribute block immediately above the function.
+          attr_start=fn_start
+          while attr_start>0 and rows[attr_start-1].lstrip().startswith('#[') and (len(rows[attr_start-1])-len(rows[attr_start-1].lstrip()))==fn_indent:
+              attr_start-=1
+          previous=''.join(rows[max(0,attr_start-3):attr_start])
+          if 'cfg(feature = "root-ffi")' in previous: raise SystemExit(88)
+          rows.insert(attr_start,' ' * fn_indent + '#[cfg(feature = "root-ffi")]\n')
+          p.write_text(''.join(rows),encoding='utf-8')
+          print('LAS_FUNCTION_GATE_START_LINE='+str(fn_start+1))
+          print('LAS_FUNCTION_GATE_END_LINE='+str(fn_end+1))
+          print('LAS_FUNCTION_GATE_TARGET_COUNT=2')
+          print('LAS_FUNCTION_GATE_SCOPE=PASS')
+          out.unlink(missing_ok=True); err.unlink(missing_ok=True)
+          PY
+          cargo +1.98.1 fmt --all
+          git diff --check
+          echo "LAS_FUNCTION_GATE_MATERIALIZATION=PASS"
+
+      - name: Verify Linux-only compile after function gating
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          log="$RUNNER_TEMP/linux.private.log"
+          set +e
+          cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials >"$log" 2>&1
+          rc=$?
+          set -e
+          echo "LAS_FUNCTION_GATE_LINUX_RC=$rc"
+          echo "LAS_FUNCTION_GATE_LINUX_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')"
+          rm -f "$log"
+          if [[ "$rc" -eq 0 ]]; then echo "LAS_FUNCTION_GATE_LINUX=PASS"; else echo "LAS_FUNCTION_GATE_LINUX=FAIL"; fi
+          test "$rc" -eq 0
