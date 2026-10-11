@@ -1,0 +1,70 @@
+name: Private retired effect compile diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/private-retired-effect-compile-diagnostic.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Recover exact private revision and transform
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+          TARGET_REF_HASH: a7195b2116dc080ad9d3be4184fef8c5fc791983798984d5fc25cd3f38e878ab
+          EXPECTED_PRIVATE_SNAPSHOT_PROOF: 6b8672c130e76e35e0d4661c2c5834f9e644278aca900936f6a9c745ef3fdf10
+          EXPECTED_PRIVATE_TREE_PROOF: 66eaccac21386e08a9295af3aa709fc2d407e2274ead7428fe3649607fd733a0
+          HELPER_PATH_HASH: b24292ddb8ac88c004949711dfe57ce53a512e522ef6c2d2dbc682e15e124fe9
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched=""; head=""
+          while read -r sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$matched"; matched="$ref"; head="$sha"; fi
+          done <"$refs"; rm -f "$refs"; test -n "$matched"; test -n "$head"
+          echo "::add-mask::$matched"; echo "::add-mask::$head"
+          test "$(printf '%s' "$head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched"
+          test "$(git rev-parse FETCH_HEAD)" = "$head"; git checkout -q --detach "$head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          helper=""
+          while IFS= read -r -d '' candidate; do
+            if [[ "$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')" = "$HELPER_PATH_HASH" ]]; then test -z "$helper"; helper="$candidate"; fi
+          done < <(git ls-files -z); test -n "$helper"; python3 "$helper" --apply
+          unset PRIVATE_TOKEN auth matched head tree sha ref helper candidate
+          echo "LAS_EFFECT_DIAG_SOURCE=PASS"
+
+      - name: Compile and encrypt diagnostic
+        shell: bash
+        env:
+          RECIPIENT_CERT_B64: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURSVENDQWkyZ0F3SUJBZ0lVT0JBNG5aWXdXU1hVdm9TSFVMMWgrYmNqWXBBd0RRWUpLb1pJaHZjTkFRRUwKQlFBd01qRXdNQzRHQTFVRUF3d25URUZUSUhKbGRHbHlaV1FnWldabVpXTjBJR1JwWVdkdWIzTjBhV01nWlhCbwpaVzFsY21Gc01CNFhEVEkyTVRBeE1URXpNemt3TmxvWERUSTJNVEF4TWpFek16a3dObG93TWpFd01DNEdBMVVFCkF3d25URUZUSUhKbGRHbHlaV1FnWldabVpXTjBJR1JwWVdkdWIzTjBhV01nWlhCb1pXMWxjbUZzTUlJQklqQU4KQmdrcWhraUc5dzBCQVFFRkFBT0NBUThBTUlJQkNnS0NBUUVBd3ZwZGRoL0hEQklsbXJnSGl5RThxUk5RUmdWdQpIQThPMk9UNFBDaFR6MkhUNGFta1E2dmMwaCtleEwvQ1FLaC8vaXdpUUNwR2dDcWpYY3NZNE5IdDJhYW5JbXk2CkRqVzRWR3pVQTQ5UlF5UTd1STlPZm9IakVBSStLNHlkQVA0aXRrVTNKV2JLeEc4dXBVTjE0dUthWXA3TzhGYXUKVVFiS2tGZkpzZ0dxTHRjSmQvOGFUMXQxeFVZTm44RzE4d2NHQitRbXRoanJQdU5od3M1VlcySmFkeTZxTEdhYwpwOFF5WlJZZzR1alN3QzFpSExJQXJTL1pweFRZREo3RnBtMGt1eHUxRkVEcnRrRzh5NHFDQTE3VjhUMXJsR24yCk82QW94Y0xpamRuUVBxSHZzekRSZkZ4RkM0Q0FOdTlTUFJDbzRzUGdzWjhCczN4eG5tZGxUa1ltelFJREFRQUIKbzFNd1VUQWRCZ05WSFE0RUZnUVVMK011UzdyQWlFTFg4UEY2clR4TFBaWWx0Ull3SHdZRFZSMGpCQmd3Rm9BVQpMK011UzdyQWlFTFg4UEY2clR4TFBaWWx0Ull3RHdZRFZSMFRBUUgvQkFVd0F3RUIvekFOQmdrcWhraUc5dzBCCkFRc0ZBQU9DQVFFQVczQUUvTnJmcjBBSWkxQnRrdEdqOGJqdEVXVU5qdEliVjJCTk9LaE1hZjA1NDNmWDl6ckcKdDFNVXA1c29xTFJ5T0I1cGhJb2xWMmZZNml1K0xGTWdYMG1nSjM0SjRDcGlvWVdEY0hmTUkvNDVvRUFzNkQ1dQpuS205cHRiRUtKYVB3dkNoNTBVd2tuODBYeERRNDNxbERmWTdNcUdyUzFEQVgzK1ZGVjU2Tmp2MXI0L0JYb0NnCnFFVWNGVEJwVk9VS0hxSS9Jdkdmc1l6cTVZOGJkb3dXdlVvSlVzSHplZ0FzeXdIY3JveGd1R3JsOEp5WFJOdDUKaUFXL2xMSFozZ29kdW9HTU1aUWZXN0RweFJuV1hFU1YrdzRXU05qK0ZBeG11NXpvaitDcmxSVXBwM3dCMXpLMwpkUlZlM2Z0dkhTcVVwOGp2dWczeHA1M2k1czdrQ2ZVcFpRPT0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          log="$RUNNER_TEMP/effect-check.log"
+          set +e
+          RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials >"$log" 2>&1
+          rc=$?
+          set -e
+          echo "LAS_EFFECT_DIAG_RC=$rc"
+          echo "LAS_EFFECT_DIAG_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')"
+          cert="$RUNNER_TEMP/recipient.pem"; printf '%s' "$RECIPIENT_CERT_B64" | base64 -d >"$cert"; openssl x509 -in "$cert" -noout >/dev/null
+          cipher="$RUNNER_TEMP/effect-check.cms"; openssl cms -encrypt -binary -aes-256-cbc -outform DER -in "$log" -out "$cipher" "$cert"
+          echo "LAS_EFFECT_DIAG_CIPHER_SHA256=$(sha256sum "$cipher" | awk '{print $1}')"
+          echo LAS_EFFECT_DIAG_BEGIN; base64 -w0 "$cipher" | fold -w 1000; echo; echo LAS_EFFECT_DIAG_END
+          test "$rc" -eq 0
