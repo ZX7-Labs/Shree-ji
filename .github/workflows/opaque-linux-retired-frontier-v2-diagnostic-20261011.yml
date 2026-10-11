@@ -56,12 +56,14 @@ jobs:
         run: |
           set -euo pipefail
           rustup toolchain install 1.98.1 --profile minimal >/dev/null
-          rustup component add --toolchain 1.98.1 rustfmt >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
           test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
           test "$(cargo +1.98.1 --version | awk '{print $2}')" = "1.98.1"
 
-      - name: Apply narrow test fix, format, check, and encrypt evidence
+      - name: Apply candidate remediation and run Rust gates
         shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/target"
@@ -71,6 +73,7 @@ jobs:
           import sys
           p = Path(sys.argv[1])
           text = p.read_text(encoding="utf-8")
+
           start = text.index("    fn owner_mismatch_rejection_and_provider_uncertainty_fail_closed() {")
           end = text.index("    #[test]", start + 1)
           section = text[start:end]
@@ -81,27 +84,56 @@ jobs:
           section = section.replace(old_decl, "        let mut binding_verifier = verifier(", 1)
           section = section.replace(old_call, "        let failure = binding_verifier\n            .verify_exact(", 1)
           text = text[:start] + section + text[end:]
+
+          replacements = [
+              ("    const fn accepts_scope(self, scope: LinuxRetiredOwnerBindingAuthenticationScope) -> bool {",
+               "    fn accepts_scope(self, scope: LinuxRetiredOwnerBindingAuthenticationScope) -> bool {"),
+              ("    const fn accepts_receipt(self, receipt: LinuxRetiredOwnerBindingAuthenticationReceipt) -> bool {",
+               "    fn accepts_receipt(self, receipt: LinuxRetiredOwnerBindingAuthenticationReceipt) -> bool {"),
+          ]
+          for old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f"expected exact qualifier site not unique: {old}")
+              text = text.replace(old, new, 1)
+
+          production_expect = '''    #[expect(\n        clippy::too_many_arguments,\n        reason = "all trust coordinates remain explicit at the high-assurance binding boundary"\n    )]\n    pub(super) fn verify_exact('''
+          if text.count(production_expect) != 1:
+              raise SystemExit("production lint expectation not unique")
+          text = text.replace(production_expect, "    pub(super) fn verify_exact(", 1)
+
+          helper = '''    fn verifier(\n        transition: DurablyVerifiedLinuxRetiredArchiveTransition,'''
+          helper_with_expect = '''    #[expect(\n        clippy::too_many_arguments,\n        reason = "test fixture keeps independent trust coordinates explicit"\n    )]\n    fn verifier(\n        transition: DurablyVerifiedLinuxRetiredArchiveTransition,'''
+          if text.count(helper) != 1:
+              raise SystemExit("test helper not unique")
+          text = text.replace(helper, helper_with_expect, 1)
           p.write_text(text, encoding="utf-8")
           PY
 
           cargo +1.98.1 fmt --all
-          check_stdout="$RUNNER_TEMP/check.stdout"
-          check_stderr="$RUNNER_TEMP/check.stderr"
-          set +e
-          RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --all-targets \
-            --features linux-peer-credentials --message-format=json >"$check_stdout" 2>"$check_stderr"
-          rc=$?
-          set -e
-
-          printf 'rc=%s\n' "$rc" >"$RUNNER_TEMP/meta.txt"
+          failures=0
+          run_gate() {
+            label="$1"; shift
+            log="$RUNNER_TEMP/${label}.log"
+            set +e
+            "$@" >"$log" 2>&1
+            rc=$?
+            set -e
+            printf '%s_rc=%s\n' "$label" "$rc" >>"$RUNNER_TEMP/meta.txt"
+            printf '%s_sha256=%s\n' "$label" "$(sha256sum "$log" | awk '{print $1}')" >>"$RUNNER_TEMP/meta.txt"
+            if [[ "$rc" -ne 0 ]]; then failures=$((failures + 1)); fi
+          }
+          : >"$RUNNER_TEMP/meta.txt"
+          run_gate format cargo +1.98.1 fmt --all -- --check
+          run_gate check cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials
+          run_gate clippy cargo +1.98.1 clippy --locked --all-targets --features linux-peer-credentials -- -D warnings
+          run_gate test cargo +1.98.1 test --locked --lib --features linux-peer-credentials root_supervisor_linux_retired -- --test-threads=1
+          printf 'failure_count=%s\n' "$failures" >>"$RUNNER_TEMP/meta.txt"
           printf 'target_sha256=%s\n' "$(sha256sum "$target" | awk '{print $1}')" >>"$RUNNER_TEMP/meta.txt"
           printf 'lib_sha256=%s\n' "$(sha256sum src/lib.rs | awk '{print $1}')" >>"$RUNNER_TEMP/meta.txt"
-          printf 'check_stdout_sha256=%s\n' "$(sha256sum "$check_stdout" | awk '{print $1}')" >>"$RUNNER_TEMP/meta.txt"
-          printf 'check_stderr_sha256=%s\n' "$(sha256sum "$check_stderr" | awk '{print $1}')" >>"$RUNNER_TEMP/meta.txt"
+          echo "OPAQUE_BINDING_DIAG_FAILURE_COUNT=$failures"
 
           tar -czf "$RUNNER_TEMP/diag.tar.gz" \
-            "$target" src/lib.rs -C "$RUNNER_TEMP" meta.txt check.stdout check.stderr
-
+            "$target" src/lib.rs -C "$RUNNER_TEMP" meta.txt format.log check.log clippy.log test.log
           key="$RUNNER_TEMP/diag.key"
           openssl rand -hex 32 >"$key"
           openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
@@ -117,11 +149,9 @@ jobs:
           LQIDAQAB
           -----END PUBLIC KEY-----
           PEM
-          openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/public.pem" \
-            -in "$key" -out "$RUNNER_TEMP/key.enc"
-          echo "OPAQUE_BINDING_DIAG_RC=$rc"
-          rm -f "$RUNNER_TEMP/diag.tar.gz" "$key" "$RUNNER_TEMP/public.pem" \
-            "$RUNNER_TEMP/meta.txt" "$check_stdout" "$check_stderr"
+          openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/public.pem" -in "$key" -out "$RUNNER_TEMP/key.enc"
+          rm -f "$RUNNER_TEMP/diag.tar.gz" "$key" "$RUNNER_TEMP/public.pem" "$RUNNER_TEMP/meta.txt" \
+            "$RUNNER_TEMP/format.log" "$RUNNER_TEMP/check.log" "$RUNNER_TEMP/clippy.log" "$RUNNER_TEMP/test.log"
 
       - name: Upload encrypted diagnostic only
         uses: actions/upload-artifact@v4
