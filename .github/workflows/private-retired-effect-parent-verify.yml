@@ -1,0 +1,151 @@
+name: Private retired effect parent verify
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/private-retired-effect-parent-verify.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Recover exact private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+          TARGET_REF_HASH: a7195b2116dc080ad9d3be4184fef8c5fc791983798984d5fc25cd3f38e878ab
+          EXPECTED_PRIVATE_SNAPSHOT_PROOF: 6b8672c130e76e35e0d4661c2c5834f9e644278aca900936f6a9c745ef3fdf10
+          EXPECTED_PRIVATE_TREE_PROOF: 66eaccac21386e08a9295af3aa709fc2d407e2274ead7428fe3649607fd733a0
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"; matched_ref="$ref"; private_head="$candidate_sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$private_head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$private_head"
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$private_head"; git checkout -q --detach "$private_head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          unset PRIVATE_TOKEN auth matched_ref private_head tree candidate_sha ref
+          echo "LAS_EFFECT_PARENT_EXACT_RECOVERY=PASS"
+
+      - name: Apply sealed transform and validate exact change set
+        shell: bash
+        env:
+          HELPER_PATH_HASH: b24292ddb8ac88c004949711dfe57ce53a512e522ef6c2d2dbc682e15e124fe9
+          EXPECTED_PATH_HASHES: |
+            577cbe123ea611e0205c0a595ea25d41e1c43c507c8439264a148f4906dba9a0
+            5b89ebd95ae5bd0a2001acc3da8f2b30646a3a49483966e6f7c71c7538f55336
+            933fb5901ecca40e0c510961bb42f77a92e97a8edd4cf46633dd4b0889a52a73
+            b68c1a40c3bd9e1a111e13782c2040df87dba050dd5e911c0586bc750209a1e9
+            c6dab830b8322ddb21d865595d3d99a36d8457044f9901beecb0df6373ceaaf5
+            f1ed409300b965a0572e7559552f652feba637a9b4363860b0bb3f598c05d566
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          helper=""
+          while IFS= read -r -d '' candidate; do
+            if [[ "$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')" = "$HELPER_PATH_HASH" ]]; then test -z "$helper"; helper="$candidate"; fi
+          done < <(git ls-files -z)
+          test -n "$helper"
+          python3 "$helper" --apply
+          changed="$RUNNER_TEMP/changed"
+          git diff --name-only -z >"$changed"
+          python3 - "$changed" <<'PY'
+          import hashlib, os, sys
+          expected=set(os.environ['EXPECTED_PATH_HASHES'].split())
+          paths=[p for p in open(sys.argv[1],'rb').read().split(b'\0') if p]
+          actual={hashlib.sha256(p).hexdigest() for p in paths}
+          if len(paths)!=6 or len(actual)!=6 or actual!=expected:
+              raise SystemExit('unexpected private effect candidate path set')
+          PY
+          echo "LAS_EFFECT_PARENT_TRANSFORM=PASS"
+
+      - name: Install exact toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          test "$(cargo +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          archive="$RUNNER_TEMP/alr.zip"; prefix="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --output "$archive" "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip"
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $archive" | sha256sum --check --strict >/dev/null
+          mkdir -p "$prefix"; unzip -q "$archive" -d "$prefix"; echo "$prefix/bin" >> "$GITHUB_PATH"
+          "$prefix/bin/alr" -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
+          alr_bin="$prefix/bin/alr"; workspace="$RUNNER_TEMP/root-production-toolchain"; mkdir -p "$workspace"; cd "$workspace"
+          "$alr_bin" -n init --in-place --no-skel --lib root_production_toolchain >/dev/null
+          gpr_wrapper="$RUNNER_TEMP/gprbuild-wrapper"
+          printf '#!/usr/bin/env bash\nset -euo pipefail\ncd %q\nexec %q exec -- gprbuild "$@"\n' "$workspace" "$alr_bin" >"$gpr_wrapper"
+          chmod +x "$gpr_wrapper"; "$gpr_wrapper" --version >/dev/null; echo "GPRBUILD=$gpr_wrapper" >> "$GITHUB_ENV"
+          echo "LAS_EFFECT_PARENT_TOOLCHAINS=PASS"
+
+      - name: Run production gate matrix and retain private diagnostics
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          bundle="$RUNNER_TEMP/effect-gate-logs"; mkdir "$bundle"; failures=0
+          run_gate() {
+            label="$1"; shift
+            log="$bundle/${label}.log"
+            set +e; "$@" >"$log" 2>&1; rc=$?; set -e
+            printf 'LAS_EFFECT_PARENT_%s_LOG_SHA256=%s\n' "$label" "$(sha256sum "$log" | awk '{print $1}')"
+            printf 'LAS_EFFECT_PARENT_%s_RC=%s\n' "$label" "$rc"
+            if [[ "$rc" -ne 0 ]]; then failures=$((failures+1)); fi
+          }
+          run_gate FORMAT cargo +1.98.1 fmt --all -- --check
+          run_gate DEFAULT_CHECK cargo +1.98.1 check --locked --all-targets
+          run_gate LINUX_CHECK cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials
+          run_gate PRODUCTION_CHECK cargo +1.98.1 check --locked --all-targets --features "root-ffi linux-peer-credentials"
+          run_gate PRODUCTION_CLIPPY cargo +1.98.1 clippy --locked --all-targets --features "root-ffi linux-peer-credentials" -- -D warnings
+          run_gate PRODUCTION_LIB_TEST cargo +1.98.1 test --locked --lib --features "root-ffi linux-peer-credentials" -- --test-threads=1
+          run_gate RELEASE_CHECK cargo +1.98.1 check --release --locked --all-targets --features "root-ffi linux-peer-credentials"
+          echo "LAS_EFFECT_PARENT_FAILURE_COUNT=$failures"
+          printf '%s\n' "$failures" >"$RUNNER_TEMP/effect-failure-count"
+
+      - name: Encrypt failed diagnostics only
+        if: always()
+        shell: bash
+        env:
+          RECIPIENT_CERT_B64: " + repr(effect_diag_cert_b64)[1:-1] + "
+        run: |
+          set -euo pipefail
+          count="$(cat "$RUNNER_TEMP/effect-failure-count" 2>/dev/null || printf 99)"
+          if [[ "$count" = 0 ]]; then echo "LAS_EFFECT_PARENT_DIAGNOSTIC=NOT_NEEDED"; exit 0; fi
+          bundle="$RUNNER_TEMP/effect-gate-logs"; test -d "$bundle"
+          tarball="$RUNNER_TEMP/effect-gate-logs.tgz"; tar -czf "$tarball" -C "$bundle" .
+          cert="$RUNNER_TEMP/recipient.pem"; printf '%s' "$RECIPIENT_CERT_B64" | base64 -d >"$cert"; openssl x509 -in "$cert" -noout >/dev/null
+          cipher="$RUNNER_TEMP/effect-gate-logs.cms"; openssl cms -encrypt -binary -aes-256-cbc -outform DER -in "$tarball" -out "$cipher" "$cert"
+          echo "LAS_EFFECT_PARENT_DIAGNOSTIC_SHA256=$(sha256sum "$cipher" | awk '{print $1}')"
+          echo LAS_EFFECT_PARENT_DIAGNOSTIC_BEGIN; base64 -w0 "$cipher" | fold -w 1000; echo; echo LAS_EFFECT_PARENT_DIAGNOSTIC_END
+
+      - name: Require green candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          count="$(cat "$RUNNER_TEMP/effect-failure-count")"
+          test "$count" -eq 0
+          echo "LAS_EFFECT_PARENT=PASS"
