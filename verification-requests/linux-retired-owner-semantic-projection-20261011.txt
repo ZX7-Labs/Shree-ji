@@ -1,2 +1,2 @@
 verification-only trigger for exact private retired-owner semantic projection gate
-request-sequence: 2
+request-sequence: 3
