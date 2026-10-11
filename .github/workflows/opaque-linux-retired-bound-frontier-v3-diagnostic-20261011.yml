@@ -1,0 +1,101 @@
+name: Opaque Linux retired bound frontier v3 diagnostic
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/opaque-linux-retired-bound-frontier-v3-diagnostic-20261011.yml"
+      - "verification-requests/linux-retired-bound-frontier-v3-20261011.txt"
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 64acb92f533de14d70efc0a74479ee0912c0baedd38b97df084a1acb45a9be85
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 31f730cbb2c51e8a9022b13d3f67ac0ee18af68633deb58beb34fdd9125918ff
+  EXPECTED_PRIVATE_TREE_PROOF: 1e1b2c03bf797c25f1a89daeb69c7d501adbe46d893f247ed5259158fa92da23
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Recover exact private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$GITHUB_WORKSPACE/target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"; matched_ref="$ref"; private_head="$candidate_sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$private_head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$private_head"
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$private_head"; git checkout -q --detach "$private_head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          unset PRIVATE_TOKEN auth matched_ref private_head tree candidate_sha ref
+          echo "OPAQUE_BOUND_V3_DIAG_EXACT_RECOVERY=PASS"
+
+      - name: Install pinned Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+
+      - name: Emit sanitized compiler coordinates only
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          cargo +1.98.1 fmt --all
+          set +e
+          cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials --message-format=json >"$RUNNER_TEMP/check.jsonl" 2>"$RUNNER_TEMP/check.stderr"
+          rc=$?
+          set -e
+          python3 - "$RUNNER_TEMP/check.jsonl" <<'PY'
+          import json, sys
+          path = sys.argv[1]
+          seen = set()
+          for line in open(path, encoding="utf-8", errors="replace"):
+              try:
+                  obj = json.loads(line)
+              except Exception:
+                  continue
+              if obj.get("reason") != "compiler-message":
+                  continue
+              msg = obj.get("message", {})
+              if msg.get("level") != "error":
+                  continue
+              code = (msg.get("code") or {}).get("code") or "NO_CODE"
+              primaries = [s for s in msg.get("spans", []) if s.get("is_primary")]
+              if primaries:
+                  for span in primaries:
+                      key = (code, span.get("line_start"), span.get("column_start"))
+                      if key not in seen:
+                          seen.add(key)
+                          print(f"OPAQUE_BOUND_V3_DIAG_ERROR={code}:L{key[1]}:C{key[2]}")
+              elif (code, 0, 0) not in seen:
+                  seen.add((code, 0, 0))
+                  print(f"OPAQUE_BOUND_V3_DIAG_ERROR={code}:L0:C0")
+          PY
+          echo "OPAQUE_BOUND_V3_DIAG_CHECK_RC=$rc"
+          echo "OPAQUE_BOUND_V3_DIAG_FORMATTED_TREE_DIRTY_COUNT=$(git status --porcelain --untracked-files=no | wc -l)"
+          rm -f "$RUNNER_TEMP/check.jsonl" "$RUNNER_TEMP/check.stderr"
+          test "$rc" -ne 0
