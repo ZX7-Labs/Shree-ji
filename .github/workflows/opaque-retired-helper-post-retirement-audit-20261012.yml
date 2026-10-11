@@ -1,0 +1,137 @@
+name: Opaque retired-owner helper post-retirement audit 20261012
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opaque-retired-helper-post-retirement-audit-20261012.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 12246190df640013d9ee426d2a340387c6d22d0e8241135d6a20dcf1fe5a2bc0
+  EXPECTED_HEAD_PROOF: dedbc91a635af5180f59d68da56f02195f49786ade95665c7a4d4a2dc3103d75
+  EXPECTED_TREE_PROOF: 329a90f4ce04630feaf46ce87f0b7d18b090fc17c59ac6bfd7282a463ef8e122
+  EXPECTED_PARENT_PROOF: eae214ecf5fbcd274dc0e5ef32747a62ccce3d480be8e7b46931512d26ea03ad
+  HELPER_A_PATH_HASH: 3bd0f3b2ae73ca0acd5d1e08b47720c6cc80569d4b87901c2e1fc0b69f7504e2
+  HELPER_B_PATH_HASH: 3339f22991f94a6f36ccc66648584a4ea905fe49d2e0d854321e69643eb0d7c4
+  RUSTFLAGS: -Dwarnings
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    steps:
+      - name: Recover exact committed retirement state
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_READ_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_READ_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_READ_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; head=""
+          while read -r sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$matched_ref"; matched_ref="$ref"; head="$sha"; fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$head"
+          test "$(printf '%s' "$head" | sha256sum | awk '{print $1}')" = "$EXPECTED_HEAD_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=2 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$head"; git checkout -q --detach "$head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; parent="$(git rev-parse 'HEAD^')"
+          echo "::add-mask::$tree"; echo "::add-mask::$parent"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_TREE_PROOF"
+          test "$(printf '%s' "$parent" | sha256sum | awk '{print $1}')" = "$EXPECTED_PARENT_PROOF"
+          test -z "$(git status --porcelain)"
+          printf '%s' "$matched_ref" >"$RUNNER_TEMP/private-ref"
+          printf '%s' "$head" >"$RUNNER_TEMP/private-head"
+          printf '%s' "$auth" >"$RUNNER_TEMP/private-auth"
+          chmod 600 "$RUNNER_TEMP/private-ref" "$RUNNER_TEMP/private-head" "$RUNNER_TEMP/private-auth"
+
+          changed="$RUNNER_TEMP/retirement-deleted"; git diff --diff-filter=D --name-only -z "$parent..$head" >"$changed"
+          python3 - "$changed" <<'PY'
+          import hashlib,os,subprocess,sys
+          expected=sorted([os.environ['HELPER_A_PATH_HASH'],os.environ['HELPER_B_PATH_HASH']])
+          paths=[p for p in open(sys.argv[1],'rb').read().split(b'\0') if p]
+          if len(paths)!=2 or sorted(hashlib.sha256(p).hexdigest() for p in paths)!=expected: raise SystemExit(70)
+          tracked=[p for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if p]
+          live={hashlib.sha256(p).hexdigest() for p in tracked}
+          if any(x in live for x in expected): raise SystemExit(71)
+          print('LAS_HELPER_POST_RETIRE_DELETED_COUNT=2')
+          print('LAS_HELPER_POST_RETIRE_HELPERS_ABSENT=PASS')
+          PY
+          rm -f "$changed"
+          echo "LAS_HELPER_POST_RETIRE_STATE_BINDING=PASS"
+
+      - name: Install pinned Rust and Ada toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          archive="$RUNNER_TEMP/alr.zip"; prefix="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --output "$archive" "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip" >/dev/null 2>&1
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $archive" | sha256sum --check --strict >/dev/null
+          mkdir -p "$prefix"; unzip -q "$archive" -d "$prefix"
+          "$prefix/bin/alr" -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
+          workspace="$RUNNER_TEMP/root-production-toolchain"; mkdir -p "$workspace"; cd "$workspace"
+          "$prefix/bin/alr" -n init --in-place --no-skel --lib root_production_toolchain >/dev/null
+          gpr_wrapper="$RUNNER_TEMP/gprbuild-wrapper"
+          printf '#!/usr/bin/env bash\nset -euo pipefail\ncd %q\nexec %q exec -- gprbuild "$@"\n' "$workspace" "$prefix/bin/alr" >"$gpr_wrapper"
+          chmod +x "$gpr_wrapper"; "$gpr_wrapper" --version >/dev/null
+          echo "GPRBUILD=$gpr_wrapper" >>"$GITHUB_ENV"
+          echo "LAS_HELPER_POST_RETIRE_TOOLCHAINS=PASS"
+
+      - name: Run full committed-state gate matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"; failures=0
+          run_gate() {
+            label="$1"; shift; log="$RUNNER_TEMP/helper-post-retire-${label}.private.log"
+            set +e; "$@" >"$log" 2>&1; rc=$?; set -e
+            echo "LAS_HELPER_POST_RETIRE_${label}_RC=$rc"
+            echo "LAS_HELPER_POST_RETIRE_${label}_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')"
+            rm -f "$log"; if [[ "$rc" -ne 0 ]]; then failures=$((failures+1)); fi
+          }
+          run_gate TRUST_CONTRACT python3 tools/verification/root_trust_input_contract.py
+          run_gate FORMAT cargo +1.98.1 fmt --all -- --check
+          run_gate DEFAULT_CHECK cargo +1.98.1 check --locked --all-targets
+          run_gate LINUX_CHECK cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials
+          run_gate PRODUCTION_CHECK cargo +1.98.1 check --locked --all-targets --features "root-ffi linux-peer-credentials"
+          run_gate PRODUCTION_CLIPPY cargo +1.98.1 clippy --locked --all-targets --features "root-ffi linux-peer-credentials" -- -D warnings
+          run_gate RETIRED_BOUND_TEST cargo +1.98.1 test --locked --lib --features linux-peer-credentials root_supervisor_linux_retired_bound_archive -- --test-threads=1
+          run_gate RETIRED_OWNER_TEST cargo +1.98.1 test --locked --lib --features "root-ffi linux-peer-credentials" retired_projection_tests -- --test-threads=1
+          run_gate RETIRED_SINK_TEST cargo +1.98.1 test --locked --lib --features linux-peer-credentials root_supervisor_linux_retired_owner_projection -- --test-threads=1
+          run_gate PRODUCTION_LIB_TEST cargo +1.98.1 test --locked --lib --features "root-ffi linux-peer-credentials" -- --test-threads=1
+          run_gate RELEASE_CHECK cargo +1.98.1 check --release --locked --all-targets --features "root-ffi linux-peer-credentials"
+          echo "LAS_HELPER_POST_RETIRE_FAILURE_COUNT=$failures"
+          test "$failures" -eq 0
+          test -z "$(git status --porcelain)"
+          test "$(printf '%s' "$(git rev-parse HEAD)" | sha256sum | awk '{print $1}')" = "$EXPECTED_HEAD_PROOF"
+          test "$(printf '%s' "$(git rev-parse 'HEAD^{tree}')" | sha256sum | awk '{print $1}')" = "$EXPECTED_TREE_PROOF"
+          echo "LAS_HELPER_POST_RETIRE_GATE_MATRIX=PASS"
+
+      - name: Prove remote head remained stable
+        shell: bash
+        env:
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          ref="$(cat "$RUNNER_TEMP/private-ref")"; expected="$(cat "$RUNNER_TEMP/private-head")"; auth="$(cat "$RUNNER_TEMP/private-auth")"
+          echo "::add-mask::$PRIVATE_READ_TOKEN"; echo "::add-mask::$ref"; echo "::add-mask::$expected"; echo "::add-mask::$auth"
+          remote="$(git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote origin "$ref" | awk '{print $1}')"; echo "::add-mask::$remote"
+          test "$remote" = "$expected"
+          test "$(printf '%s' "$remote" | sha256sum | awk '{print $1}')" = "$EXPECTED_HEAD_PROOF"
+          echo "LAS_HELPER_POST_RETIRE_REMOTE_STABLE=PASS"
+          echo "LAS_HELPER_POST_RETIRE_AUDIT=PASS"
