@@ -1,0 +1,151 @@
+name: Opaque Linux retired-owner archive-binding TLC
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/opaque-linux-retired-owner-binding-tlc-20261011.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  JAVA_TOOL_OPTIONS: -Xmx5g
+  TARGET_REF_HASH: f0495c7796328bbc2f7425a45736e8cd93671641f88282523f2572b51df729d5
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: b300a47e4c1d43e086a20e338db218b332f11f3a9abae90ff42f756b11a9dbd7
+  EXPECTED_PRIVATE_TREE_PROOF: 8d8e5e6cb6085bb80959a0131d8df8ee8e22e4264e9a6617df452b0fb0884b34
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Recover exact private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+
+          root="$GITHUB_WORKSPACE/target"
+          mkdir "$root"
+          cd "$root"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+
+          matched_ref=""
+          private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+              private_head="$candidate_sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"
+          test -n "$matched_ref"
+          test -n "$private_head"
+          echo "::add-mask::$matched_ref"
+          echo "::add-mask::$private_head"
+
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$private_head"
+          git checkout -q --detach "$private_head"
+
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+
+          unset PRIVATE_TOKEN auth matched_ref private_head tree candidate_sha ref
+          echo "OPAQUE_LINUX_OWNER_BINDING_RECOVERY=PASS"
+
+      - name: Fetch pinned TLA+ tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          jar="$RUNNER_TEMP/tla2tools.jar"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+            --output "$jar" \
+            "https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar" >/dev/null 2>&1
+          echo "bee4a54f3ee3d4afc347c3240ec2d9e93b075104  $jar" | sha1sum --check --strict >/dev/null
+          echo "OPAQUE_LINUX_OWNER_BINDING_TLA_TOOL=PASS"
+
+      - name: Parse exact private archive models without disclosure
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          jar="$RUNNER_TEMP/tla2tools.jar"
+          failures=0
+
+          run_parse() {
+            label="$1"
+            module="$2"
+            log="$RUNNER_TEMP/${label}.sany.private.log"
+            set +e
+            java -cp "$jar" tla2sany.SANY "$module" >"$log" 2>&1
+            rc=$?
+            set -e
+            printf 'OPAQUE_LINUX_OWNER_BINDING_%s_SANY_SHA256=%s\n' "$label" "$(sha256sum "$log" | awk '{print $1}')"
+            printf 'OPAQUE_LINUX_OWNER_BINDING_%s_SANY_RC=%s\n' "$label" "$rc"
+            rm -f "$log"
+            return "$rc"
+          }
+
+          run_parse ARCHIVE spec/root_authority/RootSupervisorLinuxRetiredEvidenceArchive.tla || failures=$((failures + 1))
+          run_parse OWNER_BINDING spec/root_authority/RootSupervisorLinuxRetiredOwnerArchiveBinding.tla || failures=$((failures + 1))
+          test "$failures" -eq 0
+          echo "OPAQUE_LINUX_OWNER_BINDING_PARSE=PASS"
+
+      - name: Exhaustively model-check exact private archive models without disclosure
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          jar="$RUNNER_TEMP/tla2tools.jar"
+          failures=0
+
+          run_tlc() {
+            label="$1"
+            cfg="$2"
+            tla="$3"
+            log="$RUNNER_TEMP/${label}.tlc.private.log"
+            set +e
+            timeout --signal=KILL 4800 \
+              java -XX:+UseParallelGC -jar "$jar" \
+                -workers 2 \
+                -fp 0 \
+                -deadlock \
+                -config "$cfg" \
+                "$tla" >"$log" 2>&1
+            rc=$?
+            set -e
+            printf 'OPAQUE_LINUX_OWNER_BINDING_%s_TLC_SHA256=%s\n' "$label" "$(sha256sum "$log" | awk '{print $1}')"
+            printf 'OPAQUE_LINUX_OWNER_BINDING_%s_TLC_RC=%s\n' "$label" "$rc"
+            rm -f "$log"
+            return "$rc"
+          }
+
+          run_tlc ARCHIVE \
+            spec/root_authority/RootSupervisorLinuxRetiredEvidenceArchive.cfg \
+            spec/root_authority/RootSupervisorLinuxRetiredEvidenceArchive.tla || failures=$((failures + 1))
+          run_tlc OWNER_BINDING \
+            spec/root_authority/RootSupervisorLinuxRetiredOwnerArchiveBinding.cfg \
+            spec/root_authority/RootSupervisorLinuxRetiredOwnerArchiveBinding.tla || failures=$((failures + 1))
+
+          test "$failures" -eq 0
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "OPAQUE_LINUX_OWNER_BINDING_TLC=PASS"
