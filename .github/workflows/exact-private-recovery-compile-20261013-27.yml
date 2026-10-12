@@ -133,7 +133,7 @@ jobs:
           set -euo pipefail
           report="$RUNNER_TEMP/$REPORT_PATH"
           content="$(base64 -w0 "$report")"
-          payload="$(python3 -c 'import json,os; print(json.dumps({"message":"Publish source-free exact recovery compiler metadata 20261013-27","content":os.environ["CONTENT"],"branch":"main"}))' CONTENT="$content")"
+          payload="$(CONTENT="$content" python3 -c 'import json,os; print(json.dumps({"message":"Publish source-free exact recovery compiler metadata 20261013-27","content":os.environ["CONTENT"],"branch":"main"}))')"
           curl --fail-with-body -sS \
             -X PUT \
             -H "Authorization: Bearer $GH_TOKEN" \
