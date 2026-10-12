@@ -86,6 +86,7 @@ jobs:
 
       - name: Verify formatting
         id: fmt
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -95,7 +96,7 @@ jobs:
           echo "LAS_RECOVERY_OWNER_FMT=PASS"
 
       - name: Prepare encrypted rustfmt repair bundle
-        if: failure() && steps.fmt.outcome == 'failure'
+        if: steps.fmt.outcome == 'failure'
         shell: bash
         run: |
           set -euo pipefail
@@ -138,10 +139,11 @@ jobs:
             -out "$RUNNER_TEMP/rustfmt-repair.cms" \
             "$RUNNER_TEMP/recipient.pem" >/dev/null 2>&1
           rm -f "$RUNNER_TEMP/rustfmt-repair.tar.gz" "$RUNNER_TEMP/recipient.pem"
+          git reset --hard -q HEAD
           echo "LAS_RECOVERY_OWNER_FMT_REPAIR_ENCRYPTED=PASS"
 
       - name: Upload encrypted rustfmt repair bundle
-        if: failure() && steps.fmt.outcome == 'failure'
+        if: steps.fmt.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: rustfmt-repair-encrypted
@@ -212,3 +214,10 @@ jobs:
           test "$(printf '%s' "$(git rev-parse HEAD)" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
           test "$(printf '%s' "$(git rev-parse 'HEAD^{tree}')" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
           echo "LAS_RECOVERY_OWNER_EXACT_GATE=PASS"
+
+      - name: Enforce formatting debt
+        if: always() && steps.fmt.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "LAS_RECOVERY_OWNER_FMT=FAIL"
+          exit 1
