@@ -1,0 +1,125 @@
+name: Exact private Linux safe diagnostic 20261012-10
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/exact-private-linux-safe-diagnostic-20261012-10.yml"
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 5d55dd139fc4e49f808aa52bfc21a87385a793daab007c476fd1986e0d4a0f23
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: e0c5aa9bad8a0ea46bcdc3d2c9f265386c9802da9e77ee45c3cb0ed4a4848b39
+  EXPECTED_PRIVATE_TREE_PROOF: 85b96c07ef9320a45802496fbace4d16f9c4a5d99986610fadf2371ce3cc4524
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+
+      - name: Recover exact private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$GITHUB_WORKSPACE/target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"; matched_ref="$ref"; private_head="$candidate_sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$private_head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$private_head"
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$private_head"; git checkout -q --detach "$private_head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+
+      - name: Build privacy-safe diagnostic
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          fmt_log="$RUNNER_TEMP/fmt.private.log"
+          clippy_json="$RUNNER_TEMP/clippy.private.jsonl"
+          clippy_err="$RUNNER_TEMP/clippy.private.stderr"
+          diag="$RUNNER_TEMP/diagnostic.txt"
+
+          set +e
+          cargo +1.98.1 fmt --all -- --check >"$fmt_log" 2>&1
+          fmt_rc=$?
+          cargo +1.98.1 clippy --locked --all-targets --features linux-peer-credentials --message-format=json -- -D warnings >"$clippy_json" 2>"$clippy_err"
+          clippy_rc=$?
+          set -e
+
+          python3 - "$GITHUB_WORKSPACE/target" "$fmt_log" "$fmt_rc" "$clippy_json" "$clippy_err" "$clippy_rc" "$diag" <<'PY'
+          import hashlib,json,pathlib,sys
+          root,fmt_path,fmt_rc,json_path,stderr_path,clippy_rc,out_path=sys.argv[1:]
+          root=str(pathlib.Path(root).resolve())
+          fmt_paths=set()
+          for raw in pathlib.Path(fmt_path).read_text(encoding='utf-8',errors='replace').splitlines():
+              if raw.startswith('Diff in '):
+                  text=raw[len('Diff in '):]
+                  path=text.rsplit(':',2)[0]
+                  try: resolved=str(pathlib.Path(path).resolve())
+                  except Exception: resolved=path
+                  if resolved.startswith(root+'/'): resolved=resolved[len(root)+1:]
+                  fmt_paths.add(hashlib.sha256(resolved.encode()).hexdigest())
+          items=[]
+          for raw in pathlib.Path(json_path).read_text(encoding='utf-8',errors='replace').splitlines():
+              try: obj=json.loads(raw)
+              except Exception: continue
+              if obj.get('reason')!='compiler-message': continue
+              msg=obj.get('message') or {}
+              if msg.get('level')!='error': continue
+              code=((msg.get('code') or {}).get('code')) or 'NO_CODE'
+              text_hash=hashlib.sha256(str(msg.get('message') or '').encode()).hexdigest()[:16]
+              spans=[s for s in (msg.get('spans') or []) if s.get('is_primary')]
+              if not spans:
+                  items.append((code,'NO_SPAN',0,0,text_hash))
+              for s in spans:
+                  path=str(s.get('file_name') or '')
+                  try: resolved=str(pathlib.Path(path).resolve())
+                  except Exception: resolved=path
+                  if resolved.startswith(root+'/'): resolved=resolved[len(root)+1:]
+                  items.append((code,hashlib.sha256(resolved.encode()).hexdigest(),int(s.get('line_start') or 0),int(s.get('column_start') or 0),text_hash))
+          items.sort()
+          lines=[f'FMT_RC={fmt_rc}',f'FMT_PATH_COUNT={len(fmt_paths)}']
+          lines += [f'FMT_PATH_{i}={value}' for i,value in enumerate(sorted(fmt_paths),1)]
+          lines += [f'CLIPPY_RC={clippy_rc}',f'CLIPPY_ERROR_COUNT={len(items)}',f'CLIPPY_STDERR_SHA256={hashlib.sha256(pathlib.Path(stderr_path).read_bytes()).hexdigest()}']
+          lines += [f'CLIPPY_{i}={code}:{path_hash}:{line}:{column}:{text_hash}' for i,(code,path_hash,line,column,text_hash) in enumerate(items,1)]
+          pathlib.Path(out_path).write_text('\n'.join(lines)+'\n',encoding='utf-8')
+          PY
+
+          rm -f "$fmt_log" "$clippy_json" "$clippy_err"
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+      - name: Upload privacy-safe diagnostic
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: exact-private-linux-safe-diagnostic-20261012-10
+          path: ${{ runner.temp }}/diagnostic.txt
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
