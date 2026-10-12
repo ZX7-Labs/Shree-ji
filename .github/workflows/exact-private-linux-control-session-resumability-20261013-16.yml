@@ -73,7 +73,7 @@ jobs:
           test -z "$(git status --porcelain)"
           echo "LAS_SESSION_RESUMABILITY_EXACT_RECOVERY=PASS"
 
-      - name: Verify lockfile and formatting
+      - name: Verify lockfile reproducibility
         shell: bash
         run: |
           set -euo pipefail
@@ -81,9 +81,17 @@ jobs:
           cp Cargo.lock "$RUNNER_TEMP/Cargo.lock.expected"
           cargo +1.98.1 generate-lockfile >/dev/null 2>&1
           cmp --silent Cargo.lock "$RUNNER_TEMP/Cargo.lock.expected"
+          git checkout -q -- Cargo.lock
+          echo "LAS_SESSION_RESUMABILITY_LOCKFILE=PASS"
+
+      - name: Verify formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
           cargo +1.98.1 fmt --all -- --check >/dev/null 2>&1
           test -z "$(git status --porcelain --untracked-files=no)"
-          echo "LAS_SESSION_RESUMABILITY_REPRO_FMT=PASS"
+          echo "LAS_SESSION_RESUMABILITY_FMT=PASS"
 
       - name: Compile default and Linux boundaries with warnings denied
         shell: bash
