@@ -1,0 +1,251 @@
+name: Private owner API clippy repair 20261013-27
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/private-owner-api-clippy-repair-20261013-27.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-owner-api-clippy-repair-20261013-27
+  cancel-in-progress: false
+
+env:
+  TARGET_REF_HASH: 848c0f95eaf6476c9dbfad7b9702a9409ff930d3e512c3f9ce99f0e4011d3764
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 0af84daa9190788f6a7d6c5fedc0788ca70f7f7817d3107bb1f0db9635658ebe
+  EXPECTED_PRIVATE_TREE_PROOF: c04e4d5bd6237e6514e8b1b4b92f7678ed524086086c1a8909c27a5957adba7f
+  EXECUTOR_PATH_HASH: b32999897b216fc2ba8bb4b71bbde41d899b23e36b6ba575f88023e073eebfcd
+  RESTART_PATH_HASH: c2da4b5b4e71d44f3366c03140042ae1ee0979f3ff6cf311f6461208eeddfb56
+  GUARDED_RESTART_PATH_HASH: 4034825b7ef12c0230cf7781c5da489f2028202bfa4dc977a280d41c410d5c98
+  RECOVERY_PATH_HASH: c55f93146a3e081014d18c33f56483d6c498b226e2d54977955bf3ee4d8e84ae
+  COORD_PATH_HASH: a0a513fe79b5eea1fe9e45ceeca7cafb99df7ad513e5b3a6effa095e12d5a07c
+  RUNTIME_PATH_HASH: 666f95886b30b0b8ea11ed8b55169acf25e931a0a942154731598f89970f96e4
+  GRACEFUL_PATH_HASH: a06b28a1e1abaaecf6ffdb8fefae0d1143170b7881811149777ab2e5221af08b
+
+jobs:
+  repair-verify-push:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          test "$(cargo +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+
+      - name: Checkout exact hidden private revision
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_WRITE_TOKEN: ${{ secrets.LAS_PRIVATE_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_WRITE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_WRITE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_WRITE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"; matched_ref="$ref"; private_head="$candidate_sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$private_head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$private_head"
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$private_head"
+          git checkout -q -B repair-target "$private_head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          printf '%s' "$matched_ref" >"$RUNNER_TEMP/private-ref"
+          printf '%s' "$private_head" >"$RUNNER_TEMP/private-start-sha"
+          printf '%s' "$auth" >"$RUNNER_TEMP/private-auth"
+          chmod 600 "$RUNNER_TEMP/private-ref" "$RUNNER_TEMP/private-start-sha" "$RUNNER_TEMP/private-auth"
+          echo "LAS_OWNER_API_RECOVERY=PASS"
+
+      - name: Apply bounded semantic lint repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          python3 - <<'PY'
+          import hashlib, os, pathlib, subprocess
+
+          H=lambda s: hashlib.sha256(s.encode()).hexdigest()
+          tracked=[p.decode() for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if p]
+          keys=['EXECUTOR_PATH_HASH','RESTART_PATH_HASH','GUARDED_RESTART_PATH_HASH','RECOVERY_PATH_HASH','COORD_PATH_HASH','RUNTIME_PATH_HASH','GRACEFUL_PATH_HASH']
+          wanted={os.environ[k] for k in keys}
+          found={H(p):p for p in tracked if H(p) in wanted}
+          if set(found)!=wanted: raise SystemExit(70)
+
+          def read(key):
+              p=pathlib.Path(found[os.environ[key]])
+              return p, p.read_text(encoding='utf-8')
+          def write(p,t): p.write_text(t,encoding='utf-8')
+          def replace_once(t,old,new,code):
+              if t.count(old)!=1: raise SystemExit(code)
+              return t.replace(old,new,1)
+          def insert_before(t,anchor,attr,code,start=0):
+              pos=t.find(anchor,start)
+              if pos<0: raise SystemExit(code)
+              return t[:pos]+attr+t[pos:], pos+len(attr)+len(anchor)
+          def insert_before_after_marker(t,marker,anchor,attr,code):
+              m=t.find(marker)
+              if m<0: raise SystemExit(code)
+              p=t.find(anchor,m)
+              if p<0: raise SystemExit(code+1)
+              return t[:p]+attr+t[p:]
+
+          # Remaining E0505: materialize receipt truth before any journal-owner move.
+          p,t=read('EXECUTOR_PATH_HASH')
+          old='''        let receipt = match journal.persist(body) {\n            Ok(receipt) => receipt,\n            Err(error) => {\n                return Err(RootControlExecutorRecoveryFailure {\n                    error: RootControlExecutorError::Journal(error),\n                    backend,\n                    store: journal.into_store(),\n                });\n            }\n        };\n        let receipt_current = receipt.is_current(&body);\n        drop(receipt);\n'''
+          new='''        let persist_result = match journal.persist(body) {\n            Ok(receipt) => Ok(receipt.is_current(&body)),\n            Err(error) => Err(error),\n        };\n        let receipt_current = match persist_result {\n            Ok(receipt_current) => receipt_current,\n            Err(error) => {\n                return Err(RootControlExecutorRecoveryFailure {\n                    error: RootControlExecutorError::Journal(error),\n                    backend,\n                    store: journal.into_store(),\n                });\n            }\n        };\n'''
+          t=replace_once(t,old,new,71); write(p,t)
+
+          # Clippy's collapse is semantics-preserving here: the write still happens iff state changed.
+          p,t=read('GUARDED_RESTART_PATH_HASH')
+          old='''    if state != before {\n        if let Err(error) = persist_exact(&mut journal, &state) {\n            return Err(RootGuardedRestartProjectionFailure {\n                error,\n                store: journal.into_store(),\n            });\n        }\n    }\n'''
+          new='''    if state != before\n        && let Err(error) = persist_exact(&mut journal, &state)\n    {\n        return Err(RootGuardedRestartProjectionFailure {\n            error,\n            store: journal.into_store(),\n        });\n    }\n'''
+          t=replace_once(t,old,new,72); write(p,t)
+
+          type_attr='''    #[expect(\n        clippy::type_complexity,\n        reason = "explicit move-only owner return shape is part of the audited recovery contract"\n    )]\n'''
+          large_attr='''    #[expect(\n        clippy::result_large_err,\n        reason = "bounded move-only failure payload preserves exact owners without heap indirection"\n    )]\n'''
+          top_large_attr='''#[expect(\n    clippy::result_large_err,\n    reason = "bounded move-only failure payload preserves exact owners without heap indirection"\n)]\n'''
+
+          # Owner-retaining recovery: large Err values are the ownership protocol, not accidental payload.
+          p,t=read('RECOVERY_PATH_HASH')
+          for name in [
+              '    pub(in crate::effect_fabric) fn recover_retaining(\n',
+              '    fn recover_bootstrap_preparing_retaining(\n',
+              '    fn recover_participants_ready_retaining(\n',
+              '    fn recover_open_retaining(\n',
+              '    fn recover_restart_preparing_retaining(\n',
+              '    fn recover_control_fenced_retaining(\n',
+          ]:
+              t,_=insert_before(t,name,large_attr,80)
+          for name in [
+              '    fn recovery_prepare_bootstrap_control(\n',
+              '    fn recovery_prepare_bootstrap_guarded(\n',
+          ]:
+              t,_=insert_before(t,name,type_attr,81)
+          write(p,t)
+
+          # Parent coordinator: remove obsolete expectations and place them on actual complex owner returns.
+          p,t=read('COORD_PATH_HASH')
+          stale=[
+              '''    #[expect(\n        clippy::type_complexity,\n        reason = "explicit owner tuple is the recovery handoff contract"\n    )]\n''',
+              '''    #[expect(\n        clippy::type_complexity,\n        reason = "explicit owner tuple is the uncertainty recovery contract"\n    )]\n''',
+              '''    #[expect(\n        clippy::type_complexity,\n        reason = "explicit owner tuple is the pre-Root recovery contract"\n    )]\n''',
+              '''    #[expect(\n        clippy::type_complexity,\n        reason = "explicit owner tuple is the handoff recovery contract"\n    )]\n''',
+          ]
+          for i,block in enumerate(stale): t=replace_once(t,block,'',90+i)
+          for marker in [
+              'pub(super) struct RootAppliedEpochFailure<',
+              'pub(super) struct RootTransitionUncertainFailure<',
+              'pub(super) struct RootSupervisorPreRootFailure<',
+              'pub(super) struct ActiveEpochHandoffFailure<',
+          ]:
+              t=insert_before_after_marker(t,marker,'    pub(super) fn into_parts(\n',type_attr,100)
+          for name in [
+              '    fn inspect_control_retaining(\n',
+              '    fn inspect_guarded_retaining(\n',
+          ]:
+              t,_=insert_before(t,name,type_attr,110)
+          for name in [
+              '    pub(super) fn into_graceful_handoff_parts_retaining(\n',
+              '    pub(super) fn bootstrap_retaining(\n',
+              '    fn start_exact_candidate_retaining(\n',
+          ]:
+              t,_=insert_before(t,name,large_attr,120)
+          # `resume` must be the continuation method, not any unrelated symbol.
+          t=insert_before_after_marker(t,'RootAppliedEpochContinuation<','    pub(super) fn resume(\n',large_attr,130)
+          write(p,t)
+
+          # Active service handoff retains the entire move-only service on refusal.
+          p,t=read('RUNTIME_PATH_HASH')
+          t,_=insert_before(t,'    pub(super) fn into_handoff_epoch_retaining(\n',large_attr,140)
+          write(p,t)
+
+          # Graceful rotation: move stale expectation to the actual failure tuple; retain large-owner rationale.
+          p,t=read('GRACEFUL_PATH_HASH')
+          stale='''    #[expect(\n        clippy::type_complexity,\n        reason = "explicit owner tuple is the pre-Root recovery contract"\n    )]\n'''
+          t=replace_once(t,stale,'',150)
+          t=insert_before_after_marker(t,'pub(super) struct GracefulPreRootFailure<','    pub(super) fn into_parts(\n',type_attr,151)
+          for name in [
+              'pub(super) fn rotate_handoff_ready_service<\n',
+              'pub(super) fn rotate_handoff_ready_service_retaining<\n',
+              'fn rotate_gracefully<\n',
+          ]:
+              t,_=insert_before(t,name,top_large_attr,152)
+          write(p,t)
+          PY
+
+          cargo +1.98.1 fmt --all
+          git diff --check
+          python3 - <<'PY'
+          import hashlib, os, subprocess
+          H=lambda s: hashlib.sha256(s.encode()).hexdigest()
+          paths=[p.decode() for p in subprocess.check_output(['git','diff','--name-only','-z']).split(b'\0') if p]
+          got={H(p) for p in paths}
+          allowed={os.environ[k] for k in ['EXECUTOR_PATH_HASH','RESTART_PATH_HASH','GUARDED_RESTART_PATH_HASH','RECOVERY_PATH_HASH','COORD_PATH_HASH','RUNTIME_PATH_HASH','GRACEFUL_PATH_HASH']}
+          required={os.environ[k] for k in ['EXECUTOR_PATH_HASH','GUARDED_RESTART_PATH_HASH','RECOVERY_PATH_HASH','COORD_PATH_HASH','RUNTIME_PATH_HASH','GRACEFUL_PATH_HASH']}
+          if not required.issubset(got) or not got.issubset(allowed):
+              print('LAS_OWNER_API_SCOPE_COUNT='+str(len(paths)))
+              for h in sorted(got): print('LAS_OWNER_API_SCOPE_HASH='+h)
+              raise SystemExit(160)
+          print('LAS_OWNER_API_SCOPE=PASS')
+          print('LAS_OWNER_API_DIFF_SHA256='+hashlib.sha256(subprocess.check_output(['git','diff','--binary'])).hexdigest())
+          with open(os.path.join(os.environ['RUNNER_TEMP'],'repair-paths'),'w',encoding='utf-8') as f:
+              for p in paths: f.write(p+'\n')
+          PY
+
+      - name: Verify exact repaired private tree
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          cargo +1.98.1 fmt --all -- --check
+          cargo +1.98.1 check --locked --all-targets
+          cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials
+          cargo +1.98.1 test --locked --all-targets --features linux-peer-credentials -- --test-threads=1
+          cargo +1.98.1 clippy --locked --all-targets --features linux-peer-credentials -- -D warnings
+          echo "LAS_OWNER_API_VERIFY=PASS"
+
+      - name: Commit and fast-forward exact private ref
+        shell: bash
+        env:
+          PRIVATE_WRITE_TOKEN: ${{ secrets.LAS_PRIVATE_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          matched_ref="$(cat "$RUNNER_TEMP/private-ref")"
+          start_sha="$(cat "$RUNNER_TEMP/private-start-sha")"
+          auth="$(cat "$RUNNER_TEMP/private-auth")"
+          echo "::add-mask::$PRIVATE_WRITE_TOKEN"; echo "::add-mask::$auth"; echo "::add-mask::$start_sha"
+          remote_sha="$(git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote origin "$matched_ref" | awk '{print $1}')"
+          echo "::add-mask::$remote_sha"
+          test "$remote_sha" = "$start_sha"
+          mapfile -t paths <"$RUNNER_TEMP/repair-paths"
+          test "${#paths[@]}" -ge 6; test "${#paths[@]}" -le 7
+          git config user.name "LAS Verification Repair"
+          git config user.email "las-verification@users.noreply.github.com"
+          git add -- "${paths[@]}"
+          test -z "$(git diff --name-only)"
+          git commit -q -m "Repair owner-retaining API lint contracts"
+          new_sha="$(git rev-parse HEAD)"; echo "::add-mask::$new_sha"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" push -q origin HEAD:"$matched_ref"
+          echo "LAS_OWNER_API_PUSH=PASS"
+          echo "LAS_OWNER_API_COMMIT_PROOF=$(printf '%s' "$new_sha" | sha256sum | awk '{print $1}')"
