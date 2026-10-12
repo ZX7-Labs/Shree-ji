@@ -1,0 +1,161 @@
+name: Exact private baseline repair 20261012-07
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/exact-private-baseline-repair-20261012-07.yml"
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 28a52175bfc55f4f8b2b0f4312cd2616a65a7082555149f4382746e2254e1b26
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 7981a27f593f3f9adb2772b15b7e72c070f00ef2ebfbd0ce67862402f2aaaadc
+  EXPECTED_PRIVATE_TREE_PROOF: f99c3fdf8f301715de35a998870e9f6c9f158956dc463071ea5713b184842b7f
+  TARGET_PATH_HASH_A: cb2d4fc3cf898afd802ad59f0f6ebd26cee8e662e8496fee3919df2e77dc75ff
+  TARGET_PATH_HASH_B: b1a35a68f14e696205874893c07fd24fdb88882b47c23cc0e0c80a30c7d53759
+  EXPECTED_LINE_HASH: 86d08a5809bbe441cbf990f5c510a1b7f70a00f1a218ddabaec16e763aea5093
+
+jobs:
+  repair-and-verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          test "$(cargo +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          echo "LAS_BASELINE_REPAIR_TOOLCHAIN=PASS"
+
+      - name: Recover exact private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"; matched_ref="$ref"; private_head="$candidate_sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$private_head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$private_head"
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$private_head"; git checkout -q --detach "$private_head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          echo "LAS_BASELINE_REPAIR_RECOVERY=PASS"
+
+      - name: Apply bounded private repair and exact formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/target"
+          python3 - <<'PY'
+          import hashlib, os, pathlib, subprocess
+          tracked=[p.decode() for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if p]
+          wanted={os.environ['TARGET_PATH_HASH_A'],os.environ['TARGET_PATH_HASH_B']}
+          found={hashlib.sha256(p.encode()).hexdigest():p for p in tracked if hashlib.sha256(p.encode()).hexdigest() in wanted}
+          if set(found)!=wanted: raise SystemExit(70)
+          target=pathlib.Path(found[os.environ['TARGET_PATH_HASH_A']])
+          lines=target.read_text(encoding='utf-8').splitlines(keepends=True)
+          matches=[]
+          for i,line in enumerate(lines):
+              bare=line[:-1] if line.endswith('\n') else line
+              if hashlib.sha256(bare.encode()).hexdigest()==os.environ['EXPECTED_LINE_HASH']:
+                  matches.append(i)
+          if len(matches)!=1: raise SystemExit(71)
+          i=matches[0]
+          if lines[i].count('.unwrap();')!=1: raise SystemExit(72)
+          lines[i]=lines[i].replace('.unwrap();','.unwrap_or_else(|_| panic!("test setup failed"));')
+          target.write_text(''.join(lines),encoding='utf-8')
+          PY
+          cargo +1.98.1 fmt --all
+          python3 - <<'PY'
+          import hashlib,os,subprocess
+          paths=[p.decode() for p in subprocess.check_output(['git','diff','--name-only','-z']).split(b'\0') if p]
+          got={hashlib.sha256(p.encode()).hexdigest() for p in paths}
+          exp={os.environ['TARGET_PATH_HASH_A'],os.environ['TARGET_PATH_HASH_B']}
+          if got!=exp: raise SystemExit(73)
+          PY
+          echo "LAS_BASELINE_REPAIR_BOUNDED=PASS"
+
+      - name: Verify repaired private tree
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/target"
+          failed=0
+          for spec in \
+            'FMT:cargo +1.98.1 fmt --all -- --check' \
+            'CHECK:cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials' \
+            'TEST:cargo +1.98.1 test --locked --all-targets --features linux-peer-credentials' \
+            'CLIPPY:cargo +1.98.1 clippy --locked --all-targets --features linux-peer-credentials -- -D warnings'
+          do
+            label="${spec%%:*}"; command="${spec#*:}"; log="$RUNNER_TEMP/${label}.private.log"
+            set +e; bash -lc "$command" >"$log" 2>&1; rc=$?; set -e
+            echo "LAS_BASELINE_REPAIR_${label}_RC=$rc"
+            echo "LAS_BASELINE_REPAIR_${label}_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')"
+            echo "LAS_BASELINE_REPAIR_${label}_LOG_BYTES=$(wc -c <"$log" | tr -d ' ')"
+            rm -f "$log"
+            if [ "$rc" -ne 0 ]; then failed=1; fi
+          done
+          if [ "$failed" -ne 0 ]; then echo "LAS_BASELINE_REPAIR_VERIFY=FAIL"; exit 1; fi
+          echo "LAS_BASELINE_REPAIR_VERIFY=PASS"
+
+      - name: Encrypt exact repaired files
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/target"
+          mapfile -d '' paths < <(git diff --name-only -z)
+          test "${#paths[@]}" -eq 2
+          tar -czf "$RUNNER_TEMP/repaired.private.tar.gz" -- "${paths[@]}"
+          sha256sum "$RUNNER_TEMP/repaired.private.tar.gz" | awk '{print $1}' > "$RUNNER_TEMP/repaired.sha256"
+          cat >"$RUNNER_TEMP/pub.pem" <<'PEM'
+          -----BEGIN PUBLIC KEY-----
+          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAsuzeyyD2B8Uszoo1IZLb
+          /r3F4iO4TwfEhMEDNwBt+EPvYWBpuLOuShkrxt6DBurvSc6Ez6m0N5/yAyUB9reO
+          4lPz109u4i104iWmBmYWudnE2vFZF1imG1zMB6F7MuAPEcQ4QZD1A5HNnv0GkuJE
+          HUfrMP8oZdnm6vBWJIo7VhmqkStlVm6vhrcSMmNUugvWbW3CvbYIXQEmPKMNSZ/t
+          PfYzmcUwOe1Wiee3ESSR0frSgcSDW0x2bCboDFHBcAZtuxidGmO68qAynbrNOmLn
+          YtUgaTPKASjuminzNR99IR9g/6Ld6ilwTXYNddiLpG+sdu8+e/mY/QjZ0ISmCp52
+          qjY0L40z8P8196ezxVd8Kta/3kfNWAPRpS74VhJQhESXTdahQwMPc6dk3jdpOCC4
+          3WYdG64tevE9i5Q39p8S2vfpzePsEC9WaPUFT70nTX09eYfQTzuUqekT04aVkdAn
+          K++9qdo2Mkm7uPjqA54VzQi3V8i9UYHrCcR56RWgSF21AgMBAAE=
+          -----END PUBLIC KEY-----
+          PEM
+          key="$RUNNER_TEMP/aes.key"; openssl rand -hex 32 >"$key"
+          openssl enc -aes-256-cbc -pbkdf2 -iter 250000 -md sha256 -salt -pass file:"$key" -in "$RUNNER_TEMP/repaired.private.tar.gz" -out "$RUNNER_TEMP/repaired.enc"
+          openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/pub.pem" -in "$key" -out "$RUNNER_TEMP/key.enc"
+          rm -f "$RUNNER_TEMP/repaired.private.tar.gz" "$key" "$RUNNER_TEMP/pub.pem"
+          echo "LAS_BASELINE_REPAIR_ARTIFACT=PASS"
+
+      - name: Upload encrypted repaired files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: exact-private-baseline-repair-20261012-07
+          path: |
+            ${{ runner.temp }}/repaired.enc
+            ${{ runner.temp }}/key.enc
+            ${{ runner.temp }}/repaired.sha256
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
