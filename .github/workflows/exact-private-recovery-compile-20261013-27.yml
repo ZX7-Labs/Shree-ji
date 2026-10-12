@@ -1,0 +1,143 @@
+name: Exact private recovery compile 20261013-27
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/exact-private-recovery-compile-20261013-27.yml"
+
+permissions:
+  contents: write
+
+env:
+  TARGET_REF_HASH: 848c0f95eaf6476c9dbfad7b9702a9409ff930d3e512c3f9ce99f0e4011d3764
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 18e2a649bd3ef1d2f6787fc0911d2fa845405e4cdffd0a82867b35b17271d27c
+  EXPECTED_PRIVATE_TREE_PROOF: 0b7876300f80b58d147946360bb4f9c1e57cdbe648c24d92cae431398283bdbd
+  REPORT_PATH: exact-private-recovery-compile-20261013-27.txt
+
+jobs:
+  compile-metadata:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout public verifier shell
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+
+      - name: Recover exact private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"
+          mkdir "$root"
+          cd "$root"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""
+          private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+              private_head="$candidate_sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"
+          test -n "$matched_ref"
+          test -n "$private_head"
+          echo "::add-mask::$matched_ref"
+          echo "::add-mask::$private_head"
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          git checkout -q --detach "$private_head"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+
+      - name: Build source-free compiler metadata
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          private="$RUNNER_TEMP/private-target"
+          report="$RUNNER_TEMP/$REPORT_PATH"
+          cd "$private"
+          set +e
+          cargo +1.98.1 check --locked --all-targets --message-format=json >"$RUNNER_TEMP/default.jsonl" 2>/dev/null
+          default_status=$?
+          cargo +1.98.1 check --locked --features linux-peer-credentials --all-targets --message-format=json >"$RUNNER_TEMP/linux.jsonl" 2>/dev/null
+          linux_status=$?
+          set -e
+          DEFAULT_STATUS="$default_status" LINUX_STATUS="$linux_status" python3 - <<'PY' >"$report"
+          import hashlib, json, os
+          print("COMPILER=rustc-1.98.1")
+          print("PRIVATE_HEAD_SHA256=" + os.environ["EXPECTED_PRIVATE_SNAPSHOT_PROOF"])
+          print("PRIVATE_TREE_SHA256=" + os.environ["EXPECTED_PRIVATE_TREE_PROOF"])
+          for label, path, status_key in (
+              ("DEFAULT", os.environ["RUNNER_TEMP"] + "/default.jsonl", "DEFAULT_STATUS"),
+              ("LINUX", os.environ["RUNNER_TEMP"] + "/linux.jsonl", "LINUX_STATUS"),
+          ):
+              records=[]
+              with open(path, "r", encoding="utf-8", errors="replace") as f:
+                  for raw in f:
+                      try: obj=json.loads(raw)
+                      except Exception: continue
+                      if obj.get("reason") != "compiler-message": continue
+                      msg=obj.get("message") or {}
+                      if msg.get("level") != "error": continue
+                      code=(msg.get("code") or {}).get("code") or "NO_CODE"
+                      message=str(msg.get("message") or "")
+                      mhash=hashlib.sha256(message.encode()).hexdigest()
+                      prim=[s for s in (msg.get("spans") or []) if s.get("is_primary")]
+                      if not prim:
+                          records.append((code,"GLOBAL",0,0,mhash))
+                      else:
+                          for s in prim:
+                              records.append((code,str(s.get("file_name") or "GLOBAL"),int(s.get("line_start") or 0),int(s.get("column_start") or 0),mhash))
+              print(f"{label}_STATUS={os.environ[status_key]}")
+              print(f"{label}_ERROR_COUNT={len(records)}")
+              for i,(code,file,line,col,mhash) in enumerate(records,1):
+                  print(f"{label}_ERROR_{i}_CODE={code}")
+                  print(f"{label}_ERROR_{i}_FILE={file}")
+                  print(f"{label}_ERROR_{i}_LINE={line}")
+                  print(f"{label}_ERROR_{i}_COLUMN={col}")
+                  print(f"{label}_ERROR_{i}_MESSAGE_SHA256={mhash}")
+          PY
+          grep -q '^DEFAULT_STATUS=' "$report"
+          grep -q '^LINUX_STATUS=' "$report"
+
+      - name: Publish source-free compiler report atomically
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/$REPORT_PATH"
+          content="$(base64 -w0 "$report")"
+          payload="$(python3 -c 'import json,os; print(json.dumps({"message":"Publish source-free exact recovery compiler metadata 20261013-27","content":os.environ["CONTENT"],"branch":"main"}))' CONTENT="$content")"
+          curl --fail-with-body -sS \
+            -X PUT \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/${REPORT_PATH}" \
+            -d "$payload" >/dev/null
