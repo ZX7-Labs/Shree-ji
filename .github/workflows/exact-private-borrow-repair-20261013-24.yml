@@ -1,0 +1,201 @@
+name: Exact private borrow repair 20261013-24
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/exact-private-borrow-repair-20261013-24.yml"
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 848c0f95eaf6476c9dbfad7b9702a9409ff930d3e512c3f9ce99f0e4011d3764
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 640b41b1ab4f46b6c409cff31ac35574d6edb4f0dfb1cbdb0a842edab23e649d
+  EXPECTED_PRIVATE_TREE_PROOF: 7c5952b971340627a790831f5bb7e303636677bd76719792cd3ac7ab0f3b4dc7
+  TARGET_PATH_HASH_A: c2da4b5b4e71d44f3366c03140042ae1ee0979f3ff6cf311f6461208eeddfb56
+  TARGET_PATH_HASH_B: b32999897b216fc2ba8bb4b71bbde41d899b23e36b6ba575f88023e073eebfcd
+  TARGET_LINE_HASH: 7268ded777ecff12cd925dd6bfe687cb2371bc81dd448f99db222e5c81bb216c
+  ERR_LINE_HASH: b7ccbb417ba9a58e2e0ed7ac8e7b18d27ced5fa002b8d6e5ceacab30a7a94707
+  RECEIPT_LINE_HASH: 8bb3c88a6780831505d95969ad626c1badc5ef336b44b1318e85f2b7e0b4987f
+  DROP_LINE_HASH: 14d72155fb8924d62670a497cfb51d2ac90a73fc8570ff4e7236c62ec0c17d46
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Install exact Rust
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+
+      - name: Recover exact private revision
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"; matched_ref="$ref"; private_head="$candidate_sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$private_head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$private_head"
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$private_head"
+          git checkout -q --detach "$private_head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          echo "LAS_BORROW_RECOVERY=PASS"
+
+      - name: Apply bounded borrow repair
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/target"
+          python3 - <<'PY'
+          import hashlib, os, pathlib, subprocess
+          H=lambda s: hashlib.sha256(s.encode()).hexdigest()
+          tracked=[p.decode() for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if p]
+          wanted={os.environ['TARGET_PATH_HASH_A'],os.environ['TARGET_PATH_HASH_B']}
+          found={H(p):p for p in tracked if H(p) in wanted}
+          if set(found)!=wanted: raise SystemExit(70)
+
+          def patch(path_hash,count):
+              p=pathlib.Path(found[path_hash])
+              lines=p.read_text(encoding='utf-8').splitlines(keepends=True)
+              norm=lambda x: x.strip()
+              starts=[i for i,x in enumerate(lines) if H(norm(x))==os.environ['TARGET_LINE_HASH']]
+              if len(starts)!=count: raise SystemExit(71)
+              shift=0
+              for original in starts:
+                  i=original+shift
+                  indent=lines[i][:len(lines[i])-len(lines[i].lstrip())]
+                  depth=0; end=None
+                  for j in range(i,len(lines)):
+                      depth+=lines[j].count('{')-lines[j].count('}')
+                      if j==i and depth!=1: raise SystemExit(72)
+                      if depth==0: end=j; break
+                  if end is None or end+2>=len(lines): raise SystemExit(73)
+                  if H(norm(lines[end+1]))!=os.environ['RECEIPT_LINE_HASH'] or H(norm(lines[end+2]))!=os.environ['DROP_LINE_HASH']:
+                      raise SystemExit(74)
+                  errs=[j for j in range(i+1,end) if H(norm(lines[j]))==os.environ['ERR_LINE_HASH']]
+                  if len(errs)!=1: raise SystemExit(75)
+                  es=errs[0]; depth=0; ee=None
+                  for j in range(es,end):
+                      depth+=lines[j].count('{')-lines[j].count('}')
+                      if j==es and depth!=1: raise SystemExit(76)
+                      if depth==0: ee=j; break
+                  if ee is None: raise SystemExit(77)
+                  inner=lines[es+1:ee]
+                  repl=[
+                      f"{indent}let persist_result = match journal.persist(body) {{\n",
+                      f"{indent}    Ok(receipt) => Ok(receipt.is_current(&body)),\n",
+                      f"{indent}    Err(error) => Err(error),\n",
+                      f"{indent}}};\n",
+                      f"{indent}let receipt_current = match persist_result {{\n",
+                      f"{indent}    Ok(receipt_current) => receipt_current,\n",
+                      f"{indent}    Err(error) => {{\n",
+                      *inner,
+                      f"{indent}    }}\n",
+                      f"{indent}}};\n",
+                  ]
+                  old=end+3-i
+                  lines[i:end+3]=repl
+                  shift+=len(repl)-old
+              p.write_text(''.join(lines),encoding='utf-8')
+              if any(H(norm(x))==os.environ['TARGET_LINE_HASH'] for x in lines): raise SystemExit(78)
+
+          patch(os.environ['TARGET_PATH_HASH_A'],2)
+          patch(os.environ['TARGET_PATH_HASH_B'],1)
+          PY
+          cargo +1.98.1 fmt --all
+          python3 - <<'PY'
+          import hashlib,os,subprocess
+          paths=[p.decode() for p in subprocess.check_output(['git','diff','--name-only','-z']).split(b'\0') if p]
+          got={hashlib.sha256(p.encode()).hexdigest() for p in paths}
+          exp={os.environ['TARGET_PATH_HASH_A'],os.environ['TARGET_PATH_HASH_B']}
+          if got!=exp: raise SystemExit(79)
+          print("LAS_BORROW_DIFF_SHA256="+hashlib.sha256(subprocess.check_output(['git','diff','--binary'])).hexdigest())
+          PY
+
+      - name: Verify repaired tree
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/target"
+          status=PASS
+          for spec in \
+            'FMT:cargo +1.98.1 fmt --all -- --check' \
+            'CHECK_DEFAULT:cargo +1.98.1 check --locked --all-targets' \
+            'CHECK_LINUX:cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials'
+          do
+            label="${spec%%:*}"; command="${spec#*:}"; log="$RUNNER_TEMP/${label}.log"
+            set +e; bash -lc "$command" >"$log" 2>&1; rc=$?; set -e
+            echo "LAS_BORROW_${label}_RC=$rc"
+            echo "LAS_BORROW_${label}_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')"
+            echo "LAS_BORROW_${label}_LOG_BYTES=$(wc -c <"$log" | tr -d ' ')"
+            if [ "$rc" -ne 0 ]; then status=FAIL; fi
+            rm -f "$log"
+          done
+          printf '%s\n' "$status" >"$RUNNER_TEMP/verify.status"
+
+      - name: Encrypt repaired files
+        if: always()
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/target"
+          mapfile -d '' paths < <(git diff --name-only -z)
+          test "${#paths[@]}" -eq 2
+          tar -czf "$RUNNER_TEMP/repaired.tar.gz" -- "${paths[@]}"
+          sha256sum "$RUNNER_TEMP/repaired.tar.gz" | awk '{print $1}' >"$RUNNER_TEMP/repaired.sha256"
+          cat >"$RUNNER_TEMP/pub.pem" <<'PEM'
+          -----BEGIN PUBLIC KEY-----
+          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAumowkUWFYMVnrVlWw6DN
+          vVoANGz9iUg37C91gU0zUl570HTDC1asVwvTKfMfNc5MasvAFiVvMYHaYvi7uQar
+          ZVuLj9mbmajdZH5rQ5pkei6B2wJKRBL0a9Izkmc2BxQeJMKV+4+83+uX33SbVEGs
+          EsOJJobcS3+B/4xAS0+0jAXajmEKm3h5HtJc63plafrOmJ2EPIscEoaKDExpj/oa
+          8vZ5y8eBkpiREolI/nTTVZImtcRZpIn5xSDLFepl6rFk6baplWKdwgnbzxqMZhKg
+          6ZtMzV6lw2XNf6BsVet3iQU0UiennLkXJ6U1P3K1UFHqNq3J2DfOoFed92GmspvG
+          UhWRUwuwOtjWBbTgoa6D2xim5IZm9PZXR4FEaenTaIXJ13V3yfknSoEoEt7LVdg5
+          iZTLLdalADzRTAGrua240njwKFeHbxB38Id2rJy5Et3F8YZX18k/EYUHuJsBoQ0X
+          1JEW51ugozzb4DrxINzhYF869KKseLs0dRetPOAqbXxpAgMBAAE=
+          -----END PUBLIC KEY-----
+          PEM
+          key="$RUNNER_TEMP/key.txt"; openssl rand -hex 32 >"$key"
+          openssl enc -aes-256-cbc -pbkdf2 -iter 250000 -md sha256 -salt -pass file:"$key" -in "$RUNNER_TEMP/repaired.tar.gz" -out "$RUNNER_TEMP/repaired.enc"
+          openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/pub.pem" -in "$key" -out "$RUNNER_TEMP/key.enc"
+          rm -f "$RUNNER_TEMP/repaired.tar.gz" "$key" "$RUNNER_TEMP/pub.pem"
+
+      - name: Upload encrypted repair
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: exact-private-borrow-repair-20261013-24
+          path: |
+            ${{ runner.temp }}/repaired.enc
+            ${{ runner.temp }}/key.enc
+            ${{ runner.temp }}/repaired.sha256
+            ${{ runner.temp }}/verify.status
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Enforce verification
+        if: always()
+        run: |
+          test -f "$RUNNER_TEMP/verify.status"
+          test "$(cat "$RUNNER_TEMP/verify.status")" = PASS
