@@ -85,13 +85,24 @@ jobs:
           echo "LAS_RECOVERY_OWNER_LOCKFILE=PASS"
 
       - name: Verify formatting
+        id: fmt
         shell: bash
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/target"
-          cargo +1.98.1 fmt --all -- --check
+          cargo +1.98.1 fmt --all -- --check >/dev/null 2>&1
           test -z "$(git status --porcelain --untracked-files=no)"
           echo "LAS_RECOVERY_OWNER_FMT=PASS"
+
+      - name: Diagnose formatting paths without source
+        if: failure() && steps.fmt.outcome == 'failure'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          cargo +1.98.1 fmt --all >/dev/null 2>&1
+          git diff --name-only
+          exit 1
 
       - name: Compile default and Linux boundaries with warnings denied
         shell: bash
@@ -100,8 +111,8 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/target"
-          cargo +1.98.1 check --locked --all-targets
-          cargo +1.98.1 check --locked --features linux-peer-credentials --all-targets
+          cargo +1.98.1 check --locked --all-targets >/dev/null 2>&1
+          cargo +1.98.1 check --locked --features linux-peer-credentials --all-targets >/dev/null 2>&1
           echo "LAS_RECOVERY_OWNER_CHECK=PASS"
 
       - name: Clippy default and Linux boundaries
@@ -109,8 +120,8 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/target"
-          cargo +1.98.1 clippy --locked --all-targets -- -D warnings
-          cargo +1.98.1 clippy --locked --features linux-peer-credentials --all-targets -- -D warnings
+          cargo +1.98.1 clippy --locked --all-targets -- -D warnings >/dev/null 2>&1
+          cargo +1.98.1 clippy --locked --features linux-peer-credentials --all-targets -- -D warnings >/dev/null 2>&1
           echo "LAS_RECOVERY_OWNER_CLIPPY=PASS"
 
       - name: Run exact owner-retention discriminators
@@ -122,13 +133,13 @@ jobs:
           cd "$GITHUB_WORKSPACE/target"
           cargo +1.98.1 test --locked --features linux-peer-credentials --lib \
             effect_fabric::root_supervisor_graceful_handoff_tests::graceful_rotation_retains_applied_root_continuation_without_root_reentry \
-            -- --exact --test-threads=1
+            -- --exact --test-threads=1 >/dev/null 2>&1
           cargo +1.98.1 test --locked --features linux-peer-credentials --lib \
             effect_fabric::root_supervisor_graceful_handoff_tests::graceful_activation_uncertainty_retains_nonresumable_owners_without_root_reentry \
-            -- --exact --test-threads=1
+            -- --exact --test-threads=1 >/dev/null 2>&1
           cargo +1.98.1 test --locked --features linux-peer-credentials --lib \
             effect_fabric::root_supervisor_epoch_coordinator_tests::applied_root_control_recovery_failure_retains_exact_continuation_without_reentry \
-            -- --exact --test-threads=1
+            -- --exact --test-threads=1 >/dev/null 2>&1
           echo "LAS_RECOVERY_OWNER_DISCRIMINATORS=PASS"
 
       - name: Run deterministic and adversarial regression suites
@@ -138,8 +149,8 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/target"
-          cargo +1.98.1 test --locked --all-targets -- --test-threads=1
-          cargo +1.98.1 test --locked --all-targets --features linux-peer-credentials -- --test-threads=1
+          cargo +1.98.1 test --locked --all-targets -- --test-threads=1 >/dev/null 2>&1
+          cargo +1.98.1 test --locked --all-targets --features linux-peer-credentials -- --test-threads=1 >/dev/null 2>&1
           echo "LAS_RECOVERY_OWNER_TESTS=PASS"
 
       - name: Re-run Linux supervisor library tests under optimized codegen
@@ -151,7 +162,7 @@ jobs:
           cd "$GITHUB_WORKSPACE/target"
           cargo +1.98.1 test --locked --release --features linux-peer-credentials --lib \
             effect_fabric::root_supervisor_ \
-            -- --test-threads=1
+            -- --test-threads=1 >/dev/null 2>&1
           test -z "$(git status --porcelain --untracked-files=no)"
           test "$(printf '%s' "$(git rev-parse HEAD)" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
           test "$(printf '%s' "$(git rev-parse 'HEAD^{tree}')" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
