@@ -1,0 +1,74 @@
+name: Exact private pre-Root fmt diagnostic 20261013-19
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/exact-private-pre-root-fmt-diagnostic-20261013-19.yml"
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 848c0f95eaf6476c9dbfad7b9702a9409ff930d3e512c3f9ce99f0e4011d3764
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 9fdb156b8fd0134c8100fdf2e2f1835a91661c78424a05d3c45afd12fbd72b9d
+  EXPECTED_PRIVATE_TREE_PROOF: bd94f06c71b2266f59f712c9b3d64053fae44070cfee4ab705599e4b67b41626
+
+jobs:
+  diagnose-rustfmt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Install exact Rustfmt
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt >/dev/null
+
+      - name: Recover exact private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+          root="$GITHUB_WORKSPACE/target"
+          mkdir "$root"
+          cd "$root"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""
+          private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              matched_ref="$ref"
+              private_head="$candidate_sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"
+          test -n "$matched_ref"
+          test -n "$private_head"
+          echo "::add-mask::$matched_ref"
+          echo "::add-mask::$private_head"
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          git checkout -q --detach FETCH_HEAD
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+
+      - name: Show exact rustfmt diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          cargo +1.98.1 fmt --all -- --check
