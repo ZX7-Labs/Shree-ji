@@ -11,8 +11,8 @@ permissions:
 
 env:
   TARGET_REF_HASH: 28a52175bfc55f4f8b2b0f4312cd2616a65a7082555149f4382746e2254e1b26
-  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 939ebf3cf76e2c895a1238137d5ce55cb0c55c815064e971c80097ce6c5354a0
-  EXPECTED_PRIVATE_TREE_PROOF: be46eacf2b1b0a008f82cf959c6b786177a74976f58288b627b9f3a774846267
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 7981a27f593f3f9adb2772b15b7e72c070f00ef2ebfbd0ce67862402f2aaaadc
+  EXPECTED_PRIVATE_TREE_PROOF: f99c3fdf8f301715de35a998870e9f6c9f158956dc463071ea5713b184842b7f
 
 jobs:
   linux-rust-gate:
@@ -102,9 +102,14 @@ jobs:
             return "$rc"
           }
 
-          run_private FMT cargo +1.98.1 fmt --all -- --check
-          run_private CHECK cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials
-          run_private TEST cargo +1.98.1 test --locked --all-targets --features linux-peer-credentials
-          run_private CLIPPY cargo +1.98.1 clippy --locked --all-targets --features linux-peer-credentials -- -D warnings
+          failed=0
+          run_private FMT cargo +1.98.1 fmt --all -- --check || failed=1
+          run_private CHECK cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials || failed=1
+          run_private TEST cargo +1.98.1 test --locked --all-targets --features linux-peer-credentials || failed=1
+          run_private CLIPPY cargo +1.98.1 clippy --locked --all-targets --features linux-peer-credentials -- -D warnings || failed=1
           test -z "$(git status --porcelain --untracked-files=no)"
+          if [ "$failed" -ne 0 ]; then
+            echo "LAS_EXACT_LINUX_GATE=FAIL"
+            exit 1
+          fi
           echo "LAS_EXACT_LINUX_GATE=PASS"
