@@ -1,0 +1,155 @@
+name: Exact private Linux differential 20261012-06
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/exact-private-linux-differential-20261012-06.yml"
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 28a52175bfc55f4f8b2b0f4312cd2616a65a7082555149f4382746e2254e1b26
+  EXPECTED_CURRENT_SNAPSHOT_PROOF: 7981a27f593f3f9adb2772b15b7e72c070f00ef2ebfbd0ce67862402f2aaaadc
+  EXPECTED_CURRENT_TREE_PROOF: f99c3fdf8f301715de35a998870e9f6c9f158956dc463071ea5713b184842b7f
+  EXPECTED_PARENT_SNAPSHOT_PROOF: 939ebf3cf76e2c895a1238137d5ce55cb0c55c815064e971c80097ce6c5354a0
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          test "$(cargo +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          echo "LAS_LINUX_DIFF_TOOLCHAIN=PASS"
+
+      - name: Recover exact current and parent opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$GITHUB_WORKSPACE/target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"; matched_ref="$ref"
+            fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; echo "::add-mask::$matched_ref"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=2 origin "$matched_ref"
+          current="$(git rev-parse FETCH_HEAD)"; parent="$(git rev-parse 'FETCH_HEAD^')"; tree="$(git rev-parse 'FETCH_HEAD^{tree}')"
+          echo "::add-mask::$current"; echo "::add-mask::$parent"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$current" | sha256sum | awk '{print $1}')" = "$EXPECTED_CURRENT_SNAPSHOT_PROOF"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_CURRENT_TREE_PROOF"
+          test "$(printf '%s' "$parent" | sha256sum | awk '{print $1}')" = "$EXPECTED_PARENT_SNAPSHOT_PROOF"
+          test "$(git rev-list --count "$parent..$current")" = "1"
+          printf '%s' "$current" >"$RUNNER_TEMP/current-revision"
+          printf '%s' "$parent" >"$RUNNER_TEMP/parent-revision"
+          unset PRIVATE_TOKEN auth matched_ref current parent tree candidate_sha ref
+          echo "LAS_LINUX_DIFF_RECOVERY=PASS"
+
+      - name: Emit privacy-safe parent and current fingerprints
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+
+          classify_fmt() {
+            label="$1"; log="$2"; rc="$3"
+            python3 - "$label" "$GITHUB_WORKSPACE/target" "$log" "$rc" <<'PY'
+          import hashlib,pathlib,sys
+          label,root,log_path,rc=sys.argv[1:]
+          root=str(pathlib.Path(root).resolve())
+          paths=set()
+          for raw in pathlib.Path(log_path).read_text(encoding='utf-8',errors='replace').splitlines():
+              if not raw.startswith('Diff in '): continue
+              text=raw[len('Diff in '):]
+              path=text.rsplit(':',2)[0]
+              try: resolved=str(pathlib.Path(path).resolve())
+              except Exception: resolved=path
+              if resolved.startswith(root+'/'): resolved=resolved[len(root)+1:]
+              paths.add(hashlib.sha256(resolved.encode()).hexdigest())
+          print(f'LAS_LINUX_DIFF_{label}_FMT_RC={rc}')
+          print(f'LAS_LINUX_DIFF_{label}_FMT_PATH_COUNT={len(paths)}')
+          for i,value in enumerate(sorted(paths),1): print(f'LAS_LINUX_DIFF_{label}_FMT_PATH_{i}={value}')
+          PY
+          }
+
+          classify_json() {
+            label="$1"; gate="$2"; json_path="$3"; stderr_path="$4"; rc="$5"
+            python3 - "$label" "$gate" "$GITHUB_WORKSPACE/target" "$json_path" "$stderr_path" "$rc" <<'PY'
+          import hashlib,json,pathlib,sys
+          label,gate,root,json_path,stderr_path,rc=sys.argv[1:]
+          root=str(pathlib.Path(root).resolve()); items=[]
+          for raw in pathlib.Path(json_path).read_text(encoding='utf-8',errors='replace').splitlines():
+              try: obj=json.loads(raw)
+              except Exception: continue
+              if obj.get('reason')!='compiler-message': continue
+              msg=obj.get('message') or {}
+              if msg.get('level')!='error': continue
+              code=((msg.get('code') or {}).get('code')) or 'NO_CODE'
+              text_hash=hashlib.sha256(str(msg.get('message') or '').encode()).hexdigest()[:16]
+              spans=[s for s in (msg.get('spans') or []) if s.get('is_primary')]
+              if not spans: items.append((code,'NO_SPAN',0,0,text_hash))
+              for s in spans:
+                  path=str(s.get('file_name') or '')
+                  try: resolved=str(pathlib.Path(path).resolve())
+                  except Exception: resolved=path
+                  if resolved.startswith(root+'/'): resolved=resolved[len(root)+1:]
+                  items.append((code,hashlib.sha256(resolved.encode()).hexdigest(),int(s.get('line_start') or 0),int(s.get('column_start') or 0),text_hash))
+          items.sort()
+          print(f'LAS_LINUX_DIFF_{label}_{gate}_RC={rc}')
+          print(f'LAS_LINUX_DIFF_{label}_{gate}_ERROR_COUNT={len(items)}')
+          print(f'LAS_LINUX_DIFF_{label}_{gate}_FINGERPRINT={hashlib.sha256(repr(items).encode()).hexdigest()}')
+          print(f'LAS_LINUX_DIFF_{label}_{gate}_STDERR_SHA256={hashlib.sha256(pathlib.Path(stderr_path).read_bytes()).hexdigest()}')
+          for i,item in enumerate(items,1):
+              code,path_hash,line,column,text_hash=item
+              print(f'LAS_LINUX_DIFF_{label}_{gate}_{i}={code}:{path_hash}:{line}:{column}:{text_hash}')
+          PY
+          }
+
+          diagnose() {
+            label="$1"; revision="$2"
+            git checkout -q --detach "$revision"
+            test -z "$(git status --porcelain --untracked-files=no)"
+
+            fmt="$RUNNER_TEMP/${label}.fmt.private"
+            set +e; cargo +1.98.1 fmt --all -- --check >"$fmt" 2>&1; fmt_rc=$?; set -e
+            classify_fmt "$label" "$fmt" "$fmt_rc"; rm -f "$fmt"
+
+            for gate in CHECK CLIPPY; do
+              json="$RUNNER_TEMP/${label}.${gate}.private.jsonl"; err="$RUNNER_TEMP/${label}.${gate}.private.stderr"
+              set +e
+              if [ "$gate" = CHECK ]; then
+                cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials --message-format=json >"$json" 2>"$err"
+              else
+                cargo +1.98.1 clippy --locked --all-targets --features linux-peer-credentials --message-format=json -- -D warnings >"$json" 2>"$err"
+              fi
+              rc=$?
+              set -e
+              classify_json "$label" "$gate" "$json" "$err" "$rc"
+              rm -f "$json" "$err"
+            done
+          }
+
+          current="$(cat "$RUNNER_TEMP/current-revision")"; parent="$(cat "$RUNNER_TEMP/parent-revision")"
+          echo "::add-mask::$current"; echo "::add-mask::$parent"
+          diagnose PARENT "$parent"
+          diagnose CURRENT "$current"
+          echo "LAS_LINUX_DIFF_RESULT=PASS"
