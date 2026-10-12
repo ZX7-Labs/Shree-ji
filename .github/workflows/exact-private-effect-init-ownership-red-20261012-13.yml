@@ -1,0 +1,97 @@
+name: Exact private effect init ownership RED 20261012-13
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/exact-private-effect-init-ownership-red-20261012-13.yml"
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 5d55dd139fc4e49f808aa52bfc21a87385a793daab007c476fd1986e0d4a0f23
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 4bd3867390e1c605725c5e0b9b9a29343c7a6da78f4f50c335695b5054e882dc
+  EXPECTED_PRIVATE_TREE_PROOF: bbc91a60ca0cd8f61095ddbf5d6a2e8df82b0035691cef2fba9a32eef6f859ca
+  TEST_PATH_HASH: 68356aa9bf4853c5e935ce786e713e77afc66cc3efe24dd890493e7854e29854
+
+jobs:
+  red:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+
+      - name: Recover exact private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$GITHUB_WORKSPACE/target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"; matched_ref="$ref"; private_head="$candidate_sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$private_head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$private_head"
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$private_head"; git checkout -q --detach "$private_head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+
+      - name: Require exact ownership RED
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          json="$RUNNER_TEMP/check.private.jsonl"
+          err="$RUNNER_TEMP/check.private.stderr"
+          set +e
+          cargo +1.98.1 check --locked --tests --features linux-peer-credentials --message-format=json >"$json" 2>"$err"
+          rc=$?
+          set -e
+          test "$rc" -ne 0
+          python3 - "$GITHUB_WORKSPACE/target" "$json" <<'PY'
+          import hashlib,json,os,pathlib,sys
+          root=str(pathlib.Path(sys.argv[1]).resolve())
+          target=os.environ['TEST_PATH_HASH']
+          hits=0
+          for raw in pathlib.Path(sys.argv[2]).read_text(encoding='utf-8',errors='replace').splitlines():
+              try: obj=json.loads(raw)
+              except Exception: continue
+              if obj.get('reason')!='compiler-message': continue
+              msg=obj.get('message') or {}
+              if msg.get('level')!='error': continue
+              if ((msg.get('code') or {}).get('code'))!='E0599': continue
+              for span in msg.get('spans') or []:
+                  if not span.get('is_primary'): continue
+                  path=str(span.get('file_name') or '')
+                  try: resolved=str(pathlib.Path(path).resolve())
+                  except Exception: resolved=path
+                  if resolved.startswith(root+'/'): resolved=resolved[len(root)+1:]
+                  if hashlib.sha256(resolved.encode()).hexdigest()==target:
+                      hits+=1
+          if hits < 2:
+              raise SystemExit(73)
+          print(f'LAS_EFFECT_INIT_OWNERSHIP_RED=PASS;E0599_COUNT={hits}')
+          PY
+          rm -f "$json" "$err"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          test "$(printf '%s' "$(git rev-parse HEAD)" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          test "$(printf '%s' "$(git rev-parse 'HEAD^{tree}')" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
