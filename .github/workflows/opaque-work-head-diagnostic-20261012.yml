@@ -1,0 +1,238 @@
+name: Opaque work-head failure diagnostics
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opaque-work-head-diagnostic-20261012.yml"
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 28a52175bfc55f4f8b2b0f4312cd2616a65a7082555149f4382746e2254e1b26
+  EXPECTED_CURRENT_SNAPSHOT_PROOF: eb11cdcf9b76848f37dd8e2a9355f7761aafeaea4a01f270d1f2c38a15cf6b5b
+  EXPECTED_CURRENT_TREE_PROOF: de1f37ca988fe82c2016c5f3359846cba9e6735ae407b1a1134cfc04a694d2a8
+  EXPECTED_PARENT_SNAPSHOT_PROOF: e57d34b4c1c961d0a348d8acc64be50c63176a504998f521d80822e3ed0a5359
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Install pinned joint toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          test "$(cargo +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+
+          archive="$RUNNER_TEMP/alr.zip"
+          prefix="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --output "$archive" \
+            "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip" \
+            >/dev/null 2>&1
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $archive" \
+            | sha256sum --check --strict >/dev/null
+          mkdir -p "$prefix"
+          unzip -q "$archive" -d "$prefix"
+          export PATH="$prefix/bin:$PATH"
+          alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
+
+          ws="$RUNNER_TEMP/alire-workspace"
+          mkdir -p "$ws"
+          (cd "$ws" && alr -n init --in-place --no-skel --lib las_diag_toolchain >/dev/null)
+          wrapper="$RUNNER_TEMP/gprbuild-wrapper"
+          cat >"$wrapper" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$ws"
+          exec "$prefix/bin/alr" exec -- gprbuild "\$@"
+          EOF
+          chmod +x "$wrapper"
+          echo "GPRBUILD=$wrapper" >> "$GITHUB_ENV"
+          echo "OPAQUE_WORK_DIAG_TOOLCHAIN=PASS"
+
+      - name: Recover exact current and parent
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+
+          root="$GITHUB_WORKSPACE/target"
+          mkdir "$root"
+          cd "$root"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+            fi
+          done <"$refs"
+          rm -f "$refs"
+          test -n "$matched_ref"
+          echo "::add-mask::$matched_ref"
+
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=2 origin "$matched_ref"
+          current="$(git rev-parse FETCH_HEAD)"
+          parent="$(git rev-parse 'FETCH_HEAD^')"
+          current_tree="$(git rev-parse 'FETCH_HEAD^{tree}')"
+          echo "::add-mask::$current"
+          echo "::add-mask::$parent"
+          echo "::add-mask::$current_tree"
+          test "$(printf '%s' "$current" | sha256sum | awk '{print $1}')" = "$EXPECTED_CURRENT_SNAPSHOT_PROOF"
+          test "$(printf '%s' "$current_tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_CURRENT_TREE_PROOF"
+          test "$(printf '%s' "$parent" | sha256sum | awk '{print $1}')" = "$EXPECTED_PARENT_SNAPSHOT_PROOF"
+          test "$(git rev-list --count "$parent..$current")" = "1"
+
+          printf '%s' "$current" >"$RUNNER_TEMP/current-revision"
+          printf '%s' "$parent" >"$RUNNER_TEMP/parent-revision"
+          unset PRIVATE_TOKEN auth matched_ref candidate_sha ref current_tree
+          echo "OPAQUE_WORK_DIAG_RECOVERY=PASS"
+
+      - name: Emit privacy-safe parent/current diagnostic fingerprints
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          current="$(cat "$RUNNER_TEMP/current-revision")"
+          parent="$(cat "$RUNNER_TEMP/parent-revision")"
+          echo "::add-mask::$current"
+          echo "::add-mask::$parent"
+
+          classify_fmt() {
+            label="$1"
+            log="$2"
+            rc="$3"
+            python3 - "$label" "$GITHUB_WORKSPACE/target" "$log" "$rc" <<'PY'
+          import hashlib, pathlib, re, sys
+          label, root, log_path, rc = sys.argv[1:]
+          root = str(pathlib.Path(root).resolve())
+          paths = set()
+          for raw in pathlib.Path(log_path).read_text(encoding='utf-8', errors='replace').splitlines():
+              if not raw.startswith('Diff in '):
+                  continue
+              text = raw[len('Diff in '):]
+              path = text.rsplit(':', 2)[0]
+              try:
+                  resolved = str(pathlib.Path(path).resolve())
+              except Exception:
+                  resolved = path
+              if resolved.startswith(root + '/'):
+                  resolved = resolved[len(root) + 1:]
+              paths.add(hashlib.sha256(resolved.encode()).hexdigest())
+          print(f'OPAQUE_WORK_DIAG_{label}_FORMAT_RC={rc}')
+          print(f'OPAQUE_WORK_DIAG_{label}_FORMAT_PATH_COUNT={len(paths)}')
+          for i, value in enumerate(sorted(paths), 1):
+              print(f'OPAQUE_WORK_DIAG_{label}_FORMAT_PATH_{i}={value}')
+          PY
+          }
+
+          classify_json() {
+            label="$1"
+            gate="$2"
+            json_path="$3"
+            stderr_path="$4"
+            rc="$5"
+            python3 - "$label" "$gate" "$GITHUB_WORKSPACE/target" "$json_path" "$stderr_path" "$rc" <<'PY'
+          import hashlib, json, pathlib, sys
+          label, gate, root, json_path, stderr_path, rc = sys.argv[1:]
+          root = str(pathlib.Path(root).resolve())
+          fingerprints = []
+          with open(json_path, 'r', encoding='utf-8', errors='replace') as fh:
+              for raw in fh:
+                  try:
+                      obj = json.loads(raw)
+                  except Exception:
+                      continue
+                  if obj.get('reason') != 'compiler-message':
+                      continue
+                  msg = obj.get('message') or {}
+                  if msg.get('level') != 'error':
+                      continue
+                  code = ((msg.get('code') or {}).get('code')) or 'NO_CODE'
+                  text_hash = hashlib.sha256(str(msg.get('message') or '').encode()).hexdigest()[:16]
+                  primaries = [s for s in (msg.get('spans') or []) if s.get('is_primary')]
+                  if not primaries:
+                      fingerprints.append((code, 'NO_SPAN', 0, 0, text_hash))
+                  for span in primaries:
+                      path = str(span.get('file_name') or '')
+                      try:
+                          resolved = str(pathlib.Path(path).resolve())
+                      except Exception:
+                          resolved = path
+                      if resolved.startswith(root + '/'):
+                          resolved = resolved[len(root) + 1:]
+                      path_hash = hashlib.sha256(resolved.encode()).hexdigest()
+                      fingerprints.append((code, path_hash, int(span.get('line_start') or 0), int(span.get('column_start') or 0), text_hash))
+          fingerprints.sort()
+          digest = hashlib.sha256(repr(fingerprints).encode()).hexdigest()
+          stderr_hash = hashlib.sha256(pathlib.Path(stderr_path).read_bytes()).hexdigest()
+          print(f'OPAQUE_WORK_DIAG_{label}_{gate}_RC={rc}')
+          print(f'OPAQUE_WORK_DIAG_{label}_{gate}_ERROR_COUNT={len(fingerprints)}')
+          print(f'OPAQUE_WORK_DIAG_{label}_{gate}_FINGERPRINT={digest}')
+          print(f'OPAQUE_WORK_DIAG_{label}_{gate}_STDERR_SHA256={stderr_hash}')
+          for i, item in enumerate(fingerprints, 1):
+              code, path_hash, line, column, text_hash = item
+              print(f'OPAQUE_WORK_DIAG_{label}_{gate}_{i}={code}:{path_hash}:{line}:{column}:{text_hash}')
+          PY
+          }
+
+          diagnose() {
+            label="$1"
+            revision="$2"
+            git checkout -q --detach "$revision"
+            test -z "$(git status --porcelain --untracked-files=no)"
+
+            fmt_log="$RUNNER_TEMP/${label}.fmt.private.log"
+            set +e
+            CARGO_TARGET_DIR="$RUNNER_TEMP/cargo-${label}" cargo +1.98.1 fmt --all -- --check >"$fmt_log" 2>&1
+            fmt_rc=$?
+            set -e
+            classify_fmt "$label" "$fmt_log" "$fmt_rc"
+            rm -f "$fmt_log"
+
+            check_json="$RUNNER_TEMP/${label}.check.private.jsonl"
+            check_err="$RUNNER_TEMP/${label}.check.private.stderr"
+            set +e
+            CARGO_TARGET_DIR="$RUNNER_TEMP/cargo-${label}" GPRBUILD="$GPRBUILD" \
+              cargo +1.98.1 check --locked --all-targets --features root-ffi,linux-peer-credentials \
+              --message-format=json >"$check_json" 2>"$check_err"
+            check_rc=$?
+            set -e
+            classify_json "$label" CHECK "$check_json" "$check_err" "$check_rc"
+            rm -f "$check_json" "$check_err"
+
+            clippy_json="$RUNNER_TEMP/${label}.clippy.private.jsonl"
+            clippy_err="$RUNNER_TEMP/${label}.clippy.private.stderr"
+            set +e
+            CARGO_TARGET_DIR="$RUNNER_TEMP/cargo-${label}" GPRBUILD="$GPRBUILD" \
+              cargo +1.98.1 clippy --locked --all-targets --features root-ffi,linux-peer-credentials \
+              --message-format=json -- -D warnings >"$clippy_json" 2>"$clippy_err"
+            clippy_rc=$?
+            set -e
+            classify_json "$label" CLIPPY "$clippy_json" "$clippy_err" "$clippy_rc"
+            rm -f "$clippy_json" "$clippy_err"
+
+            test -z "$(git status --porcelain --untracked-files=no)"
+          }
+
+          diagnose PARENT "$parent"
+          diagnose CURRENT "$current"
+          echo "OPAQUE_WORK_DIAG_RESULT=PASS"
