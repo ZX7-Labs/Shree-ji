@@ -7,7 +7,7 @@ on:
       - ".github/workflows/exact-private-format-metadata-20261013-17.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   TARGET_REF_HASH: 848c0f95eaf6476c9dbfad7b9702a9409ff930d3e512c3f9ce99f0e4011d3764
@@ -19,6 +19,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      - name: Checkout public verifier shell
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: Install exact Rust formatter
         shell: bash
         run: |
@@ -37,7 +42,7 @@ jobs:
           test -n "$PRIVATE_TOKEN"
           echo "::add-mask::$PRIVATE_REPOSITORY"
           echo "::add-mask::$PRIVATE_TOKEN"
-          root="$GITHUB_WORKSPACE/target"
+          root="$RUNNER_TEMP/private-target"
           mkdir "$root"
           cd "$root"
           git init -q
@@ -68,19 +73,45 @@ jobs:
           echo "::add-mask::$tree"
           test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
 
-      - name: Emit source-free formatter metadata
+      - name: Build source-free formatter report
         shell: bash
         run: |
           set -euo pipefail
-          cd "$GITHUB_WORKSPACE/target"
+          private="$RUNNER_TEMP/private-target"
+          report="$GITHUB_WORKSPACE/exact-private-format-metadata-20261013-17.txt"
+          cd "$private"
           cargo +1.98.1 fmt --all
-          echo "LAS_FMT_CHANGED_FILES_BEGIN"
-          git diff --name-only
-          echo "LAS_FMT_CHANGED_FILES_END"
-          echo "LAS_FMT_NUMSTAT_BEGIN"
-          git diff --numstat
-          echo "LAS_FMT_NUMSTAT_END"
-          echo "LAS_FMT_HUNKS_BEGIN"
-          git diff --unified=0 --no-ext-diff | sed -n 's/^@@ \([^@]*\) @@.*/@@ \1 @@/p'
-          echo "LAS_FMT_HUNKS_END"
-          test -n "$(git diff --name-only)"
+          changed="$(git diff --name-only)"
+          test -n "$changed"
+          {
+            echo "FORMATTER=rustfmt-1.98.1"
+            echo "PRIVATE_HEAD_SHA256=$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+            echo "PRIVATE_TREE_SHA256=$EXPECTED_PRIVATE_TREE_PROOF"
+            echo "CHANGED_FILE_COUNT=$(printf '%s\n' "$changed" | sed '/^$/d' | wc -l | tr -d ' ')"
+            while IFS= read -r file; do
+              test -n "$file" || continue
+              echo "FILE=$file"
+              echo "PATH_SHA256=$(printf '%s' "$file" | sha256sum | awk '{print $1}')"
+              echo "BEFORE_SHA256=$(git show HEAD:"$file" | sha256sum | awk '{print $1}')"
+              echo "AFTER_SHA256=$(sha256sum "$file" | awk '{print $1}')"
+              git diff --numstat -- "$file" | awk '{print "NUMSTAT_ADDED=" $1 " NUMSTAT_DELETED=" $2}'
+              git diff --unified=0 --no-ext-diff -- "$file" | sed -n 's/^@@ \([^@]*\) @@.*/HUNK=@@ \1 @@/p'
+            done <<<"$changed"
+          } >"$report"
+          grep -q '^CHANGED_FILE_COUNT=' "$report"
+          if grep -Eq '^[+ -]{3}|^@@|^[+-][^+-]' "$report"; then
+            echo "unexpected patch content in source-free report" >&2
+            exit 1
+          fi
+
+      - name: Publish source-free formatter report
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add exact-private-format-metadata-20261013-17.txt
+          git diff --cached --quiet && exit 0
+          git commit -m "Publish source-free exact rustfmt metadata"
+          git push origin HEAD:main
