@@ -26,7 +26,9 @@ jobs:
           set -euo pipefail
           rustup toolchain install 1.98.1 --profile minimal >/dev/null
           rustup component add --toolchain 1.98.1 rustfmt >/dev/null
-          test "$(rustfmt +1.98.1 --version | awk '{print $2}')" = "1.8.0-stable"
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          test "$(cargo +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          rustfmt +1.98.1 --version
           echo "LAS_EXACT_RUSTFMT_TOOLCHAIN=PASS"
 
       - name: Recover exact private revision opaquely
