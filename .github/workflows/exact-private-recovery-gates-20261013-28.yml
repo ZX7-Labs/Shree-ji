@@ -1,0 +1,110 @@
+name: Exact private recovery gates 20261013-28
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/exact-private-recovery-gates-20261013-28.yml"
+
+permissions:
+  contents: write
+
+env:
+  TARGET_REF_HASH: 848c0f95eaf6476c9dbfad7b9702a9409ff930d3e512c3f9ce99f0e4011d3764
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 18e2a649bd3ef1d2f6787fc0911d2fa845405e4cdffd0a82867b35b17271d27c
+  EXPECTED_PRIVATE_TREE_PROOF: 0b7876300f80b58d147946360bb4f9c1e57cdbe648c24d92cae431398283bdbd
+  REPORT_PATH: exact-private-recovery-gates-20261013-28.txt
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+
+      - name: Recover exact private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"; matched_ref="$ref"; private_head="$candidate_sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$private_head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$private_head"
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          git checkout -q --detach "$private_head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+
+      - name: Run exact gates and emit source-free status
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          report="$RUNNER_TEMP/$REPORT_PATH"
+          : >"$report"
+          echo "RUSTC=1.98.1" >>"$report"
+          echo "PRIVATE_HEAD_SHA256=$EXPECTED_PRIVATE_SNAPSHOT_PROOF" >>"$report"
+          echo "PRIVATE_TREE_SHA256=$EXPECTED_PRIVATE_TREE_PROOF" >>"$report"
+          overall=0
+          run_gate() {
+            label="$1"; shift
+            log="$RUNNER_TEMP/${label}.log"
+            set +e
+            "$@" >"$log" 2>&1
+            rc=$?
+            set -e
+            echo "${label}_STATUS=$rc" >>"$report"
+            echo "${label}_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')" >>"$report"
+            echo "${label}_LOG_BYTES=$(wc -c <"$log" | tr -d ' ')" >>"$report"
+            if [ "$rc" -ne 0 ]; then overall=1; fi
+            rm -f "$log"
+          }
+          run_gate FMT cargo +1.98.1 fmt --all -- --check
+          run_gate CHECK_LINUX cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials
+          run_gate CLIPPY_LINUX cargo +1.98.1 clippy --locked --all-targets --features linux-peer-credentials -- -D warnings
+          run_gate TEST_LINUX cargo +1.98.1 test --locked --all-targets --features linux-peer-credentials
+          run_gate TEST_DEFAULT cargo +1.98.1 test --locked --all-targets
+          echo "OVERALL_STATUS=$overall" >>"$report"
+
+      - name: Publish source-free gate report atomically
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/$REPORT_PATH"
+          content="$(base64 -w0 "$report")"
+          payload="$(CONTENT="$content" python3 -c 'import json,os; print(json.dumps({"message":"Publish source-free exact recovery gate metadata 20261013-28","content":os.environ["CONTENT"],"branch":"main"}))')"
+          curl --fail-with-body -sS -X PUT \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/${REPORT_PATH}" \
+            -d "$payload" >/dev/null
+
+      - name: Enforce exact gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q '^OVERALL_STATUS=0$' "$RUNNER_TEMP/$REPORT_PATH"
