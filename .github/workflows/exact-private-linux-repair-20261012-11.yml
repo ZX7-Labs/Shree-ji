@@ -1,0 +1,150 @@
+name: Exact private Linux repair 20261012-11
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/exact-private-linux-repair-20261012-11.yml"
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 5d55dd139fc4e49f808aa52bfc21a87385a793daab007c476fd1986e0d4a0f23
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: e0c5aa9bad8a0ea46bcdc3d2c9f265386c9802da9e77ee45c3cb0ed4a4848b39
+  EXPECTED_PRIVATE_TREE_PROOF: 85b96c07ef9320a45802496fbace4d16f9c4a5d99986610fadf2371ce3cc4524
+  TEST_PATH_HASH: 68356aa9bf4853c5e935ce786e713e77afc66cc3efe24dd890493e7854e29854
+  DEPLOYMENT_PATH_HASH: cb2d4fc3cf898afd802ad59f0f6ebd26cee8e662e8496fee3919df2e77dc75ff
+  COMPLEX_FUNCTION_LINE_HASH: a3c3bf47b6441f4b981a0f6e252d857e8d90cbb72a49aece82282f20d301fe9b
+
+jobs:
+  repair-and-verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          test "$(cargo +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+
+      - name: Recover exact private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"; matched_ref="$ref"; private_head="$candidate_sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$private_head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$private_head"
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$private_head"; git checkout -q --detach "$private_head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+
+      - name: Apply bounded lint repair and exact formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/target"
+          python3 - <<'PY'
+          import hashlib, os, pathlib, subprocess
+          tracked=[p.decode() for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if p]
+          wanted={os.environ['TEST_PATH_HASH'],os.environ['DEPLOYMENT_PATH_HASH']}
+          found={hashlib.sha256(p.encode()).hexdigest():p for p in tracked if hashlib.sha256(p.encode()).hexdigest() in wanted}
+          if set(found)!=wanted: raise SystemExit(70)
+          test_path=pathlib.Path(found[os.environ['TEST_PATH_HASH']])
+          lines=test_path.read_text(encoding='utf-8').splitlines(keepends=True)
+          matches=[]
+          for i,line in enumerate(lines):
+              bare=line[:-1] if line.endswith('\n') else line
+              if hashlib.sha256(bare.encode()).hexdigest()==os.environ['COMPLEX_FUNCTION_LINE_HASH']:
+                  matches.append(i)
+          if len(matches)!=1: raise SystemExit(71)
+          i=matches[0]
+          annotation=[
+              '#[expect(\n',
+              '    clippy::type_complexity,\n',
+              '    reason = "explicit production composition type keeps this regression bound to the real owner graph"\n',
+              ')]\n',
+          ]
+          lines[i:i]=annotation
+          test_path.write_text(''.join(lines),encoding='utf-8')
+          PY
+          cargo +1.98.1 fmt --all
+          python3 - <<'PY'
+          import hashlib,os,subprocess
+          paths=[p.decode() for p in subprocess.check_output(['git','diff','--name-only','-z']).split(b'\0') if p]
+          got={hashlib.sha256(p.encode()).hexdigest() for p in paths}
+          exp={os.environ['TEST_PATH_HASH'],os.environ['DEPLOYMENT_PATH_HASH']}
+          if got!=exp: raise SystemExit(72)
+          PY
+
+      - name: Verify repaired exact private tree
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/target"
+          cargo +1.98.1 fmt --all -- --check >/dev/null 2>&1
+          cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials >/dev/null 2>&1
+          cargo +1.98.1 test --locked --all-targets --features linux-peer-credentials -- --test-threads=1 >/dev/null 2>&1
+          cargo +1.98.1 clippy --locked --all-targets --features linux-peer-credentials -- -D warnings >/dev/null 2>&1
+
+      - name: Encrypt exact repaired files for private application
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/target"
+          mapfile -d '' paths < <(git diff --name-only -z)
+          test "${#paths[@]}" -eq 2
+          tar -czf "$RUNNER_TEMP/repaired.private.tar.gz" -- "${paths[@]}"
+          sha256sum "$RUNNER_TEMP/repaired.private.tar.gz" | awk '{print $1}' > "$RUNNER_TEMP/repaired.sha256"
+          cat >"$RUNNER_TEMP/pub.pem" <<'PEM'
+          -----BEGIN PUBLIC KEY-----
+          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAumowkUWFYMVnrVlWw6DN
+          vVoANGz9iUg37C91gU0zUl570HTDC1asVwvTKfMfNc5MasvAFiVvMYHaYvi7uQar
+          ZVuLj9mbmajdZH5rQ5pkei6B2wJKRBL0a9Izkmc2BxQeJMKV+4+83+uX33SbVEGs
+          EsOJJobcS3+B/4xAS0+0jAXajmEKm3h5HtJc63plafrOmJ2EPIscEoaKDExpj/oa
+          8vZ5y8eBkpiREolI/nTTVZImtcRZpIn5xSDLFepl6rFk6baplWKdwgnbzxqMZhKg
+          6ZtMzV6lw2XNf6BsVet3iQU0UiennLkXJ6U1P3K1UFHqNq3J2DfOoFed92GmspvG
+          UhWRUwuwOtjWBbTgoa6D2xim5IZm9PZXR4FEaenTaIXJ13V3yfknSoEoEt7LVdg5
+          iZTLLdalADzRTAGrua240njwKFeHbxB38Id2rJy5Et3F8YZX18k/EYUHuJsBoQ0X
+          1JEW51ugozzb4DrxINzhYF869KKseLs0dRetPOAqbXxpAgMBAAE=
+          -----END PUBLIC KEY-----
+          PEM
+          key="$RUNNER_TEMP/aes.key"
+          openssl rand -hex 32 >"$key"
+          openssl enc -aes-256-cbc -pbkdf2 -iter 250000 -md sha256 -salt -pass file:"$key" -in "$RUNNER_TEMP/repaired.private.tar.gz" -out "$RUNNER_TEMP/repaired.enc"
+          openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/pub.pem" -in "$key" -out "$RUNNER_TEMP/key.enc"
+          rm -f "$RUNNER_TEMP/repaired.private.tar.gz" "$key" "$RUNNER_TEMP/pub.pem"
+
+      - name: Upload encrypted repaired files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: exact-private-linux-repair-20261012-11
+          path: |
+            ${{ runner.temp }}/repaired.enc
+            ${{ runner.temp }}/key.enc
+            ${{ runner.temp }}/repaired.sha256
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
