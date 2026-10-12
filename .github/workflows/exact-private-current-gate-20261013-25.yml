@@ -1,0 +1,241 @@
+name: Exact private current gate 20261013-25
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/exact-private-current-gate-20261013-25.yml"
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 848c0f95eaf6476c9dbfad7b9702a9409ff930d3e512c3f9ce99f0e4011d3764
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 36a771414d86e95757acd2099865754de51e78afbc796eedef938a8247b8bf9c
+  EXPECTED_PRIVATE_TREE_PROOF: 19ffbb379082ca58060d006b74f6167cb5386366ce43a62e85d790f33520467c
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          test "$(cargo +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          echo "LAS_CURRENT_TOOLCHAIN=PASS"
+
+      - name: Recover exact private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"
+          mkdir "$root"
+          cd "$root"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""
+          private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+              private_head="$candidate_sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"
+          test -n "$matched_ref"
+          test -n "$private_head"
+          echo "::add-mask::$matched_ref"
+          echo "::add-mask::$private_head"
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$private_head"
+          git checkout -q --detach "$private_head"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          echo "LAS_CURRENT_EXACT_RECOVERY=PASS"
+
+      - name: Verify lockfile and formatting
+        id: static
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          cp Cargo.lock "$RUNNER_TEMP/Cargo.lock.expected"
+          set +e
+          cargo +1.98.1 generate-lockfile >"$RUNNER_TEMP/lock.log" 2>&1
+          lock_rc=$?
+          if [ "$lock_rc" -eq 0 ]; then cmp --silent Cargo.lock "$RUNNER_TEMP/Cargo.lock.expected"; lock_rc=$?; fi
+          git checkout -q -- Cargo.lock
+          cargo +1.98.1 fmt --all -- --check >"$RUNNER_TEMP/fmt.log" 2>&1
+          fmt_rc=$?
+          set -e
+          echo "LAS_CURRENT_LOCK_RC=$lock_rc"
+          echo "LAS_CURRENT_LOCK_LOG_SHA256=$(sha256sum "$RUNNER_TEMP/lock.log" | awk '{print $1}')"
+          echo "LAS_CURRENT_FMT_RC=$fmt_rc"
+          echo "LAS_CURRENT_FMT_LOG_SHA256=$(sha256sum "$RUNNER_TEMP/fmt.log" | awk '{print $1}')"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          test "$lock_rc" -eq 0
+          test "$fmt_rc" -eq 0
+
+      - name: Compile default and Linux with source-free diagnostics
+        id: compile
+        continue-on-error: true
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          set +e
+          cargo +1.98.1 check --locked --all-targets --message-format=json >"$RUNNER_TEMP/default.jsonl" 2>/dev/null
+          default_rc=$?
+          cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials --message-format=json >"$RUNNER_TEMP/linux.jsonl" 2>/dev/null
+          linux_rc=$?
+          set -e
+          DEFAULT_RC="$default_rc" LINUX_RC="$linux_rc" python3 - <<'PY'
+          import hashlib, json, os
+          def report(label, path, rc):
+              records=[]
+              with open(path, "r", encoding="utf-8", errors="replace") as f:
+                  for raw in f:
+                      try: obj=json.loads(raw)
+                      except Exception: continue
+                      if obj.get("reason") != "compiler-message": continue
+                      msg=obj.get("message") or {}
+                      if msg.get("level") != "error": continue
+                      code=(msg.get("code") or {}).get("code") or "NO_CODE"
+                      message=str(msg.get("message") or "")
+                      mhash=hashlib.sha256(message.encode()).hexdigest()
+                      prim=[s for s in (msg.get("spans") or []) if s.get("is_primary")]
+                      if prim:
+                          for s in prim:
+                              records.append((code,str(s.get("file_name") or "GLOBAL"),int(s.get("line_start") or 0),int(s.get("column_start") or 0),mhash))
+                      else:
+                          records.append((code,"GLOBAL",0,0,mhash))
+              print(f"LAS_CURRENT_{label}_RC={rc}")
+              print(f"LAS_CURRENT_{label}_ERROR_COUNT={len(records)}")
+              for i,(code,file,line,col,mhash) in enumerate(records,1):
+                  print(f"LAS_CURRENT_{label}_ERROR_{i}_CODE={code}")
+                  print(f"LAS_CURRENT_{label}_ERROR_{i}_FILE={file}")
+                  print(f"LAS_CURRENT_{label}_ERROR_{i}_LINE={line}")
+                  print(f"LAS_CURRENT_{label}_ERROR_{i}_COLUMN={col}")
+                  print(f"LAS_CURRENT_{label}_ERROR_{i}_MESSAGE_SHA256={mhash}")
+          report("CHECK_DEFAULT", os.environ["RUNNER_TEMP"]+"/default.jsonl", int(os.environ["DEFAULT_RC"]))
+          report("CHECK_LINUX", os.environ["RUNNER_TEMP"]+"/linux.jsonl", int(os.environ["LINUX_RC"]))
+          PY
+          test "$default_rc" -eq 0
+          test "$linux_rc" -eq 0
+
+      - name: Clippy default and Linux
+        id: clippy
+        if: steps.compile.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          set +e
+          cargo +1.98.1 clippy --locked --all-targets -- -D warnings >"$RUNNER_TEMP/clippy-default.log" 2>&1
+          default_rc=$?
+          cargo +1.98.1 clippy --locked --all-targets --features linux-peer-credentials -- -D warnings >"$RUNNER_TEMP/clippy-linux.log" 2>&1
+          linux_rc=$?
+          set -e
+          echo "LAS_CURRENT_CLIPPY_DEFAULT_RC=$default_rc"
+          echo "LAS_CURRENT_CLIPPY_DEFAULT_LOG_SHA256=$(sha256sum "$RUNNER_TEMP/clippy-default.log" | awk '{print $1}')"
+          echo "LAS_CURRENT_CLIPPY_LINUX_RC=$linux_rc"
+          echo "LAS_CURRENT_CLIPPY_LINUX_LOG_SHA256=$(sha256sum "$RUNNER_TEMP/clippy-linux.log" | awk '{print $1}')"
+          test "$default_rc" -eq 0
+          test "$linux_rc" -eq 0
+
+      - name: Run owner-retention and resumability discriminator suites
+        id: focused
+        if: steps.compile.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          status=0
+          for spec in \
+            'COORDINATOR:effect_fabric::root_supervisor_epoch_coordinator_tests' \
+            'HANDOFF:effect_fabric::root_supervisor_graceful_handoff_tests' \
+            'RESUMABILITY:effect_fabric::root_supervisor_linux_resumability_tests'
+          do
+            label="${spec%%:*}"
+            filter="${spec#*:}"
+            log="$RUNNER_TEMP/${label}.log"
+            set +e
+            cargo +1.98.1 test --locked --features linux-peer-credentials --lib "$filter" -- --test-threads=1 >"$log" 2>&1
+            rc=$?
+            set -e
+            echo "LAS_CURRENT_${label}_RC=$rc"
+            echo "LAS_CURRENT_${label}_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')"
+            if [ "$rc" -ne 0 ]; then status=1; fi
+          done
+          exit "$status"
+
+      - name: Run full deterministic and Linux test matrices
+        id: tests
+        if: steps.compile.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          set +e
+          cargo +1.98.1 test --locked --all-targets -- --test-threads=1 >"$RUNNER_TEMP/test-default.log" 2>&1
+          default_rc=$?
+          cargo +1.98.1 test --locked --all-targets --features linux-peer-credentials -- --test-threads=1 >"$RUNNER_TEMP/test-linux.log" 2>&1
+          linux_rc=$?
+          cargo +1.98.1 test --locked --release --features linux-peer-credentials --lib effect_fabric::root_supervisor_ -- --test-threads=1 >"$RUNNER_TEMP/test-release-supervisor.log" 2>&1
+          release_rc=$?
+          set -e
+          echo "LAS_CURRENT_TEST_DEFAULT_RC=$default_rc"
+          echo "LAS_CURRENT_TEST_DEFAULT_LOG_SHA256=$(sha256sum "$RUNNER_TEMP/test-default.log" | awk '{print $1}')"
+          echo "LAS_CURRENT_TEST_LINUX_RC=$linux_rc"
+          echo "LAS_CURRENT_TEST_LINUX_LOG_SHA256=$(sha256sum "$RUNNER_TEMP/test-linux.log" | awk '{print $1}')"
+          echo "LAS_CURRENT_TEST_RELEASE_SUPERVISOR_RC=$release_rc"
+          echo "LAS_CURRENT_TEST_RELEASE_SUPERVISOR_LOG_SHA256=$(sha256sum "$RUNNER_TEMP/test-release-supervisor.log" | awk '{print $1}')"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          test "$default_rc" -eq 0
+          test "$linux_rc" -eq 0
+          test "$release_rc" -eq 0
+
+      - name: Enforce exact revision gate
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          test "$(printf '%s' "$(git rev-parse HEAD)" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          test "$(printf '%s' "$(git rev-parse 'HEAD^{tree}')" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test "${{ steps.static.outcome }}" = success
+          test "${{ steps.compile.outcome }}" = success
+          test "${{ steps.clippy.outcome }}" = success
+          test "${{ steps.focused.outcome }}" = success
+          test "${{ steps.tests.outcome }}" = success
+          echo "LAS_CURRENT_EXACT_GATE=PASS"
