@@ -1,0 +1,115 @@
+name: Exact private Linux Rust gate 20261012-08
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/exact-private-linux-rust-gate-20261012-08.yml"
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 5d55dd139fc4e49f808aa52bfc21a87385a793daab007c476fd1986e0d4a0f23
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: e0c5aa9bad8a0ea46bcdc3d2c9f265386c9802da9e77ee45c3cb0ed4a4848b39
+  EXPECTED_PRIVATE_TREE_PROOF: 85b96c07ef9320a45802496fbace4d16f9c4a5d99986610fadf2371ce3cc4524
+
+jobs:
+  linux-rust-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          test "$(cargo +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          echo "LAS_EXACT_LINUX_TOOLCHAIN=PASS"
+
+      - name: Recover exact private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+
+          root="$GITHUB_WORKSPACE/target"
+          mkdir "$root"
+          cd "$root"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+
+          matched_ref=""
+          private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+              private_head="$candidate_sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"
+          test -n "$matched_ref"
+          test -n "$private_head"
+          echo "::add-mask::$matched_ref"
+          echo "::add-mask::$private_head"
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$private_head"
+          git checkout -q --detach "$private_head"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          unset PRIVATE_TOKEN auth matched_ref private_head tree candidate_sha ref
+          echo "LAS_EXACT_LINUX_RECOVERY=PASS"
+
+      - name: Run exact Linux Rust gate privately
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+
+          run_private() {
+            label="$1"
+            shift
+            log="$RUNNER_TEMP/${label}.private.log"
+            set +e
+            "$@" >"$log" 2>&1
+            rc=$?
+            set -e
+            digest="$(sha256sum "$log" | awk '{print $1}')"
+            bytes="$(wc -c <"$log" | tr -d ' ')"
+            echo "LAS_EXACT_LINUX_${label}_RC=$rc"
+            echo "LAS_EXACT_LINUX_${label}_LOG_SHA256=$digest"
+            echo "LAS_EXACT_LINUX_${label}_LOG_BYTES=$bytes"
+            rm -f "$log"
+            return "$rc"
+          }
+
+          failed=0
+          run_private FMT cargo +1.98.1 fmt --all -- --check || failed=1
+          run_private CHECK cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials || failed=1
+          run_private TEST cargo +1.98.1 test --locked --all-targets --features linux-peer-credentials || failed=1
+          run_private CLIPPY cargo +1.98.1 clippy --locked --all-targets --features linux-peer-credentials -- -D warnings || failed=1
+          test -z "$(git status --porcelain --untracked-files=no)"
+          if [ "$failed" -ne 0 ]; then
+            echo "LAS_EXACT_LINUX_GATE=FAIL"
+            exit 1
+          fi
+          echo "LAS_EXACT_LINUX_GATE=PASS"
