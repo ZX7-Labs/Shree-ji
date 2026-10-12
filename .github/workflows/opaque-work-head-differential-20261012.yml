@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: opaque-work-head-differential-20261012
+  group: opaque-work-head-differential-20261012-v2
   cancel-in-progress: false
 
 env:
@@ -135,8 +135,8 @@ jobs:
             CARGO_TARGET_DIR="$RUNNER_TEMP/cargo-${label}" "$@" >"$log" 2>&1
             rc=$?
             set -e
-            printf 'OPAQUE_DIFF_%s_%s_LOG_SHA256=%s\n' "$label" "$gate" "$(sha256sum "$log" | awk '{print $1}')"
-            printf 'OPAQUE_DIFF_%s_%s_RC=%s\n' "$label" "$gate" "$rc"
+            printf 'OPAQUE_DIFF_%s_%s_LOG_SHA256=%s\n' "$label" "$gate" "$(sha256sum "$log" | awk '{print $1}')" >&2
+            printf 'OPAQUE_DIFF_%s_%s_RC=%s\n' "$label" "$gate" "$rc" >&2
             rm -f "$log"
             printf '%s' "$rc"
           }
