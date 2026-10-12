@@ -1,0 +1,224 @@
+name: Exact private borrow repair 20261013-26
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/exact-private-borrow-repair-20261013-26.yml"
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 848c0f95eaf6476c9dbfad7b9702a9409ff930d3e512c3f9ce99f0e4011d3764
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 36a771414d86e95757acd2099865754de51e78afbc796eedef938a8247b8bf9c
+  EXPECTED_PRIVATE_TREE_PROOF: 19ffbb379082ca58060d006b74f6167cb5386366ce43a62e85d790f33520467c
+  TARGET_PATH_HASH_A: c2da4b5b4e71d44f3366c03140042ae1ee0979f3ff6cf311f6461208eeddfb56
+  TARGET_PATH_HASH_B: b32999897b216fc2ba8bb4b71bbde41d899b23e36b6ba575f88023e073eebfcd
+  TARGET_LINE_HASH: 7268ded777ecff12cd925dd6bfe687cb2371bc81dd448f99db222e5c81bb216c
+  ERR_LINE_HASH: b7ccbb417ba9a58e2e0ed7ac8e7b18d27ced5fa002b8d6e5ceacab30a7a94707
+  RECEIPT_LINE_HASH: 8bb3c88a6780831505d95969ad626c1badc5ef336b44b1318e85f2b7e0b4987f
+  DROP_LINE_HASH: 14d72155fb8924d62670a497cfb51d2ac90a73fc8570ff4e7236c62ec0c17d46
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          test "$(cargo +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+
+      - name: Checkout exact hidden private revision
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_WRITE_TOKEN: ${{ secrets.LAS_PRIVATE_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_WRITE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_WRITE_TOKEN"
+          root="$RUNNER_TEMP/private-target"
+          mkdir "$root"
+          cd "$root"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_WRITE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""
+          private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+              private_head="$candidate_sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"
+          test -n "$matched_ref"
+          test -n "$private_head"
+          echo "::add-mask::$matched_ref"
+          echo "::add-mask::$private_head"
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$private_head"
+          git checkout -q -B repair-target "$private_head"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          printf '%s' "$matched_ref" >"$RUNNER_TEMP/private-ref"
+          printf '%s' "$private_head" >"$RUNNER_TEMP/private-start-sha"
+          printf '%s' "$auth" >"$RUNNER_TEMP/private-auth"
+          chmod 600 "$RUNNER_TEMP/private-ref" "$RUNNER_TEMP/private-start-sha" "$RUNNER_TEMP/private-auth"
+          echo "LAS_BORROW26_EXACT_RECOVERY=PASS"
+
+      - name: Apply bounded borrow-lifetime repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          python3 - <<'PY'
+          import hashlib, os, pathlib, subprocess
+          H=lambda s: hashlib.sha256(s.encode()).hexdigest()
+          tracked=[p.decode() for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0') if p]
+          wanted={os.environ['TARGET_PATH_HASH_A'],os.environ['TARGET_PATH_HASH_B']}
+          found={H(p):p for p in tracked if H(p) in wanted}
+          if set(found)!=wanted: raise SystemExit(70)
+
+          def patch(path_hash,count):
+              p=pathlib.Path(found[path_hash])
+              lines=p.read_text(encoding='utf-8').splitlines(keepends=True)
+              norm=lambda x: x.strip()
+              starts=[i for i,x in enumerate(lines) if H(norm(x))==os.environ['TARGET_LINE_HASH']]
+              if len(starts)!=count: raise SystemExit(71)
+              shift=0
+              for original in starts:
+                  i=original+shift
+                  indent=lines[i][:len(lines[i])-len(lines[i].lstrip())]
+                  depth=0; end=None
+                  for j in range(i,len(lines)):
+                      depth+=lines[j].count('{')-lines[j].count('}')
+                      if j==i and depth!=1: raise SystemExit(72)
+                      if depth==0: end=j; break
+                  if end is None or end+2>=len(lines): raise SystemExit(73)
+                  if H(norm(lines[end+1]))!=os.environ['RECEIPT_LINE_HASH'] or H(norm(lines[end+2]))!=os.environ['DROP_LINE_HASH']:
+                      raise SystemExit(74)
+                  errs=[j for j in range(i+1,end) if H(norm(lines[j]))==os.environ['ERR_LINE_HASH']]
+                  if len(errs)!=1: raise SystemExit(75)
+                  es=errs[0]; depth=0; ee=None
+                  for j in range(es,end):
+                      depth+=lines[j].count('{')-lines[j].count('}')
+                      if j==es and depth!=1: raise SystemExit(76)
+                      if depth==0: ee=j; break
+                  if ee is None: raise SystemExit(77)
+                  inner=lines[es+1:ee]
+                  repl=[
+                      f"{indent}let persist_result = match journal.persist(body) {{\n",
+                      f"{indent}    Ok(receipt) => Ok(receipt.is_current(&body)),\n",
+                      f"{indent}    Err(error) => Err(error),\n",
+                      f"{indent}}};\n",
+                      f"{indent}let receipt_current = match persist_result {{\n",
+                      f"{indent}    Ok(receipt_current) => receipt_current,\n",
+                      f"{indent}    Err(error) => {{\n",
+                      *inner,
+                      f"{indent}    }}\n",
+                      f"{indent}}};\n",
+                  ]
+                  old=end+3-i
+                  lines[i:end+3]=repl
+                  shift+=len(repl)-old
+              p.write_text(''.join(lines),encoding='utf-8')
+              if any(H(norm(x))==os.environ['TARGET_LINE_HASH'] for x in lines): raise SystemExit(78)
+
+          patch(os.environ['TARGET_PATH_HASH_A'],2)
+          patch(os.environ['TARGET_PATH_HASH_B'],1)
+          PY
+          cargo +1.98.1 fmt --all
+          cargo +1.98.1 fmt --all -- --check
+          git diff --check
+          python3 - <<'PY'
+          import hashlib,os,subprocess
+          paths=[p.decode() for p in subprocess.check_output(['git','diff','--name-only','-z']).split(b'\0') if p]
+          got={hashlib.sha256(p.encode()).hexdigest() for p in paths}
+          exp={os.environ['TARGET_PATH_HASH_A'],os.environ['TARGET_PATH_HASH_B']}
+          for i,p in enumerate(paths,1):
+              print(f"LAS_BORROW26_CHANGED_{i}_PATH_SHA256={hashlib.sha256(p.encode()).hexdigest()}")
+          if got!=exp: raise SystemExit(79)
+          print("LAS_BORROW26_DIFF_SHA256="+hashlib.sha256(subprocess.check_output(['git','diff','--binary'])).hexdigest())
+          PY
+
+      - name: Verify compile and lint matrices
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          cargo +1.98.1 check --locked --all-targets >/dev/null 2>&1
+          cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials >/dev/null 2>&1
+          cargo +1.98.1 clippy --locked --all-targets -- -D warnings >/dev/null 2>&1
+          cargo +1.98.1 clippy --locked --all-targets --features linux-peer-credentials -- -D warnings >/dev/null 2>&1
+          echo "LAS_BORROW26_COMPILE_LINT=PASS"
+
+      - name: Verify focused owner-retention and resumability suites
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          cargo +1.98.1 test --locked --features linux-peer-credentials --lib effect_fabric::root_supervisor_epoch_coordinator_tests -- --test-threads=1 >/dev/null 2>&1
+          cargo +1.98.1 test --locked --features linux-peer-credentials --lib effect_fabric::root_supervisor_graceful_handoff_tests -- --test-threads=1 >/dev/null 2>&1
+          cargo +1.98.1 test --locked --features linux-peer-credentials --lib effect_fabric::root_supervisor_linux_resumability_tests -- --test-threads=1 >/dev/null 2>&1
+          echo "LAS_BORROW26_FOCUSED=PASS"
+
+      - name: Verify full test matrices
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          cargo +1.98.1 test --locked --all-targets -- --test-threads=1 >/dev/null 2>&1
+          cargo +1.98.1 test --locked --all-targets --features linux-peer-credentials -- --test-threads=1 >/dev/null 2>&1
+          cargo +1.98.1 test --locked --release --features linux-peer-credentials --lib effect_fabric::root_supervisor_ -- --test-threads=1 >/dev/null 2>&1
+          test -z "$(git status --porcelain --untracked-files=no | grep -v '^ M ' || true)"
+          echo "LAS_BORROW26_TESTS=PASS"
+
+      - name: Commit and fast-forward exact private ref
+        shell: bash
+        env:
+          PRIVATE_WRITE_TOKEN: ${{ secrets.LAS_PRIVATE_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          matched_ref="$(cat "$RUNNER_TEMP/private-ref")"
+          start_sha="$(cat "$RUNNER_TEMP/private-start-sha")"
+          auth="$(cat "$RUNNER_TEMP/private-auth")"
+          echo "::add-mask::$PRIVATE_WRITE_TOKEN"
+          echo "::add-mask::$auth"
+          echo "::add-mask::$start_sha"
+          remote_sha="$(git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote origin "$matched_ref" | awk '{print $1}')"
+          echo "::add-mask::$remote_sha"
+          test "$remote_sha" = "$start_sha"
+          git config user.name "LAS Exact Repair"
+          git config user.email "las-exact-repair@users.noreply.github.com"
+          git add -- src/effect_fabric/root_control_restart_fence.rs src/effect_fabric/root_control_executor.rs
+          test -n "$(git diff --cached --name-only)"
+          test "$(git diff --cached --name-only | wc -l | tr -d ' ')" -eq 2
+          git commit -q -m "Repair retained journal borrow lifetimes"
+          new_sha="$(git rev-parse HEAD)"
+          echo "::add-mask::$new_sha"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" push -q origin HEAD:"$matched_ref"
+          echo "LAS_BORROW26_PUSH=PASS"
+          echo "LAS_BORROW26_COMMIT_PROOF=$(printf '%s' "$new_sha" | sha256sum | awk '{print $1}')"
