@@ -1,0 +1,109 @@
+name: Exact private rustfmt artifact 20261012-05
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/exact-private-rustfmt-artifact-20261012-05.yml"
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 28a52175bfc55f4f8b2b0f4312cd2616a65a7082555149f4382746e2254e1b26
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 939ebf3cf76e2c895a1238137d5ce55cb0c55c815064e971c80097ce6c5354a0
+  EXPECTED_PRIVATE_TREE_PROOF: be46eacf2b1b0a008f82cf959c6b786177a74976f58288b627b9f3a774846267
+  TARGET_PATH_HASH: 9c72a54eb7a24207339c846599f246330bd7aaa7c49fb06f969561eb52845075
+
+jobs:
+  format:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Install exact formatter
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt >/dev/null
+          test "$(rustfmt +1.98.1 --version | awk '{print $2}')" = "1.8.0-stable"
+          echo "LAS_EXACT_RUSTFMT_TOOLCHAIN=PASS"
+
+      - name: Recover exact private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"; matched_ref="$ref"; private_head="$candidate_sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$private_head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$private_head"
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$private_head"; git checkout -q --detach "$private_head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          echo "LAS_EXACT_RUSTFMT_RECOVERY=PASS"
+
+      - name: Format exact hashed target and encrypt bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/target"
+          target=""
+          while IFS= read -r -d '' candidate; do
+            if [[ "$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')" = "$TARGET_PATH_HASH" ]]; then
+              test -z "$target"; target="$candidate"
+            fi
+          done < <(git ls-files -z)
+          test -n "$target"
+          echo "::add-mask::$target"
+          rustfmt +1.98.1 --edition 2024 "$target"
+          test "$(git diff --name-only | wc -l | tr -d ' ')" = "1"
+          test "$(printf '%s' "$(git diff --name-only)" | sha256sum | awk '{print $1}')" = "$TARGET_PATH_HASH"
+          cp "$target" "$RUNNER_TEMP/formatted.private"
+          sha256sum "$RUNNER_TEMP/formatted.private" | awk '{print $1}' > "$RUNNER_TEMP/formatted.sha256"
+
+          cat >"$RUNNER_TEMP/pub.pem" <<'PEM'
+          -----BEGIN PUBLIC KEY-----
+          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAsuzeyyD2B8Uszoo1IZLb
+          /r3F4iO4TwfEhMEDNwBt+EPvYWBpuLOuShkrxt6DBurvSc6Ez6m0N5/yAyUB9reO
+          4lPz109u4i104iWmBmYWudnE2vFZF1imG1zMB6F7MuAPEcQ4QZD1A5HNnv0GkuJE
+          HUfrMP8oZdnm6vBWJIo7VhmqkStlVm6vhrcSMmNUugvWbW3CvbYIXQEmPKMNSZ/t
+          PfYzmcUwOe1Wiee3ESSR0frSgcSDW0x2bCboDFHBcAZtuxidGmO68qAynbrNOmLn
+          YtUgaTPKASjuminzNR99IR9g/6Ld6ilwTXYNddiLpG+sdu8+e/mY/QjZ0ISmCp52
+          qjY0L40z8P8196ezxVd8Kta/3kfNWAPRpS74VhJQhESXTdahQwMPc6dk3jdpOCC4
+          3WYdG64tevE9i5Q39p8S2vfpzePsEC9WaPUFT70nTX09eYfQTzuUqekT04aVkdAn
+          K++9qdo2Mkm7uPjqA54VzQi3V8i9UYHrCcR56RWgSF21AgMBAAE=
+          -----END PUBLIC KEY-----
+          PEM
+          key="$RUNNER_TEMP/aes.key"; openssl rand -hex 32 >"$key"
+          openssl enc -aes-256-cbc -pbkdf2 -iter 250000 -md sha256 -salt -pass file:"$key" -in "$RUNNER_TEMP/formatted.private" -out "$RUNNER_TEMP/formatted.enc"
+          openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/pub.pem" -in "$key" -out "$RUNNER_TEMP/key.enc"
+          rm -f "$RUNNER_TEMP/formatted.private" "$key" "$RUNNER_TEMP/pub.pem"
+          echo "LAS_EXACT_RUSTFMT_ARTIFACT=PASS"
+
+      - name: Upload encrypted formatted bytes
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: exact-private-rustfmt-20261012-05
+          path: |
+            ${{ runner.temp }}/formatted.enc
+            ${{ runner.temp }}/key.enc
+            ${{ runner.temp }}/formatted.sha256
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
