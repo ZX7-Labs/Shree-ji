@@ -120,18 +120,21 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/target"
-          cargo +1.98.1 test --locked --features linux-peer-credentials --lib \
-            effect_fabric::root_supervisor_epoch_coordinator_tests::active_epoch_denies_direct_generation_advance_without_any_state_transition \
-            -- --exact --test-threads=1 >/dev/null 2>&1
-          cargo +1.98.1 test --locked --features linux-peer-credentials --lib \
-            effect_fabric::root_supervisor_epoch_coordinator_tests::applied_root_control_recovery_failure_retains_exact_continuation_without_reentering_root \
-            -- --exact --test-threads=1 >/dev/null 2>&1
-          cargo +1.98.1 test --locked --features linux-peer-credentials --lib \
-            effect_fabric::root_supervisor_epoch_coordinator_tests::applied_root_activation_write_failure_becomes_nonresumable_without_root_reentry \
-            -- --exact --test-threads=1 >/dev/null 2>&1
-          cargo +1.98.1 test --locked --features linux-peer-credentials --lib \
-            effect_fabric::root_supervisor_epoch_pre_root_ownership_tests::fresh_bootstrap_manifest_failure_retains_all_pre_root_owners \
-            -- --exact --test-threads=1 >/dev/null 2>&1
+          run_exact() {
+            test_name="$1"
+            listing="$(cargo +1.98.1 test --locked --features linux-peer-credentials --lib "$test_name" -- --exact --list 2>/dev/null)"
+            printf '%s\n' "$listing" | grep -Fqx "$test_name: test"
+            cargo +1.98.1 test --locked --features linux-peer-credentials --lib "$test_name" \
+              -- --exact --test-threads=1 >/dev/null 2>&1
+          }
+          run_exact effect_fabric::root_supervisor_epoch_coordinator_tests::active_epoch_denies_direct_generation_advance_without_any_state_transition
+          run_exact effect_fabric::root_supervisor_epoch_coordinator_tests::applied_root_control_recovery_failure_retains_exact_continuation_without_reentry
+          run_exact effect_fabric::root_supervisor_epoch_coordinator_tests::applied_root_activation_write_failure_becomes_nonresumable_without_root_reentry
+          run_exact effect_fabric::root_supervisor_epoch_pre_root_ownership_tests::manifest_bootstrap_write_failure_retains_every_pre_root_owner_without_root_entry
+          run_exact effect_fabric::root_supervisor_epoch_pre_root_ownership_tests::control_bootstrap_write_failure_retains_manifest_and_all_remaining_owners_pre_root
+          run_exact effect_fabric::root_supervisor_epoch_pre_root_ownership_tests::guarded_bootstrap_write_failure_retains_prepared_control_and_every_owner_pre_root
+          run_exact effect_fabric::root_supervisor_graceful_handoff::tests::pre_root_guarded_projection_failure_retains_every_owner_without_root_reentry
+          run_exact effect_fabric::root_supervisor_graceful_handoff::tests::post_root_graceful_failure_resumes_without_second_rotation_crossing
           echo "LAS_OWNERSHIP_DISCRIMINATORS=PASS"
 
       - name: Run deterministic and adversarial regression suites
