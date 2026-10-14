@@ -79,6 +79,7 @@ jobs:
             git show "${source_sha}:${file}" > "$file"
           done
           python3 tools/apply_current_production_assembly_rebase_20261014.py
+          git show "${source_sha}:src/effect_fabric/root_ffi.rs" > src/effect_fabric/root_ffi.rs
           rm tools/apply_current_production_assembly_rebase_20261014.py
           git diff --check
           echo "LAS_PRODUCTION_REBASE_PATCH=PASS"
