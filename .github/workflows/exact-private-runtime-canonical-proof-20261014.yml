@@ -25,7 +25,7 @@ jobs:
         shell: bash
         env:
           PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
-          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_WRITE_TOKEN }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
         run: |
           set -euo pipefail
           test -n "$PRIVATE_REPOSITORY" && test -n "$PRIVATE_TOKEN"
