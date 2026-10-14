@@ -1,4 +1,4 @@
-name: Private current Root FFI minimal static classifier
+name: Private current Root FFI dead-code line classifier
 
 on:
   push:
@@ -89,9 +89,9 @@ jobs:
           test "$(git rev-parse FETCH_HEAD)" = "$matched_sha"
           git checkout -q --detach "$matched_sha"
           test -z "$(git status --porcelain --untracked-files=no)"
-          echo "LAS_ROOT_FFI_MINIMAL_CLASSIFIER_SNAPSHOT=PASS"
+          echo "LAS_ROOT_FFI_LINE_CLASSIFIER_SNAPSHOT=PASS"
 
-      - name: Apply minimal cfg repair ephemerally
+      - name: Apply proven dispatch cfg repair ephemerally
         shell: bash
         run: |
           set -euo pipefail
@@ -108,63 +108,43 @@ jobs:
           ))]'''
           dispatch = Path("src/effect_fabric/dispatch_commit.rs")
           text = dispatch.read_text(encoding="utf-8")
-          for old, new in [
+          replacements = [
               ("impl RootGrantLivenessBinding {\n    fn new(", "impl RootGrantLivenessBinding {\n" + joint + "\n    fn new("),
               ("\n    fn build(\n", "\n" + joint + "\n    fn build(\n"),
               ('    #[cfg(feature = "root-ffi")]\n    #[expect(', joint + "\n    #[expect("),
-          ]:
+          ]
+          for old, new in replacements:
               if text.count(old) != 1:
                   raise SystemExit("dispatch overlay anchor mismatch")
               text = text.replace(old, new, 1)
           dispatch.write_text(text, encoding="utf-8")
-
-          ffi = Path("src/effect_fabric/root_ffi.rs")
-          text = ffi.read_text(encoding="utf-8")
-          old_cfg = '    #[cfg(any(test, all(feature = "linux-peer-credentials", target_os = "linux")))]\n'
-          new_cfg = '    #[cfg(all(feature = "linux-peer-credentials", target_os = "linux"))]\n'
-          for symbol in ("las_root_install_delegation_parent", "las_root_delegate_channel_grant"):
-              old = old_cfg + f"    fn {symbol}("
-              new = new_cfg + f"    fn {symbol}("
-              if text.count(old) != 1:
-                  raise SystemExit(f"delegation extern cfg anchor mismatch: {symbol}")
-              text = text.replace(old, new, 1)
-          ffi.write_text(text, encoding="utf-8")
           PY
           cargo +1.98.1 fmt --all
           cargo +1.98.1 fmt --all -- --check
           git diff --check
-          echo "LAS_ROOT_FFI_MINIMAL_CLASSIFIER_OVERLAY=PASS"
+          test "$(git diff --name-only)" = "src/effect_fabric/dispatch_commit.rs"
+          echo "LAS_ROOT_FFI_DISPATCH_OVERLAY=PASS"
 
-      - name: Classify minimal post-overlay strict check and Clippy
+      - name: Hash exact remaining strict-error lines
         shell: bash
         run: |
           set -euo pipefail
           cd target
-          classify() {
-            label="$1"
-            mode="$2"
-            json="$RUNNER_TEMP/${label}.jsonl"
-            stderr="$RUNNER_TEMP/${label}.stderr"
-            set +e
-            if [[ "$mode" = check ]]; then
-              env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" \
-                cargo +1.98.1 check --locked --features root-ffi --all-targets --message-format=json \
-                >"$json" 2>"$stderr"
-            else
-              GPRBUILD="$GPRBUILD" \
-                cargo +1.98.1 clippy --locked --features root-ffi --all-targets --message-format=json -- -D warnings \
-                >"$json" 2>"$stderr"
-            fi
-            rc=$?
-            set -e
-            echo "LAS_ROOT_FFI_${label}_RC=$rc"
-            python3 - "$label" "$json" <<'PY'
+          json="$RUNNER_TEMP/root-ffi-line-classifier.jsonl"
+          stderr="$RUNNER_TEMP/root-ffi-line-classifier.stderr"
+          set +e
+          env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" \
+            cargo +1.98.1 check --locked --features root-ffi --all-targets --message-format=json \
+            >"$json" 2>"$stderr"
+          rc=$?
+          set -e
+          test "$rc" -ne 0
+          python3 - "$json" <<'PY'
           import collections, hashlib, json, sys
-          label, path = sys.argv[1], sys.argv[2]
           codes = collections.Counter()
-          owners = collections.Counter()
+          line_hashes = collections.Counter()
           total = 0
-          for raw in open(path, encoding="utf-8", errors="replace"):
+          for raw in open(sys.argv[1], encoding="utf-8", errors="replace"):
               try:
                   obj = json.loads(raw)
               except Exception:
@@ -176,18 +156,21 @@ jobs:
                   continue
               code = (msg.get("code") or {}).get("code") or "NO_CODE"
               primary = [s for s in (msg.get("spans") or []) if s.get("is_primary")]
-              owner = str(primary[0].get("file_name") or "NO_SPAN") if primary else "NO_SPAN"
+              if len(primary) != 1:
+                  raise SystemExit("unexpected primary-span cardinality")
+              line = int(primary[0].get("line_start") or 0)
+              if line <= 0:
+                  raise SystemExit("missing primary source line")
               codes[code] += 1
-              owners[(code, hashlib.sha256(owner.encode()).hexdigest())] += 1
+              line_hashes[(code, hashlib.sha256(str(line).encode()).hexdigest())] += 1
               total += 1
-          print(f"LAS_ROOT_FFI_{label}_ERROR_COUNT={total}")
+          print(f"LAS_ROOT_FFI_LINE_ERROR_COUNT={total}")
           for code, count in sorted(codes.items()):
-              print(f"LAS_ROOT_FFI_{label}_ERROR_CODE={code}:{count}")
-          for (code, owner), count in sorted(owners.items()):
-              print(f"LAS_ROOT_FFI_{label}_OWNER={code}:{owner}:{count}")
+              print(f"LAS_ROOT_FFI_LINE_ERROR_CODE={code}:{count}")
+          for (code, line_hash), count in sorted(line_hashes.items()):
+              print(f"LAS_ROOT_FFI_PRIMARY_LINE_HASH={code}:{line_hash}:{count}")
+          if total != 2 or set(codes) != {"dead_code"}:
+              raise SystemExit(f"unexpected remaining error shape: {dict(codes)}")
           PY
-            rm -f "$json" "$stderr"
-          }
-          classify MINIMAL_CHECK check
-          classify MINIMAL_CLIPPY clippy
-          echo "LAS_ROOT_FFI_MINIMAL_STATIC_CLASSIFICATION=PASS"
+          rm -f "$json" "$stderr"
+          echo "LAS_ROOT_FFI_LINE_CLASSIFIER_RESULT=PASS"
