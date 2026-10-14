@@ -1,0 +1,68 @@
+name: Exact private runtime canonical proof
+
+on:
+  push:
+    paths:
+      - ".github/workflows/exact-private-runtime-canonical-proof-20261014.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bind:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      TARGET_REF_HASH: 28a52175bfc55f4f8b2b0f4312cd2616a65a7082555149f4382746e2254e1b26
+      EXPECTED_HEAD_PROOF: 10b93b9415f901b8023e844fb7fb497a80da7606755c9c8b9a407378ae272276
+      EXPECTED_TREE_PROOF: 0a75a7fc5ffd1208650db7580b9f19977103417bcbd8ec041a98979944c7a649
+    steps:
+      - name: Checkout public shell
+        uses: actions/checkout@v4
+
+      - name: Bind exact canonical private runtime snapshot
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY" && test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+
+          root="$RUNNER_TEMP/private-canonical-proof"
+          mkdir "$root"; cd "$root"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin > "$refs"
+          target_ref=""; target_sha=""
+          while read -r sha ref; do
+            ref_hash="$(printf '%s' "$ref" | sha256sum | awk '{print $1}')"
+            if [[ "$ref_hash" == "$TARGET_REF_HASH" ]]; then
+              target_ref="$ref"
+              target_sha="$sha"
+            fi
+          done < "$refs"
+          rm -f "$refs"
+          test -n "$target_ref" && test -n "$target_sha"
+          echo "::add-mask::$target_ref"; echo "::add-mask::$target_sha"
+
+          head_proof="$(printf '%s' "$target_sha" | sha256sum | awk '{print $1}')"
+          test "$head_proof" = "$EXPECTED_HEAD_PROOF"
+
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$target_ref"
+          actual="$(git rev-parse FETCH_HEAD)"
+          tree="$(git rev-parse FETCH_HEAD^{tree})"
+          echo "::add-mask::$actual"; echo "::add-mask::$tree"
+          test "$actual" = "$target_sha"
+          tree_proof="$(printf '%s' "$tree" | sha256sum | awk '{print $1}')"
+          test "$tree_proof" = "$EXPECTED_TREE_PROOF"
+
+          echo "LAS_RUNTIME_CANONICAL_HEAD_PROOF=$head_proof"
+          echo "LAS_RUNTIME_CANONICAL_TREE_PROOF=$tree_proof"
+          echo "LAS_RUNTIME_CANONICAL_BINDING=PASS"
