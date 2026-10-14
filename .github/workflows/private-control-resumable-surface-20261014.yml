@@ -1,0 +1,209 @@
+name: Private control resumable surface patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "RUN_CONTROL_RESUMABLE_SURFACE"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-control-resumable-surface
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout public control shell
+        uses: actions/checkout@v4
+
+      - name: Load opaque exact target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s RUN_CONTROL_RESUMABLE_SURFACE
+          ref_hash="$(awk -F= '$1=="TARGET_REF_HASH"{print $2}' RUN_CONTROL_RESUMABLE_SURFACE)"
+          proof="$(awk -F= '$1=="EXPECTED_PRIVATE_SNAPSHOT_PROOF"{print $2}' RUN_CONTROL_RESUMABLE_SURFACE)"
+          [[ "$ref_hash" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$proof" =~ ^[0-9a-f]{64}$ ]]
+          echo "TARGET_REF_HASH=$ref_hash" >> "$GITHUB_ENV"
+          echo "EXPECTED_PRIVATE_SNAPSHOT_PROOF=$proof" >> "$GITHUB_ENV"
+
+      - name: Checkout exact hidden private revision
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_WRITE_TOKEN: ${{ secrets.LAS_PRIVATE_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_WRITE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_WRITE_TOKEN"
+
+          root="$RUNNER_TEMP/private-target"
+          mkdir "$root"
+          cd "$root"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_WRITE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin > "$refs"
+          matched_ref=""
+          matched_sha=""
+          while read -r sha ref; do
+            h="$(printf '%s' "$ref" | sha256sum | awk '{print $1}')"
+            if [[ "$h" == "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+              matched_sha="$sha"
+            fi
+          done < "$refs"
+          rm -f "$refs"
+          test -n "$matched_ref"
+          test -n "$matched_sha"
+
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          git checkout -q -B target FETCH_HEAD
+          actual="$(git rev-parse HEAD)"
+          echo "::add-mask::$actual"
+          test "$actual" = "$matched_sha"
+          proof="$(printf '%s' "$actual" | sha256sum | awk '{print $1}')"
+          test "$proof" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+
+          printf '%s' "$matched_ref" > "$RUNNER_TEMP/private-ref"
+          printf '%s' "$actual" > "$RUNNER_TEMP/private-start-sha"
+          printf '%s' "$auth" > "$RUNNER_TEMP/private-auth"
+          chmod 600 "$RUNNER_TEMP/private-ref" "$RUNNER_TEMP/private-start-sha" "$RUNNER_TEMP/private-auth"
+          echo "LAS_CONTROL_SURFACE_START_PROOF=$proof"
+
+      - name: Add resumable service and deployment surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          service = Path("src/effect_fabric/root_supervisor_linux_service.rs")
+          text = service.read_text()
+          old_import = '''use super::root_supervisor_linux_control_session::{
+              ControlSessionStep, LinuxActiveControlSession, LinuxActiveControlSessionError,
+          };'''
+          new_import = '''use super::root_supervisor_linux_control_session::{
+              ControlSessionStep, LinuxActiveControlSession, LinuxActiveControlSessionError,
+              LinuxControlProcessProgress,
+          };'''
+          if text.count(old_import) != 1:
+              raise SystemExit("service control import anchor mismatch")
+          text = text.replace(old_import, new_import, 1)
+          old_method = '''    pub(super) fn process_control(
+              &mut self,
+              session: &mut LinuxActiveControlSession,
+              boundary: &BoundaryState,
+          ) -> Result<
+              ControlSessionStep,
+              LinuxActiveControlSessionError<ControlStore::Error, GuardedStore::Error>,
+          > {
+              session.process_one(&mut self.parts.core, boundary)
+          }
+          '''
+          new_method = old_method + '''
+              /// Resume one control request/reply without waiting for future socket progress.
+              /// `Pending` preserves exact session ownership; a complete command crosses the
+              /// Root/effect service at most once and any staged reply must finish before a
+              /// later command can be received.
+              pub(super) fn try_process_control(
+                  &mut self,
+                  session: &mut LinuxActiveControlSession,
+                  boundary: &BoundaryState,
+              ) -> Result<
+                  LinuxControlProcessProgress,
+                  LinuxActiveControlSessionError<ControlStore::Error, GuardedStore::Error>,
+              > {
+                  session.try_process_one(&mut self.parts.core, boundary)
+              }
+          '''
+          if text.count(old_method) != 1 or "fn try_process_control(" in text:
+              raise SystemExit("service process_control anchor/state mismatch")
+          service.write_text(text.replace(old_method, new_method, 1))
+
+          deployment = Path("src/effect_fabric/root_supervisor_linux_deployment.rs")
+          text = deployment.read_text()
+          if text.count(old_import) != 1:
+              raise SystemExit("deployment control import anchor mismatch")
+          text = text.replace(old_import, new_import, 1)
+          old_deployment = '''    pub(super) fn process_control(
+              &mut self,
+              session: &mut LinuxActiveControlSession,
+              boundary: &BoundaryState,
+          ) -> Result<ControlSessionStep, LinuxActiveControlSessionError<C::Error, G::Error>> {
+              self.service.process_control(session, boundary)
+          }
+          '''
+          new_deployment = old_deployment + '''
+              /// Resume one accepted control session cooperatively. No-progress retains the
+              /// exact session and staged transport state for the process owner.
+              pub(super) fn try_process_control(
+                  &mut self,
+                  session: &mut LinuxActiveControlSession,
+                  boundary: &BoundaryState,
+              ) -> Result<
+                  LinuxControlProcessProgress,
+                  LinuxActiveControlSessionError<C::Error, G::Error>,
+              > {
+                  self.service.try_process_control(session, boundary)
+              }
+          '''
+          if text.count(old_deployment) != 1 or "fn try_process_control(" in text:
+              raise SystemExit("deployment process_control anchor/state mismatch")
+          deployment.write_text(text.replace(old_deployment, new_deployment, 1))
+          PY
+
+          git diff --check
+          changed="$(git diff --name-only)"
+          test "$changed" = $'src/effect_fabric/root_supervisor_linux_deployment.rs\nsrc/effect_fabric/root_supervisor_linux_service.rs'
+          echo "LAS_CONTROL_SURFACE_PATCH=PASS"
+
+      - name: Verify focused Linux boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          cargo +1.98.1 fmt --all
+          cargo +1.98.1 fmt --all -- --check
+          RUSTFLAGS='-D warnings' cargo +1.98.1 check --all-targets --features linux-peer-credentials
+          cargo +1.98.1 clippy --all-targets --features linux-peer-credentials -- -D warnings
+          cargo +1.98.1 test --features linux-peer-credentials root_supervisor_linux_control_resumability_tests:: -- --nocapture
+          git diff --check
+          echo "LAS_CONTROL_SURFACE_VERIFY=PASS"
+
+      - name: Commit and fast-forward exact private ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          matched_ref="$(cat "$RUNNER_TEMP/private-ref")"
+          start_sha="$(cat "$RUNNER_TEMP/private-start-sha")"
+          auth="$(cat "$RUNNER_TEMP/private-auth")"
+          remote_sha="$(git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote origin "$matched_ref" | awk '{print $1}')"
+          echo "::add-mask::$remote_sha"
+          test "$remote_sha" = "$start_sha"
+
+          git config user.name "LAS Engineering Bridge"
+          git config user.email "las-engineering@users.noreply.github.com"
+          git add src/effect_fabric/root_supervisor_linux_service.rs src/effect_fabric/root_supervisor_linux_deployment.rs
+          git commit -q -m "Expose resumable Linux control processing through deployment"
+          new_sha="$(git rev-parse HEAD)"
+          echo "::add-mask::$new_sha"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" push -q origin HEAD:"$matched_ref"
+          echo "LAS_CONTROL_SURFACE_RESULT=PASS"
+          echo "LAS_CONTROL_SURFACE_COMMIT_PROOF=$(printf '%s' "$new_sha" | sha256sum | awk '{print $1}')"
