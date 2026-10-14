@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 30
     env:
       TARGET_REF_HASH: dacb3ca65e53f8133e7206c1f3f50ee1e38439e5dbcd8869616e6db414d551b3
-      EXPECTED_TARGET_PROOF: af41034f120a75b3e9a9a8e4b497ed917be335bab15a28609a7382bd3949a327
+      EXPECTED_TARGET_PROOF: c85d7b447db390d2dece185819b5afc7263c975bab173df62e1f8a64001a44ce
       SOURCE_REF_HASH: b04a74ff0e7f1b30935fd6807d8b17506c697daf0b895f7f778729cdfdcf3946
     steps:
       - name: Checkout public shell
@@ -81,6 +81,7 @@ jobs:
           done
           python3 tools/apply_current_production_assembly_rebase_20261014.py
           git show "${source_sha}:src/effect_fabric/root_ffi.rs" > src/effect_fabric/root_ffi.rs
+          git show "${source_sha}:src/effect_fabric/trusted_root_ingress.rs" > src/effect_fabric/trusted_root_ingress.rs
           python3 tools/apply_current_root_ffi_production_gates_20261014.py
           rm tools/apply_current_production_assembly_rebase_20261014.py
           rm tools/apply_current_root_ffi_production_gates_20261014.py
