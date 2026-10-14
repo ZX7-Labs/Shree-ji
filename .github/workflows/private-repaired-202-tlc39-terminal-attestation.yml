@@ -190,22 +190,56 @@ jobs:
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "$api/actions/jobs/$job_id/logs" >"$log"
 
-          grep -q 'LAS_REPAIRED_202_TLC39_REQUEST=PASS' "$log"
-          grep -q 'LAS_REPAIRED_202_TLC39_RECOVERY=PASS' "$log"
-          grep -q 'LAS_REPAIRED_202_TLC39_BINDING=PASS' "$log"
-          grep -q 'LAS_REPAIRED_202_TLC39_RC=0' "$log"
-          grep -q 'LAS_REPAIRED_202_TLC39_RESULT=PASS' "$log"
-          ! grep -Eq 'LAS_REPAIRED_202_TLC39_RESULT=(FAIL|FAIL_CLOSED|SLICE_CHECKPOINT)' "$log"
-
-          segment="$(sed -n 's/.*LAS_REPAIRED_202_TLC39_SEGMENT=\([0-9][0-9]*\).*/\1/p' "$log" | sort -u)"
-          [[ "$segment" =~ ^[1-9][0-9]*$ ]]
-          if [[ "$segment_mode" = "initial" ]]; then
-            test "$segment" = "1"
-          else
-            test "$segment" -gt 1
-            grep -q 'LAS_REPAIRED_202_TLC39_CHECKPOINT_AUTH=PASS' "$log"
-            grep -q 'LAS_REPAIRED_202_TLC39_RECOVER_DIR=PASS' "$log"
-          fi
+          segment="$(python3 - "$log" "$segment_mode" <<'PY'
+          import re, sys
+          path, mode = sys.argv[1:]
+          text = open(path, encoding="utf-8", errors="replace").read().splitlines()
+          emitted = []
+          stamp = re.compile(r'^\d{4}-\d{2}-\d{2}T\S+Z (.*)$')
+          for line in text:
+              match = stamp.match(line)
+              if match:
+                  emitted.append(match.group(1))
+          required = {
+              "LAS_REPAIRED_202_TLC39_REQUEST=PASS",
+              "LAS_REPAIRED_202_TLC39_RECOVERY=PASS",
+              "LAS_REPAIRED_202_TLC39_BINDING=PASS",
+              "LAS_REPAIRED_202_TLC39_RC=0",
+              "LAS_REPAIRED_202_TLC39_RESULT=PASS",
+          }
+          missing = sorted(required.difference(emitted))
+          if missing:
+              raise SystemExit("missing emitted terminal markers")
+          forbidden_prefixes = (
+              "LAS_REPAIRED_202_TLC39_RESULT=FAIL",
+              "LAS_REPAIRED_202_TLC39_RESULT=FAIL_CLOSED",
+              "LAS_REPAIRED_202_TLC39_RESULT=SLICE_CHECKPOINT",
+          )
+          if any(line.startswith(forbidden_prefixes) for line in emitted):
+              raise SystemExit("terminal log contains a non-PASS TLC39 result")
+          segments = {
+              int(match.group(1))
+              for line in emitted
+              if (match := re.fullmatch(r'LAS_REPAIRED_202_TLC39_SEGMENT=([1-9][0-9]*)', line))
+          }
+          if len(segments) != 1:
+              raise SystemExit("terminal segment marker is missing or ambiguous")
+          segment = next(iter(segments))
+          if mode == "initial":
+              if segment != 1:
+                  raise SystemExit("initial terminal run is not segment 1")
+          else:
+              if segment <= 1:
+                  raise SystemExit("resumed terminal run has invalid segment")
+              for marker in (
+                  "LAS_REPAIRED_202_TLC39_CHECKPOINT_AUTH=PASS",
+                  "LAS_REPAIRED_202_TLC39_RECOVER_DIR=PASS",
+              ):
+                  if marker not in emitted:
+                      raise SystemExit("resumed terminal run lacks authenticated recovery evidence")
+          print(segment)
+          PY
+          )"
 
           log_sha256="$(sha256sum "$log" | awk '{print $1}')"
           echo "segment=$segment" >>"$GITHUB_OUTPUT"
