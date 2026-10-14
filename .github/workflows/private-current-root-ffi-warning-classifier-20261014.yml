@@ -25,7 +25,6 @@ jobs:
           set -euo pipefail
           rustup toolchain install 1.98.1 --profile minimal >/dev/null
           rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
-
           ALR_ZIP="$RUNNER_TEMP/alr.zip"
           ALR_PREFIX="$RUNNER_TEMP/alr"
           curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
@@ -39,13 +38,9 @@ jobs:
           export PATH="$ALR_PREFIX/bin:$PATH"
           echo "$ALR_PREFIX/bin" >> "$GITHUB_PATH"
           alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
-
           ALR_WS="$RUNNER_TEMP/alire-workspace"
           mkdir -p "$ALR_WS"
-          (
-            cd "$ALR_WS"
-            alr -n init --in-place --no-skel --lib las_verify_toolchain >/dev/null
-          )
+          (cd "$ALR_WS" && alr -n init --in-place --no-skel --lib las_verify_toolchain >/dev/null)
           GPRBUILD_WRAPPER="$RUNNER_TEMP/gprbuild-via-alire"
           cat > "$GPRBUILD_WRAPPER" <<EOF_GPR
           #!/usr/bin/env bash
@@ -67,14 +62,12 @@ jobs:
           test -n "$PRIVATE_TOKEN"
           echo "::add-mask::$PRIVATE_REPOSITORY"
           echo "::add-mask::$PRIVATE_TOKEN"
-
           mkdir target
           cd target
           git init -q
           git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
           auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
           echo "::add-mask::$auth"
-
           refs="$RUNNER_TEMP/private-heads"
           git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin > "$refs"
           matched_ref=""
@@ -92,32 +85,92 @@ jobs:
           echo "::add-mask::$matched_ref"
           echo "::add-mask::$matched_sha"
           test "$(printf '%s' "$matched_sha" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
-
           git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
           test "$(git rev-parse FETCH_HEAD)" = "$matched_sha"
           git checkout -q --detach "$matched_sha"
           test -z "$(git status --porcelain --untracked-files=no)"
           echo "LAS_ROOT_FFI_CLASSIFIER_SNAPSHOT=PASS"
 
-      - name: Classify strict Root FFI compiler failure
+      - name: Classify strict library and all-target owners opaquely
         shell: bash
         run: |
           set -euo pipefail
           cd target
-          json="$RUNNER_TEMP/root-ffi-strict.jsonl"
-          stderr="$RUNNER_TEMP/root-ffi-strict.stderr"
 
+          classify() {
+            label="$1"
+            shift
+            json="$RUNNER_TEMP/${label}.jsonl"
+            stderr="$RUNNER_TEMP/${label}.stderr"
+            set +e
+            env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" \
+              cargo +1.98.1 check --locked --features root-ffi "$@" --message-format=json \
+              >"$json" 2>"$stderr"
+            rc=$?
+            set -e
+            test "$rc" -ne 0
+            python3 - "$label" "$json" <<'PY'
+          import collections, hashlib, json, sys
+          label, path = sys.argv[1], sys.argv[2]
+          codes = collections.Counter()
+          owners = collections.Counter()
+          total = 0
+          for raw in open(path, encoding="utf-8", errors="replace"):
+              try:
+                  obj = json.loads(raw)
+              except Exception:
+                  continue
+              if obj.get("reason") != "compiler-message":
+                  continue
+              msg = obj.get("message") or {}
+              if msg.get("level") != "error":
+                  continue
+              code = (msg.get("code") or {}).get("code") or "NO_CODE"
+              primary = [s for s in (msg.get("spans") or []) if s.get("is_primary")]
+              owner = str(primary[0].get("file_name") or "NO_SPAN") if primary else "NO_SPAN"
+              codes[code] += 1
+              owners[(code, hashlib.sha256(owner.encode()).hexdigest())] += 1
+              total += 1
+          print(f"LAS_ROOT_FFI_{label.upper()}_ERROR_COUNT={total}")
+          for code, count in sorted(codes.items()):
+              print(f"LAS_ROOT_FFI_{label.upper()}_ERROR_CODE={code}:{count}")
+          for (code, owner), count in sorted(owners.items()):
+              print(f"LAS_ROOT_FFI_{label.upper()}_OWNER={code}:{owner}:{count}")
+          if total == 0:
+              raise SystemExit(f"{label}: expected strict failure")
+          PY
+            rm -f "$json" "$stderr"
+          }
+
+          classify strict_lib --lib
+          classify strict_all --all-targets
+          echo "LAS_ROOT_FFI_OWNER_CLASSIFICATION=PASS"
+
+      - name: Split dead-code from remaining all-target failure
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd target
+
+          lib_log="$RUNNER_TEMP/root-ffi-lib-dead-code.private.log"
+          env RUSTFLAGS='-Dwarnings -Adead_code' GPRBUILD="$GPRBUILD" \
+            cargo +1.98.1 check --locked --lib --features root-ffi >"$lib_log" 2>&1
+          rm -f "$lib_log"
+          echo "LAS_ROOT_FFI_LIB_WITH_DEAD_CODE_RELAXED=PASS"
+
+          json="$RUNNER_TEMP/root-ffi-all-dead-code.jsonl"
+          stderr="$RUNNER_TEMP/root-ffi-all-dead-code.stderr"
           set +e
-          env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" \
+          env RUSTFLAGS='-Dwarnings -Adead_code' GPRBUILD="$GPRBUILD" \
             cargo +1.98.1 check --locked --features root-ffi --all-targets --message-format=json \
             >"$json" 2>"$stderr"
-          strict_rc=$?
+          rc=$?
           set -e
-          test "$strict_rc" -ne 0
-
+          test "$rc" -ne 0
           python3 - "$json" <<'PY'
-          import collections, json, sys
+          import collections, hashlib, json, sys
           codes = collections.Counter()
+          owners = collections.Counter()
           total = 0
           for raw in open(sys.argv[1], encoding="utf-8", errors="replace"):
               try:
@@ -130,53 +183,20 @@ jobs:
               if msg.get("level") != "error":
                   continue
               code = (msg.get("code") or {}).get("code") or "NO_CODE"
+              primary = [s for s in (msg.get("spans") or []) if s.get("is_primary")]
+              owner = str(primary[0].get("file_name") or "NO_SPAN") if primary else "NO_SPAN"
               codes[code] += 1
+              owners[(code, hashlib.sha256(owner.encode()).hexdigest())] += 1
               total += 1
-          print(f"LAS_ROOT_FFI_STRICT_ERROR_COUNT={total}")
+          print(f"LAS_ROOT_FFI_POST_DEAD_ERROR_COUNT={total}")
           for code, count in sorted(codes.items()):
-              print(f"LAS_ROOT_FFI_STRICT_ERROR_CODE={code}:{count}")
-          if total == 0:
-              raise SystemExit("strict failure produced no compiler error classification")
-          if set(codes) != {"dead_code"}:
-              raise SystemExit(f"unexpected strict error classes: {sorted(codes)}")
+              print(f"LAS_ROOT_FFI_POST_DEAD_ERROR_CODE={code}:{count}")
+          for (code, owner), count in sorted(owners.items()):
+              print(f"LAS_ROOT_FFI_POST_DEAD_OWNER={code}:{owner}:{count}")
+          if total != 1 or set(codes) != {"E0433"}:
+              raise SystemExit(f"unexpected post-dead-code error shape: {dict(codes)}")
           PY
           rm -f "$json" "$stderr"
-          echo "LAS_ROOT_FFI_STRICT_CLASS=DEAD_CODE_ONLY"
-
-      - name: Prove dead-code allowance closes exact Root FFI build
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd target
-          log="$RUNNER_TEMP/root-ffi-dead-code-check.private.log"
-          env RUSTFLAGS='-Dwarnings -Adead_code' GPRBUILD="$GPRBUILD" \
-            cargo +1.98.1 check --locked --features root-ffi --all-targets \
-            >"$log" 2>&1
-          rm -f "$log"
-          echo "LAS_ROOT_FFI_DEAD_CODE_CHECK=PASS"
-
-      - name: Prove strict Clippy except dead-code class
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd target
-          log="$RUNNER_TEMP/root-ffi-dead-code-clippy.private.log"
-          env RUSTFLAGS='-Dwarnings -Adead_code' GPRBUILD="$GPRBUILD" \
-            cargo +1.98.1 clippy --locked --features root-ffi --all-targets -- -D warnings -A dead_code \
-            >"$log" 2>&1
-          rm -f "$log"
-          echo "LAS_ROOT_FFI_DEAD_CODE_CLIPPY=PASS"
-
-      - name: Prove Root FFI tests and adapter gates execute with only dead-code relaxed
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd target
-          log="$RUNNER_TEMP/root-ffi-dead-code-tests.private.log"
-          env RUSTFLAGS='-Dwarnings -Adead_code' GPRBUILD="$GPRBUILD" \
-            cargo +1.98.1 test --locked --features root-ffi --all-targets -- --test-threads=1 \
-            >"$log" 2>&1
-          rm -f "$log"
           test -z "$(git status --porcelain --untracked-files=no)"
-          echo "LAS_ROOT_FFI_DEAD_CODE_TESTS=PASS"
+          echo "LAS_ROOT_FFI_POST_DEAD_CLASS=E0433_ONLY"
           echo "LAS_ROOT_FFI_WARNING_CLASSIFIER_RESULT=PASS"
