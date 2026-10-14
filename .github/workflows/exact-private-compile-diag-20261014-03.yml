@@ -1,0 +1,97 @@
+name: Exact private compile discriminator 20261014-03
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/exact-private-compile-diag-20261014-03.yml"
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 28a52175bfc55f4f8b2b0f4312cd2616a65a7082555149f4382746e2254e1b26
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 35cae022a486542c2dca170eaf416184525df195721fa36bf47b8ee6396329ac
+  EXPECTED_PRIVATE_TREE_PROOF: da5008f03c296d0d8e13f279e516ab5059568750d4dd39766b9c49ca60ff5180
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Recover exact private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$RUNNER_TEMP/heads"
+          ref=""; head=""
+          while read -r sha name; do
+            if [[ "$(printf '%s' "$name" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$ref"; ref="$name"; head="$sha"; fi
+          done <"$RUNNER_TEMP/heads"
+          rm -f "$RUNNER_TEMP/heads"; test -n "$ref"; test -n "$head"
+          echo "::add-mask::$ref"; echo "::add-mask::$head"
+          test "$(printf '%s' "$head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$head"; git checkout -q --detach "$head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          echo "LAS_DIAG03_RECOVERY=PASS"
+
+      - name: Install pinned Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+
+      - name: Emit source-free Linux compiler discriminator
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          json="$RUNNER_TEMP/linux.jsonl"
+          set +e
+          cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials --message-format=json >"$json" 2>/dev/null
+          rc=$?
+          set -e
+          echo "LAS_DIAG03_RC=$rc"
+          test "$rc" -eq 101
+          python3 - "$json" <<'PY'
+          import hashlib,json,sys
+          errors=[]
+          for raw in open(sys.argv[1],encoding='utf-8',errors='replace'):
+              try: obj=json.loads(raw)
+              except Exception: continue
+              if obj.get('reason')!='compiler-message': continue
+              msg=obj.get('message') or {}
+              if msg.get('level')!='error': continue
+              code=(msg.get('code') or {}).get('code') or 'NO_CODE'
+              message=str(msg.get('message') or '')
+              mh=hashlib.sha256(message.encode()).hexdigest()
+              spans=[s for s in (msg.get('spans') or []) if s.get('is_primary')]
+              if not spans: spans=[{'file_name':'GLOBAL','line_start':0,'column_start':0}]
+              for s in spans:
+                  path=str(s.get('file_name') or 'GLOBAL')
+                  errors.append((code,hashlib.sha256(path.encode()).hexdigest(),int(s.get('line_start') or 0),int(s.get('column_start') or 0),mh))
+          print(f"LAS_DIAG03_ERROR_COUNT={len(errors)}")
+          for i,(code,ph,line,col,mh) in enumerate(errors,1):
+              print(f"LAS_DIAG03_ERROR_{i}_CODE={code}")
+              print(f"LAS_DIAG03_ERROR_{i}_PATH_SHA256={ph}")
+              print(f"LAS_DIAG03_ERROR_{i}_LINE={line}")
+              print(f"LAS_DIAG03_ERROR_{i}_COLUMN={col}")
+              print(f"LAS_DIAG03_ERROR_{i}_MESSAGE_SHA256={mh}")
+          if not errors: raise SystemExit(70)
+          PY
+          rm -f "$json"
+          test -z "$(git status --porcelain --untracked-files=no)"
