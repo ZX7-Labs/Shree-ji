@@ -44,7 +44,6 @@ jobs:
           test -n "$PRIVATE_WRITE_TOKEN"
           echo "::add-mask::$PRIVATE_REPOSITORY"
           echo "::add-mask::$PRIVATE_WRITE_TOKEN"
-
           root="$RUNNER_TEMP/private-target"
           mkdir "$root"
           cd "$root"
@@ -52,7 +51,6 @@ jobs:
           git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
           auth="$(printf 'x-access-token:%s' "$PRIVATE_WRITE_TOKEN" | base64 -w0)"
           echo "::add-mask::$auth"
-
           refs="$RUNNER_TEMP/private-heads"
           git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin > "$refs"
           matched_ref=""
@@ -68,7 +66,6 @@ jobs:
           rm -f "$refs"
           test -n "$matched_ref"
           test -n "$matched_sha"
-
           git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
           git checkout -q -B exact-target FETCH_HEAD
           actual="$(git rev-parse HEAD)"
@@ -76,12 +73,18 @@ jobs:
           test "$actual" = "$matched_sha"
           proof="$(printf '%s' "$actual" | sha256sum | awk '{print $1}')"
           test "$proof" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
-
           printf '%s' "$matched_ref" > "$RUNNER_TEMP/private-ref"
           printf '%s' "$actual" > "$RUNNER_TEMP/private-start-sha"
           printf '%s' "$auth" > "$RUNNER_TEMP/private-auth"
           chmod 600 "$RUNNER_TEMP/private-ref" "$RUNNER_TEMP/private-start-sha" "$RUNNER_TEMP/private-auth"
           echo "LAS_CONTROL_RESUMABILITY_START_PROOF=$proof"
+
+      - name: Install pinned Rust verification components
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
 
       - name: Apply private source-owned patch
         shell: bash
@@ -114,16 +117,8 @@ jobs:
             echo 'deployment still routes to blocking control processing' >&2
             exit 1
           fi
-          grep -q 'published_deployment_control_path_resumes_partial_request_without_root_replay' \
-            src/effect_fabric/root_supervisor_linux_control_resumability_tests.rs
+          grep -q 'published_deployment_control_path_resumes_partial_request_without_root_replay' src/effect_fabric/root_supervisor_linux_control_resumability_tests.rs
           echo 'LAS_CONTROL_RESUMABILITY_STATIC=PASS'
-
-      - name: Install pinned Rust verification components
-        shell: bash
-        run: |
-          set -euo pipefail
-          rustup toolchain install 1.98.1 --profile minimal >/dev/null
-          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
 
       - name: Focused strict compile lint and regression
         shell: bash
@@ -159,7 +154,6 @@ jobs:
           echo "::add-mask::$PRIVATE_WRITE_TOKEN"
           echo "::add-mask::$auth"
           echo "::add-mask::$start_sha"
-
           changed="$RUNNER_TEMP/control-resumability-paths"
           git diff --name-only | sort > "$changed"
           cat > "$RUNNER_TEMP/expected-paths" <<'EOF'
@@ -170,17 +164,12 @@ jobs:
           EOF
           sort -o "$RUNNER_TEMP/expected-paths" "$RUNNER_TEMP/expected-paths"
           diff -u "$RUNNER_TEMP/expected-paths" "$changed"
-
           remote_sha="$(git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote origin "$matched_ref" | awk '{print $1}')"
           echo "::add-mask::$remote_sha"
           test "$remote_sha" = "$start_sha"
-
           git config user.name 'LAS Verification Integrator'
           git config user.email 'las-verification@users.noreply.github.com'
-          git add -- \
-            src/effect_fabric/root_supervisor_linux_service.rs \
-            src/effect_fabric/root_supervisor_linux_deployment.rs \
-            src/effect_fabric/root_supervisor_linux_control_resumability_tests.rs
+          git add -- src/effect_fabric/root_supervisor_linux_service.rs src/effect_fabric/root_supervisor_linux_deployment.rs src/effect_fabric/root_supervisor_linux_control_resumability_tests.rs
           git add -u -- tools/apply_linux_control_production_resumability_20261014.py
           git diff --cached --check
           git commit -q -m 'Wire resumable Linux control through deployment'
