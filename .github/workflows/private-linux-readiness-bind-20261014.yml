@@ -63,7 +63,7 @@ jobs:
           chmod 600 "$RUNNER_TEMP/target-ref" "$RUNNER_TEMP/target-start-sha" "$RUNNER_TEMP/private-auth"
           echo "LAS_LINUX_READINESS_RECOVERY=PASS"
 
-      - name: Bind readiness evidence to owned transports
+      - name: Bind control readiness evidence
         shell: bash
         run: |
           set -euo pipefail
@@ -154,115 +154,11 @@ jobs:
               }
           '''.replace('              ', ''),
           )
-
-          replace_once(
-              "src/effect_fabric/root_supervisor_linux_channel.rs",
-              "use std::io::{self, Read};\nuse std::os::unix::net::UnixStream;",
-              "use std::io::{self, Read};\nuse std::os::fd::{AsRawFd, RawFd};\nuse std::os::unix::net::UnixStream;",
-          )
-          replace_once(
-              "src/effect_fabric/root_supervisor_linux_channel.rs",
-              '''    pub(crate) const fn supervisor_generation(&self) -> u64 {
-                  self.config.supervisor_generation()
-              }
-          '''.replace('              ', ''),
-              '''    pub(crate) const fn supervisor_generation(&self) -> u64 {
-                  self.config.supervisor_generation()
-              }
-
-              pub(crate) fn readiness_fd(&self) -> RawFd {
-                  self.stream.as_raw_fd()
-              }
-
-              pub(crate) const fn resumable_deadline(&self) -> Option<Instant> {
-                  self.receive_deadline
-              }
-          '''.replace('              ', ''),
-          )
-
-          replace_once(
-              "src/effect_fabric/root_control_channel_authority.rs",
-              "use std::num::NonZeroU64;",
-              "use std::num::NonZeroU64;\nuse std::os::fd::RawFd;\nuse std::time::Instant;",
-          )
-          replace_once(
-              "src/effect_fabric/root_control_channel_authority.rs",
-              '''    pub(super) const fn instance_id(&self) -> ChannelInstanceId {
-                  self.instance_id
-              }
-          '''.replace('              ', ''),
-              '''    pub(super) const fn instance_id(&self) -> ChannelInstanceId {
-                  self.instance_id
-              }
-
-              pub(super) fn readiness_fd(&self) -> RawFd {
-                  self.channel.readiness_fd()
-              }
-
-              pub(super) const fn io_deadline(&self) -> Option<Instant> {
-                  self.channel.resumable_deadline()
-              }
-          '''.replace('              ', ''),
-          )
-
-          replace_once(
-              "src/effect_fabric/root_supervisor_linux_guarded_session.rs",
-              "use std::os::unix::net::UnixStream;",
-              "use std::os::fd::RawFd;\nuse std::os::unix::net::UnixStream;\nuse std::time::Instant;",
-          )
-          replace_once(
-              "src/effect_fabric/root_supervisor_linux_guarded_session.rs",
-              '''    pub(super) const fn requirement(&self) -> PrecommitRequirement {
-                  self.rule.requirement()
-              }
-          '''.replace('              ', ''),
-              '''    pub(super) const fn requirement(&self) -> PrecommitRequirement {
-                  self.rule.requirement()
-              }
-
-              pub(super) fn readiness_fd(&self) -> RawFd {
-                  self.channel.readiness_fd()
-              }
-
-              pub(super) const fn io_deadline(&self) -> Option<Instant> {
-                  self.channel.io_deadline()
-              }
-          '''.replace('              ', ''),
-          )
-          # The first requirement() occurrence belongs to the pending session. Add the same
-          # non-authorizing readiness evidence to the active owner at its distinct anchor.
-          p = Path("src/effect_fabric/root_supervisor_linux_guarded_session.rs")
-          text = p.read_text()
-          active_anchor = '''impl LinuxActiveGuardedSession {
-              pub(super) const fn is_closed(&self) -> bool {
-                  self.closed
-              }
-
-              pub(super) const fn epoch(&self) -> AuthorityEpoch {
-                  self.epoch
-              }
-
-              pub(super) const fn requirement(&self) -> PrecommitRequirement {
-                  self.rule.requirement()
-              }
-          '''.replace('              ', '')
-          active_new = active_anchor + '''
-              pub(super) fn readiness_fd(&self) -> RawFd {
-                  self.channel.readiness_fd()
-              }
-
-              pub(super) const fn io_deadline(&self) -> Option<Instant> {
-                  self.channel.io_deadline()
-              }
-          '''.replace('              ', '')
-          if text.count(active_anchor) != 1:
-              raise SystemExit(f"active guarded anchor count={text.count(active_anchor)}")
-          p.write_text(text.replace(active_anchor, active_new, 1))
           PY
           git diff --check
           echo "LAS_LINUX_READINESS_BINDING=PASS"
 
-      - name: Verify readiness evidence boundary
+      - name: Verify control readiness boundary
         shell: bash
         run: |
           set -euo pipefail
@@ -274,12 +170,12 @@ jobs:
           RUSTFLAGS='-D warnings' cargo +1.98.1 check --all-targets --features linux-peer-credentials
           cargo +1.98.1 clippy --all-targets --features linux-peer-credentials -- -D warnings
           cargo +1.98.1 test --features linux-peer-credentials linux_io_readiness::tests:: -- --nocapture
+          cargo +1.98.1 test --features linux-peer-credentials control_scheduler_tests:: -- --nocapture
           cargo +1.98.1 test --features linux-peer-credentials root_supervisor_linux_control_resumability_tests:: -- --nocapture
-          cargo +1.98.1 test --features linux-peer-credentials root_supervisor_linux_guarded_resumability_tests:: -- --nocapture
           git diff --check
           echo "LAS_LINUX_READINESS_VERIFY=PASS"
 
-      - name: Commit and fast-forward exact private ref
+      - name: Commit exact private ref
         shell: bash
         run: |
           set -euo pipefail
@@ -295,12 +191,9 @@ jobs:
           git add src/lib.rs \
                   src/effect_fabric/linux_io_readiness.rs \
                   src/effect_fabric/root_supervisor_linux_control_channel.rs \
-                  src/effect_fabric/root_supervisor_linux_control_session.rs \
-                  src/effect_fabric/root_supervisor_linux_channel.rs \
-                  src/effect_fabric/root_control_channel_authority.rs \
-                  src/effect_fabric/root_supervisor_linux_guarded_session.rs
+                  src/effect_fabric/root_supervisor_linux_control_session.rs
           git diff --cached --check
-          git commit -q -m "Bind resumable sessions to Linux readiness evidence"
+          git commit -q -m "Bind control sessions to Linux readiness evidence"
           new_sha="$(git rev-parse HEAD)"
           echo "::add-mask::$new_sha"
           git -c http.extraHeader="AUTHORIZATION: basic $auth" push -q origin HEAD:"$target_ref"
