@@ -1,0 +1,194 @@
+name: Private Linux control production resumability apply
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "RUN_LINUX_CONTROL_PRODUCTION_RESUMABILITY"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-linux-control-production-resumability-apply
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout public control shell
+        uses: actions/checkout@v4
+
+      - name: Load opaque exact target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s RUN_LINUX_CONTROL_PRODUCTION_RESUMABILITY
+          ref_hash="$(awk -F= '$1=="TARGET_REF_HASH"{print $2}' RUN_LINUX_CONTROL_PRODUCTION_RESUMABILITY)"
+          proof="$(awk -F= '$1=="EXPECTED_PRIVATE_SNAPSHOT_PROOF"{print $2}' RUN_LINUX_CONTROL_PRODUCTION_RESUMABILITY)"
+          [[ "$ref_hash" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$proof" =~ ^[0-9a-f]{64}$ ]]
+          echo "TARGET_REF_HASH=$ref_hash" >> "$GITHUB_ENV"
+          echo "EXPECTED_PRIVATE_SNAPSHOT_PROOF=$proof" >> "$GITHUB_ENV"
+
+      - name: Checkout exact hidden private revision
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_WRITE_TOKEN: ${{ secrets.LAS_PRIVATE_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_WRITE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_WRITE_TOKEN"
+
+          root="$RUNNER_TEMP/private-target"
+          mkdir "$root"
+          cd "$root"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_WRITE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin > "$refs"
+          matched_ref=""
+          matched_sha=""
+          while read -r sha ref; do
+            h="$(printf '%s' "$ref" | sha256sum | awk '{print $1}')"
+            if [[ "$h" == "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+              matched_sha="$sha"
+            fi
+          done < "$refs"
+          rm -f "$refs"
+          test -n "$matched_ref"
+          test -n "$matched_sha"
+
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          git checkout -q -B exact-target FETCH_HEAD
+          actual="$(git rev-parse HEAD)"
+          echo "::add-mask::$actual"
+          test "$actual" = "$matched_sha"
+          proof="$(printf '%s' "$actual" | sha256sum | awk '{print $1}')"
+          test "$proof" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+
+          printf '%s' "$matched_ref" > "$RUNNER_TEMP/private-ref"
+          printf '%s' "$actual" > "$RUNNER_TEMP/private-start-sha"
+          printf '%s' "$auth" > "$RUNNER_TEMP/private-auth"
+          chmod 600 "$RUNNER_TEMP/private-ref" "$RUNNER_TEMP/private-start-sha" "$RUNNER_TEMP/private-auth"
+          echo "LAS_CONTROL_RESUMABILITY_START_PROOF=$proof"
+
+      - name: Apply private source-owned patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          test -f tools/apply_linux_control_production_resumability_20261014.py
+          python3 tools/apply_linux_control_production_resumability_20261014.py
+          rm tools/apply_linux_control_production_resumability_20261014.py
+          cargo +1.98.1 fmt --all
+          git diff --check
+
+      - name: Verify no production blocking bypass remains
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          grep -q 'fn try_process_control' src/effect_fabric/root_supervisor_linux_service.rs
+          grep -q 'fn try_process_control' src/effect_fabric/root_supervisor_linux_deployment.rs
+          grep -q 'session.try_process_one' src/effect_fabric/root_supervisor_linux_service.rs
+          if grep -q 'fn process_control' src/effect_fabric/root_supervisor_linux_service.rs; then
+            echo 'blocking service control surface remains' >&2
+            exit 1
+          fi
+          if grep -q 'fn process_control' src/effect_fabric/root_supervisor_linux_deployment.rs; then
+            echo 'blocking deployment control surface remains' >&2
+            exit 1
+          fi
+          if grep -q 'self.service.process_control' src/effect_fabric/root_supervisor_linux_deployment.rs; then
+            echo 'deployment still routes to blocking control processing' >&2
+            exit 1
+          fi
+          grep -q 'published_deployment_control_path_resumes_partial_request_without_root_replay' \
+            src/effect_fabric/root_supervisor_linux_control_resumability_tests.rs
+          echo 'LAS_CONTROL_RESUMABILITY_STATIC=PASS'
+
+      - name: Install pinned Rust verification components
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+
+      - name: Focused strict compile lint and regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          cargo +1.98.1 fmt --all -- --check
+          RUSTFLAGS='-D warnings' cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials
+          cargo +1.98.1 clippy --locked --all-targets --features linux-peer-credentials -- -D warnings
+          cargo +1.98.1 test --locked --features linux-peer-credentials root_supervisor_linux_control_resumability_tests::
+          echo 'LAS_CONTROL_RESUMABILITY_FOCUSED=PASS'
+
+      - name: Linux composition regression gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          cargo +1.98.1 test --locked --all-targets --features linux-peer-credentials
+          cargo +1.98.1 fmt --all -- --check
+          git diff --check
+          echo 'LAS_CONTROL_RESUMABILITY_LINUX_FULL=PASS'
+
+      - name: Enforce exact change scope and fast-forward hidden ref
+        shell: bash
+        env:
+          PRIVATE_WRITE_TOKEN: ${{ secrets.LAS_PRIVATE_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          matched_ref="$(cat "$RUNNER_TEMP/private-ref")"
+          start_sha="$(cat "$RUNNER_TEMP/private-start-sha")"
+          auth="$(cat "$RUNNER_TEMP/private-auth")"
+          echo "::add-mask::$PRIVATE_WRITE_TOKEN"
+          echo "::add-mask::$auth"
+          echo "::add-mask::$start_sha"
+
+          changed="$RUNNER_TEMP/control-resumability-paths"
+          git diff --name-only | sort > "$changed"
+          cat > "$RUNNER_TEMP/expected-paths" <<'EOF'
+          src/effect_fabric/root_supervisor_linux_control_resumability_tests.rs
+          src/effect_fabric/root_supervisor_linux_deployment.rs
+          src/effect_fabric/root_supervisor_linux_service.rs
+          tools/apply_linux_control_production_resumability_20261014.py
+          EOF
+          sort -o "$RUNNER_TEMP/expected-paths" "$RUNNER_TEMP/expected-paths"
+          diff -u "$RUNNER_TEMP/expected-paths" "$changed"
+
+          remote_sha="$(git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote origin "$matched_ref" | awk '{print $1}')"
+          echo "::add-mask::$remote_sha"
+          test "$remote_sha" = "$start_sha"
+
+          git config user.name 'LAS Verification Integrator'
+          git config user.email 'las-verification@users.noreply.github.com'
+          git add -- \
+            src/effect_fabric/root_supervisor_linux_service.rs \
+            src/effect_fabric/root_supervisor_linux_deployment.rs \
+            src/effect_fabric/root_supervisor_linux_control_resumability_tests.rs
+          git add -u -- tools/apply_linux_control_production_resumability_20261014.py
+          git diff --cached --check
+          git commit -q -m 'Wire resumable Linux control through deployment'
+          new_sha="$(git rev-parse HEAD)"
+          tree_sha="$(git rev-parse HEAD^{tree})"
+          echo "::add-mask::$new_sha"
+          echo "::add-mask::$tree_sha"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" push -q origin HEAD:"$matched_ref"
+          echo "LAS_CONTROL_RESUMABILITY_APPLY=PASS"
+          echo "LAS_CONTROL_RESUMABILITY_COMMIT_PROOF=$(printf '%s' "$new_sha" | sha256sum | awk '{print $1}')"
+          echo "LAS_CONTROL_RESUMABILITY_TREE_PROOF=$(printf '%s' "$tree_sha" | sha256sum | awk '{print $1}')"
