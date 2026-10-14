@@ -93,27 +93,29 @@ jobs:
           s = p.read_text()
           a1 = '    // Graceful rotation consumes a quiescent active epoch, retires both durable\n'
           a2 = '    // Keep the safe executor core independently compilable/testable from the Ada FFI.\n'
-          b1 = '''    #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
-    mod root_supervisor_linux_production_bootstrap;
-    #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
-    #[allow(unsafe_code)]
-    mod root_supervisor_linux_socket_activation;
-    #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
-    mod root_supervisor_linux_production_resources;
-    #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
-    mod root_supervisor_linux_production_process;
-    #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
-    mod root_supervisor_linux_production_launch;
-    #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
-    mod root_supervisor_linux_production_startup;
-
-'''
-          b2 = '''    #[cfg(all(feature = "linux-peer-credentials", target_os = "linux"))]
-    mod root_supervisor_linux_process_ingress;
-    #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
-    mod root_supervisor_linux_production_runtime;
-
-'''
+          b1 = '\n'.join([
+              '    #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]',
+              '    mod root_supervisor_linux_production_bootstrap;',
+              '    #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]',
+              '    #[allow(unsafe_code)]',
+              '    mod root_supervisor_linux_socket_activation;',
+              '    #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]',
+              '    mod root_supervisor_linux_production_resources;',
+              '    #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]',
+              '    mod root_supervisor_linux_production_process;',
+              '    #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]',
+              '    mod root_supervisor_linux_production_launch;',
+              '    #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]',
+              '    mod root_supervisor_linux_production_startup;',
+              '',
+          ])
+          b2 = '\n'.join([
+              '    #[cfg(all(feature = "linux-peer-credentials", target_os = "linux"))]',
+              '    mod root_supervisor_linux_process_ingress;',
+              '    #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]',
+              '    mod root_supervisor_linux_production_runtime;',
+              '',
+          ])
           if 'mod root_supervisor_linux_production_process;' in s or 'mod root_supervisor_linux_process_ingress;' in s:
               raise SystemExit('production overlay already present')
           if s.count(a1) != 1 or s.count(a2) != 1:
