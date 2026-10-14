@@ -62,6 +62,46 @@ jobs:
           chmod 600 "$RUNNER_TEMP/target-ref" "$RUNNER_TEMP/target-start-sha" "$RUNNER_TEMP/private-auth"
           echo "LAS_CONTROL_SCHEDULER_RECOVERY=PASS"
 
+      - name: Preserve inline authority ownership rationale
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("src/effect_fabric/root_supervisor_linux_process_ingress.rs")
+          t = p.read_text()
+          replacements = [
+              (
+                  '#[must_use = "runtime ingress outcomes carry accepted guarded-session ownership"]\npub(super) enum LinuxControlRuntimeIngress {',
+                  '#[expect(clippy::large_enum_variant, reason = "move-only guarded session ownership stays inline rather than adding heap indirection at the privileged runtime boundary")]\n#[must_use = "runtime ingress outcomes carry accepted guarded-session ownership"]\npub(super) enum LinuxControlRuntimeIngress {'
+              ),
+              (
+                  '#[must_use = "runtime errors must preserve any session that could not be stored"]\npub(super) enum LinuxControlRuntimeError<ControlError, GuardedError> {',
+                  '#[expect(clippy::large_enum_variant, reason = "capacity contradiction returns the exact authenticated session owner without heap indirection")]\n#[must_use = "runtime errors must preserve any session that could not be stored"]\npub(super) enum LinuxControlRuntimeError<ControlError, GuardedError> {'
+              ),
+              (
+                  '    pub(super) fn new(\n        process: LinuxRootSupervisorProcess<Service>,',
+                  '    #[expect(clippy::result_large_err, reason = "initialization failure returns the exact published process owner without heap indirection")]\n    pub(super) fn new(\n        process: LinuxRootSupervisorProcess<Service>,'
+              ),
+              (
+                  '    pub(super) fn poll_ingress(\n        &mut self,\n        boundary: &BoundaryState,\n    ) -> Result<LinuxControlRuntimeIngress, LinuxControlRuntimeError<C::Error, G::Error>> {',
+                  '    #[expect(clippy::result_large_err, reason = "runtime ingress errors preserve move-only authenticated session ownership inline")]\n    pub(super) fn poll_ingress(\n        &mut self,\n        boundary: &BoundaryState,\n    ) -> Result<LinuxControlRuntimeIngress, LinuxControlRuntimeError<C::Error, G::Error>> {'
+              ),
+              (
+                  '    pub(super) fn step_control(\n        &mut self,\n        boundary: &BoundaryState,\n    ) -> Result<Option<LinuxControlSchedulerStep>, LinuxControlRuntimeError<C::Error, G::Error>>',
+                  '    #[expect(clippy::result_large_err, reason = "control faults remain exact typed ownership outcomes without heap indirection")]\n    pub(super) fn step_control(\n        &mut self,\n        boundary: &BoundaryState,\n    ) -> Result<Option<LinuxControlSchedulerStep>, LinuxControlRuntimeError<C::Error, G::Error>>'
+              ),
+          ]
+          for old, new in replacements:
+              if t.count(old) != 1:
+                  raise SystemExit(f"annotation anchor count={t.count(old)}")
+              t = t.replace(old, new, 1)
+          p.write_text(t)
+          PY
+          git diff --check
+          echo "LAS_CONTROL_SCHEDULER_LAYOUT=PASS"
+
       - name: Verify exact scheduler boundary
         shell: bash
         run: |
@@ -71,9 +111,7 @@ jobs:
           rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
           cargo +1.98.1 fmt --all
           changed="$(git diff --name-only)"
-          if [[ -n "$changed" ]]; then
-            test "$changed" = "src/effect_fabric/root_supervisor_linux_process_ingress.rs"
-          fi
+          test "$changed" = "src/effect_fabric/root_supervisor_linux_process_ingress.rs"
           cargo +1.98.1 fmt --all -- --check
           RUSTFLAGS='-D warnings' cargo +1.98.1 check --all-targets --features linux-peer-credentials
           cargo +1.98.1 clippy --all-targets --features linux-peer-credentials -- -D warnings
@@ -85,7 +123,7 @@ jobs:
           git diff --check
           echo "LAS_CONTROL_SCHEDULER_VERIFY=PASS"
 
-      - name: Preserve verified formatting and exact ref
+      - name: Commit verified scheduler
         shell: bash
         run: |
           set -euo pipefail
@@ -96,17 +134,13 @@ jobs:
           remote_sha="$(git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote origin "$target_ref" | awk '{print $1}')"
           echo "::add-mask::$remote_sha"
           test "$remote_sha" = "$start_sha"
-          if ! git diff --quiet; then
-            git config user.name "LAS Verification Integrator"
-            git config user.email "las-verification@users.noreply.github.com"
-            git add src/effect_fabric/root_supervisor_linux_process_ingress.rs
-            git diff --cached --check
-            git commit -q -m "Format readiness-gated control runtime"
-            new_sha="$(git rev-parse HEAD)"
-            echo "::add-mask::$new_sha"
-            git -c http.extraHeader="AUTHORIZATION: basic $auth" push -q origin HEAD:"$target_ref"
-          else
-            new_sha="$start_sha"
-          fi
+          git config user.name "LAS Verification Integrator"
+          git config user.email "las-verification@users.noreply.github.com"
+          git add src/effect_fabric/root_supervisor_linux_process_ingress.rs
+          git diff --cached --check
+          git commit -q -m "Verify readiness-gated control runtime"
+          new_sha="$(git rev-parse HEAD)"
+          echo "::add-mask::$new_sha"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" push -q origin HEAD:"$target_ref"
           echo "LAS_CONTROL_SCHEDULER_RESULT=PASS"
           echo "LAS_CONTROL_SCHEDULER_COMMIT_PROOF=$(printf '%s' "$new_sha" | sha256sum | awk '{print $1}')"
