@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: current-sharded-verify-20261008
+  group: current-sharded-verify-promotion-20261014
   cancel-in-progress: false
 
 env:
