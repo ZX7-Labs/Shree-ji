@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 30
     env:
       TARGET_REF_HASH: d071db074e8d0ca6b51599592e452ac4a4461046531f19dabe48ca8c6c4dcf6c
-      EXPECTED_TARGET_PROOF: e55a4f3134df5f596ba2c6dc5623e04ff0eb15398c20c9b59142886edf022ebc
+      EXPECTED_TARGET_PROOF: a062c615e21b5ce60316e7c84029da493f043d210e6ff9cc6df6439a3bec2bc4
     steps:
       - name: Checkout public shell
         uses: actions/checkout@v4
@@ -49,6 +49,7 @@ jobs:
           actual="$(git rev-parse HEAD)"; test "$actual" = "$target_sha"
           test "$(printf '%s' "$actual" | sha256sum | awk '{print $1}')" = "$EXPECTED_TARGET_PROOF"
           test -s tools/apply_unified_linux_production_runtime_20261014.py
+          test -s tools/fix_unified_linux_runtime_clippy_20261014.py
           test -s src/effect_fabric/root_supervisor_linux_runtime.rs
           test -s src/effect_fabric/root_supervisor_linux_production_runtime.rs
           printf '%s' "$target_ref" > "$RUNNER_TEMP/target-ref"
@@ -63,7 +64,9 @@ jobs:
           set -euo pipefail
           cd "$RUNNER_TEMP/private-runtime"
           python3 tools/apply_unified_linux_production_runtime_20261014.py
+          python3 tools/fix_unified_linux_runtime_clippy_20261014.py
           rm tools/apply_unified_linux_production_runtime_20261014.py
+          rm tools/fix_unified_linux_runtime_clippy_20261014.py
           git diff --check
           grep -q 'mod root_supervisor_linux_runtime;' src/lib.rs
           grep -q 'mod root_supervisor_linux_production_runtime;' src/lib.rs
@@ -108,6 +111,7 @@ jobs:
           GPRBUILD="$GPRBUILD_WRAPPER" cargo +1.98.1 test --features 'linux-peer-credentials root-ffi' root_supervisor_linux_control_resumability_tests:: -- --nocapture
           GPRBUILD="$GPRBUILD_WRAPPER" cargo +1.98.1 test --features 'linux-peer-credentials root-ffi' root_supervisor_linux_guarded_resumability_tests:: -- --nocapture
           test ! -e tools/apply_unified_linux_production_runtime_20261014.py
+          test ! -e tools/fix_unified_linux_runtime_clippy_20261014.py
           git diff --check
           echo "LAS_UNIFIED_RUNTIME_VERIFY=PASS"
 
