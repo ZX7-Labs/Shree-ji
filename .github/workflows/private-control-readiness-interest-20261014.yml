@@ -62,7 +62,7 @@ jobs:
           proof="$(printf '%s' "$actual" | sha256sum | awk '{print $1}')"
           test "$proof" = "$EXPECTED_TARGET_PROOF"
 
-          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=2 origin "$source_ref"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$source_ref"
           fetched_source="$(git rev-parse FETCH_HEAD)"
           test "$fetched_source" = "$source_sha"
           printf '%s' "$target_ref" > "$RUNNER_TEMP/target-ref"
@@ -72,14 +72,60 @@ jobs:
           chmod 600 "$RUNNER_TEMP/target-ref" "$RUNNER_TEMP/target-start-sha" "$RUNNER_TEMP/source-sha" "$RUNNER_TEMP/private-auth"
           echo "LAS_CONTROL_READINESS_RECOVERY=PASS"
 
-      - name: Apply readiness commit only
+      - name: Apply readiness contract onto current snapshot
         shell: bash
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/private-target"
           source_sha="$(cat "$RUNNER_TEMP/source-sha")"
           echo "::add-mask::$source_sha"
-          git cherry-pick --no-commit "$source_sha"
+
+          git show "${source_sha}:src/effect_fabric/root_supervisor_linux_control_session.rs" \
+            > src/effect_fabric/root_supervisor_linux_control_session.rs
+
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("src/effect_fabric/root_supervisor_linux_control_resumability_tests.rs")
+          text = path.read_text()
+          old_import = '''use super::root_supervisor_linux_control_session::{
+              ControlSessionStep, LinuxActiveControlSession, LinuxActiveControlSessionError,
+              LinuxControlProcessProgress,
+          };'''.replace('          ', '')
+          new_import = '''use super::root_supervisor_linux_control_session::{
+              ControlSessionStep, LinuxActiveControlSession, LinuxActiveControlSessionError,
+              LinuxControlIoInterest, LinuxControlProcessProgress,
+          };'''.replace('          ', '')
+          if text.count(old_import) != 1:
+              raise SystemExit(f"control test import anchor count={text.count(old_import)}")
+          text = text.replace(old_import, new_import, 1)
+
+          old = "LinuxControlProcessProgress::Pending"
+          positions = []
+          cursor = 0
+          while True:
+              at = text.find(old, cursor)
+              if at < 0:
+                  break
+              positions.append(at)
+              cursor = at + len(old)
+          if len(positions) != 3:
+              raise SystemExit(f"expected 3 current Pending assertions, found {len(positions)}")
+          replacements = [
+              "LinuxControlProcessProgress::Pending(LinuxControlIoInterest::Readable)",
+              "LinuxControlProcessProgress::Pending(LinuxControlIoInterest::Writable)",
+              "LinuxControlProcessProgress::Pending(LinuxControlIoInterest::Readable)",
+          ]
+          parts = []
+          cursor = 0
+          for at, replacement in zip(positions, replacements):
+              parts.append(text[cursor:at])
+              parts.append(replacement)
+              cursor = at + len(old)
+          parts.append(text[cursor:])
+          path.write_text(''.join(parts))
+          PY
+
+          git add src/effect_fabric/root_supervisor_linux_control_session.rs src/effect_fabric/root_supervisor_linux_control_resumability_tests.rs
           changed="$(git diff --name-only --cached)"
           test "$changed" = $'src/effect_fabric/root_supervisor_linux_control_resumability_tests.rs\nsrc/effect_fabric/root_supervisor_linux_control_session.rs'
           git diff --check --cached
@@ -104,8 +150,6 @@ jobs:
 
       - name: Commit and fast-forward exact private ref
         shell: bash
-        env:
-          PRIVATE_WRITE_TOKEN: ${{ secrets.LAS_PRIVATE_WRITE_TOKEN }}
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/private-target"
@@ -115,9 +159,10 @@ jobs:
           remote_sha="$(git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote origin "$target_ref" | awk '{print $1}')"
           echo "::add-mask::$remote_sha"
           test "$remote_sha" = "$start_sha"
+          cargo +1.98.1 fmt --all
+          git add src/effect_fabric/root_supervisor_linux_control_session.rs src/effect_fabric/root_supervisor_linux_control_resumability_tests.rs
           git config user.name "LAS Verification Integrator"
           git config user.email "las-verification@users.noreply.github.com"
-          git add src/effect_fabric/root_supervisor_linux_control_session.rs src/effect_fabric/root_supervisor_linux_control_resumability_tests.rs
           git commit -q -m "Expose exact control readiness interest"
           new_sha="$(git rev-parse HEAD)"
           echo "::add-mask::$new_sha"
