@@ -315,6 +315,7 @@ jobs:
             "tlc_matrix_job": "$TLC_RESULT",
             "tlc_profile_count": $EXPECTED_TLC_PROFILE_COUNT,
             "tlc_shard_count": $TLC_SHARD_COUNT,
+            "promotion_marker": "LAS_VERIFY_ALL_RESULT=$result",
             "result": "$result"
           }
           EOF
@@ -328,4 +329,5 @@ jobs:
           fi
 
           echo "LAS_SHARDED_VERIFY_RESULT=$result"
+          echo "LAS_VERIFY_ALL_RESULT=$result"
           [[ "$result" == "PASS" ]]
