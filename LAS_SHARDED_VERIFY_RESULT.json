@@ -1,9 +1,9 @@
 {
   "schema": "las-public-sharded-verification-v1",
-  "private_snapshot_proof": "10b93b9415f901b8023e844fb7fb497a80da7606755c9c8b9a407378ae272276",
+  "private_snapshot_proof": "1b139dc7920e82d5f9bdd2a68c072ad88bc0049d5ef1377380899164da5f93f9",
   "canonical_verifier_blob": "62e3e6dc0fad5dddc7fb0a453a3cd681d911e590",
-  "pre_tlc_job": "failure",
-  "tlc_matrix_job": "skipped",
+  "pre_tlc_job": "success",
+  "tlc_matrix_job": "failure",
   "tlc_profile_count": 191,
   "tlc_shard_count": 191,
   "promotion_marker": "",
