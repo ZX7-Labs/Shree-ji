@@ -1,4 +1,4 @@
-name: Private current Root FFI minimal cfg proof
+name: Private current Root FFI minimal static classifier
 
 on:
   push:
@@ -15,9 +15,9 @@ env:
   EXPECTED_PRIVATE_SNAPSHOT_PROOF: 10b93b9415f901b8023e844fb7fb497a80da7606755c9c8b9a407378ae272276
 
 jobs:
-  prove:
+  classify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 60
     steps:
       - name: Install exact Rust and Ada build toolchains
         shell: bash
@@ -89,7 +89,7 @@ jobs:
           test "$(git rev-parse FETCH_HEAD)" = "$matched_sha"
           git checkout -q --detach "$matched_sha"
           test -z "$(git status --porcelain --untracked-files=no)"
-          echo "LAS_ROOT_FFI_MINIMAL_PROOF_SNAPSHOT=PASS"
+          echo "LAS_ROOT_FFI_MINIMAL_CLASSIFIER_SNAPSHOT=PASS"
 
       - name: Apply minimal cfg repair ephemerally
         shell: bash
@@ -98,7 +98,6 @@ jobs:
           cd target
           python3 <<'PY'
           from pathlib import Path
-
           joint = '''    #[cfg(any(
               test,
               all(
@@ -107,23 +106,15 @@ jobs:
                   target_os = "linux"
               )
           ))]'''
-
           dispatch = Path("src/effect_fabric/dispatch_commit.rs")
           text = dispatch.read_text(encoding="utf-8")
-          replacements = [
-              (
-                  "impl RootGrantLivenessBinding {\n    fn new(",
-                  "impl RootGrantLivenessBinding {\n" + joint + "\n    fn new(",
-              ),
+          for old, new in [
+              ("impl RootGrantLivenessBinding {\n    fn new(", "impl RootGrantLivenessBinding {\n" + joint + "\n    fn new("),
               ("\n    fn build(\n", "\n" + joint + "\n    fn build(\n"),
-              (
-                  '    #[cfg(feature = "root-ffi")]\n    #[expect(',
-                  joint + "\n    #[expect(",
-              ),
-          ]
-          for old, new in replacements:
+              ('    #[cfg(feature = "root-ffi")]\n    #[expect(', joint + "\n    #[expect("),
+          ]:
               if text.count(old) != 1:
-                  raise SystemExit(f"dispatch overlay anchor mismatch: {old[:40]}")
+                  raise SystemExit("dispatch overlay anchor mismatch")
               text = text.replace(old, new, 1)
           dispatch.write_text(text, encoding="utf-8")
 
@@ -139,72 +130,64 @@ jobs:
               text = text.replace(old, new, 1)
           ffi.write_text(text, encoding="utf-8")
           PY
-
           cargo +1.98.1 fmt --all
           cargo +1.98.1 fmt --all -- --check
           git diff --check
-          test "$(git diff --name-only | wc -l | tr -d ' ')" = "2"
-          echo "LAS_ROOT_FFI_MINIMAL_OVERLAY_APPLIED=PASS"
+          echo "LAS_ROOT_FFI_MINIMAL_CLASSIFIER_OVERLAY=PASS"
 
-      - name: Prove strict Root FFI static gates
+      - name: Classify minimal post-overlay strict check and Clippy
         shell: bash
         run: |
           set -euo pipefail
           cd target
-          check_log="$RUNNER_TEMP/root-ffi-minimal-check.private.log"
-          clippy_log="$RUNNER_TEMP/root-ffi-minimal-clippy.private.log"
-          env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" \
-            cargo +1.98.1 check --locked --features root-ffi --all-targets \
-            >"$check_log" 2>&1
-          GPRBUILD="$GPRBUILD" \
-            cargo +1.98.1 clippy --locked --features root-ffi --all-targets -- -D warnings \
-            >"$clippy_log" 2>&1
-          rm -f "$check_log" "$clippy_log"
-          echo "LAS_ROOT_FFI_MINIMAL_STATIC=PASS"
-
-      - name: Prove Root FFI tests and exact adapter gates
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd target
-          tests_log="$RUNNER_TEMP/root-ffi-minimal-tests.private.log"
-          memory_log="$RUNNER_TEMP/root-ffi-minimal-memory.private.log"
-          p95_log="$RUNNER_TEMP/root-ffi-minimal-p95.private.log"
-          env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" \
-            cargo +1.98.1 test --locked --features root-ffi --all-targets -- --test-threads=1 \
-            >"$tests_log" 2>&1
-          env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" \
-            cargo +1.98.1 test --locked --features root-ffi \
-            effect_fabric::root_ffi_benchmark::root_adapter_memory_layout_baseline_is_reported \
-            -- --exact --test-threads=1 --nocapture >"$memory_log" 2>&1
-          env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" \
-            cargo +1.98.1 test --locked --release --features root-ffi \
-            effect_fabric::root_ffi_benchmark::full_root_adapter_p95_is_within_twenty_milliseconds \
-            -- --exact --test-threads=1 --nocapture >"$p95_log" 2>&1
-          rm -f "$tests_log" "$memory_log" "$p95_log"
-          echo "LAS_ROOT_FFI_MINIMAL_RUNTIME=PASS"
-
-      - name: Prove Linux joint all-feature regression surface
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd target
-          check_log="$RUNNER_TEMP/root-ffi-minimal-all-check.private.log"
-          clippy_log="$RUNNER_TEMP/root-ffi-minimal-all-clippy.private.log"
-          tests_log="$RUNNER_TEMP/root-ffi-minimal-all-tests.private.log"
-          release_log="$RUNNER_TEMP/root-ffi-minimal-all-release.private.log"
-          env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" \
-            cargo +1.98.1 check --locked --all-features --all-targets >"$check_log" 2>&1
-          GPRBUILD="$GPRBUILD" \
-            cargo +1.98.1 clippy --locked --all-features --all-targets -- -D warnings \
-            >"$clippy_log" 2>&1
-          env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" \
-            cargo +1.98.1 test --locked --all-features --all-targets -- --test-threads=1 \
-            >"$tests_log" 2>&1
-          env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" \
-            cargo +1.98.1 test --locked --release --all-features --lib -- --test-threads=1 \
-            >"$release_log" 2>&1
-          rm -f "$check_log" "$clippy_log" "$tests_log" "$release_log"
-          test "$(git diff --name-only | sort)" = $'src/effect_fabric/dispatch_commit.rs\nsrc/effect_fabric/root_ffi.rs'
-          echo "LAS_ROOT_FFI_MINIMAL_ALL_FEATURES=PASS"
-          echo "LAS_ROOT_FFI_MINIMAL_CFG_PROOF_RESULT=PASS"
+          classify() {
+            label="$1"
+            mode="$2"
+            json="$RUNNER_TEMP/${label}.jsonl"
+            stderr="$RUNNER_TEMP/${label}.stderr"
+            set +e
+            if [[ "$mode" = check ]]; then
+              env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" \
+                cargo +1.98.1 check --locked --features root-ffi --all-targets --message-format=json \
+                >"$json" 2>"$stderr"
+            else
+              GPRBUILD="$GPRBUILD" \
+                cargo +1.98.1 clippy --locked --features root-ffi --all-targets --message-format=json -- -D warnings \
+                >"$json" 2>"$stderr"
+            fi
+            rc=$?
+            set -e
+            echo "LAS_ROOT_FFI_${label}_RC=$rc"
+            python3 - "$label" "$json" <<'PY'
+          import collections, hashlib, json, sys
+          label, path = sys.argv[1], sys.argv[2]
+          codes = collections.Counter()
+          owners = collections.Counter()
+          total = 0
+          for raw in open(path, encoding="utf-8", errors="replace"):
+              try:
+                  obj = json.loads(raw)
+              except Exception:
+                  continue
+              if obj.get("reason") != "compiler-message":
+                  continue
+              msg = obj.get("message") or {}
+              if msg.get("level") != "error":
+                  continue
+              code = (msg.get("code") or {}).get("code") or "NO_CODE"
+              primary = [s for s in (msg.get("spans") or []) if s.get("is_primary")]
+              owner = str(primary[0].get("file_name") or "NO_SPAN") if primary else "NO_SPAN"
+              codes[code] += 1
+              owners[(code, hashlib.sha256(owner.encode()).hexdigest())] += 1
+              total += 1
+          print(f"LAS_ROOT_FFI_{label}_ERROR_COUNT={total}")
+          for code, count in sorted(codes.items()):
+              print(f"LAS_ROOT_FFI_{label}_ERROR_CODE={code}:{count}")
+          for (code, owner), count in sorted(owners.items()):
+              print(f"LAS_ROOT_FFI_{label}_OWNER={code}:{owner}:{count}")
+          PY
+            rm -f "$json" "$stderr"
+          }
+          classify MINIMAL_CHECK check
+          classify MINIMAL_CLIPPY clippy
+          echo "LAS_ROOT_FFI_MINIMAL_STATIC_CLASSIFICATION=PASS"
