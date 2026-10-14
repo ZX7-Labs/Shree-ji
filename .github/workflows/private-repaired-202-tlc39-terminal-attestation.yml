@@ -1,6 +1,10 @@
 name: Repaired exact 202 TLC39 terminal attestation
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "RUN_REPAIRED_202_TLC39_TERMINAL_ATTEST"
   workflow_dispatch:
     inputs:
       terminal_run_id:
@@ -26,17 +30,28 @@ env:
   EXPECTED_INDEX39_TLA_SHA256: 391c62071a571370904c26fdb39c647e1a17e7869a71072cd8e59a8f4967f0c1
   EXPECTED_CONTINUATION_WORKFLOW_BLOB: b0d34658082e9062c9e714cb1125a66385abac83
   EXPECTED_CONTINUATION_WORKFLOW_PATH: .github/workflows/private-repaired-202-tlc39-continuation.yml
-  TERMINAL_RUN_ID: ${{ inputs.terminal_run_id }}
+  TERMINAL_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.terminal_run_id || '' }}
 
 jobs:
   attest:
     runs-on: ubuntu-24.04
     steps:
+      - name: Checkout attestation request
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+
       - name: Validate terminal attestation request
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$TERMINAL_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          requested="$TERMINAL_RUN_ID"
+          if [[ "$GITHUB_EVENT_NAME" = "push" ]]; then
+            test -f RUN_REPAIRED_202_TLC39_TERMINAL_ATTEST
+            requested="$(tr -d '[:space:]' < RUN_REPAIRED_202_TLC39_TERMINAL_ATTEST)"
+          fi
+          [[ "$requested" =~ ^[1-9][0-9]*$ ]]
+          echo "TERMINAL_RUN_ID=$requested" >>"$GITHUB_ENV"
           echo "LAS_REPAIRED_202_TLC39_ATTEST_REQUEST=PASS"
 
       - name: Revalidate exact frozen private candidate
