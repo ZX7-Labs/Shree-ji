@@ -109,7 +109,9 @@ jobs:
           cd "$RUNNER_TEMP/private-probe"
           rustup toolchain install 1.98.1 --profile minimal >/dev/null
           rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          cargo +1.98.1 fmt --all
           cargo +1.98.1 fmt --all -- --check
           RUSTFLAGS='-D warnings' cargo +1.98.1 check --all-targets --features 'linux-peer-credentials root-ffi'
           cargo +1.98.1 clippy --all-targets --features 'linux-peer-credentials root-ffi' -- -D warnings
+          git diff --check
           echo "LAS_PRODUCTION_ASSEMBLY_PROBE=PASS"
