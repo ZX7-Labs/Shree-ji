@@ -1,0 +1,169 @@
+name: Exact private format verification 20261014-04
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/exact-private-format-verify-20261014-04.yml"
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 28a52175bfc55f4f8b2b0f4312cd2616a65a7082555149f4382746e2254e1b26
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 10eabdfaee17ada6e5ba5fe588cde1545a82200bbe39d5f4a390227b1f90e523
+  EXPECTED_PRIVATE_TREE_PROOF: 387ca31b43d03aa98f08137d2ec361f6bc9b447ba44f029fac92f34da6e2eee1
+  FORMAT_TARGET_PATH_HASH: 834090a3afa859d39073122ca99aa0403d5227d4f12292d2950da1df0ad302d8
+
+jobs:
+  verify-and-format:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          test "$(rustc +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          test "$(cargo +1.98.1 --version | awk '{print $2}')" = "1.98.1"
+          echo "LAS_FMT04_TOOLCHAIN=PASS"
+
+      - name: Recover exact private revision with bounded write authority
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_WRITE_TOKEN: ${{ secrets.LAS_PRIVATE_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_WRITE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_WRITE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_WRITE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; private_head=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"; matched_ref="$ref"; private_head="$candidate_sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$private_head"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$private_head"
+          test "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$private_head"
+          git checkout -q -B verified-format "$private_head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          printf '%s' "$matched_ref" >"$RUNNER_TEMP/private-ref"
+          printf '%s' "$private_head" >"$RUNNER_TEMP/private-start-sha"
+          printf '%s' "$auth" >"$RUNNER_TEMP/private-auth"
+          chmod 600 "$RUNNER_TEMP/private-ref" "$RUNNER_TEMP/private-start-sha" "$RUNNER_TEMP/private-auth"
+          echo "LAS_FMT04_EXACT_RECOVERY=PASS"
+
+      - name: Verify lockfile and apply deterministic formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          cp Cargo.lock "$RUNNER_TEMP/Cargo.lock.expected"
+          cargo +1.98.1 generate-lockfile >/dev/null 2>&1
+          cmp --silent Cargo.lock "$RUNNER_TEMP/Cargo.lock.expected"
+          git checkout -q -- Cargo.lock
+          cargo +1.98.1 fmt --all
+          cargo +1.98.1 fmt --all -- --check
+          git diff --check
+          python3 - <<'PY'
+          import hashlib,os,subprocess
+          paths=[p.decode() for p in subprocess.check_output(['git','diff','--name-only','-z']).split(b'\0') if p]
+          if len(paths)!=1: raise SystemExit(70)
+          if hashlib.sha256(paths[0].encode()).hexdigest()!=os.environ['FORMAT_TARGET_PATH_HASH']: raise SystemExit(71)
+          print('LAS_FMT04_FORMAT_SCOPE=PASS')
+          PY
+          test -z "$(git status --porcelain --untracked-files=only)"
+
+      - name: Compile exact formatted tree
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          cargo +1.98.1 check --locked --all-targets >/dev/null 2>&1
+          cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials >/dev/null 2>&1
+          echo "LAS_FMT04_COMPILE=PASS"
+
+      - name: Lint exact formatted tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          cargo +1.98.1 clippy --locked --all-targets -- -D warnings >/dev/null 2>&1
+          cargo +1.98.1 clippy --locked --all-targets --features linux-peer-credentials -- -D warnings >/dev/null 2>&1
+          echo "LAS_FMT04_CLIPPY=PASS"
+
+      - name: Verify guarded resumability boundary
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          cargo +1.98.1 test --locked --features linux-peer-credentials --lib effect_fabric::root_supervisor_linux_guarded_resumability_tests -- --test-threads=1 >/dev/null 2>&1
+          cargo +1.98.1 test --locked --features linux-peer-credentials --lib effect_fabric::root_supervisor_linux_channel::tests:: -- --test-threads=1 >/dev/null 2>&1
+          echo "LAS_FMT04_FOCUSED=PASS"
+
+      - name: Verify full Rust matrices
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          cargo +1.98.1 test --locked --all-targets -- --test-threads=1 >/dev/null 2>&1
+          cargo +1.98.1 test --locked --all-targets --features linux-peer-credentials -- --test-threads=1 >/dev/null 2>&1
+          cargo +1.98.1 test --locked --release --features linux-peer-credentials --lib effect_fabric::root_supervisor_ -- --test-threads=1 >/dev/null 2>&1
+          cargo +1.98.1 fmt --all -- --check >/dev/null 2>&1
+          python3 - <<'PY'
+          import hashlib,os,subprocess
+          paths=[p.decode() for p in subprocess.check_output(['git','diff','--name-only','-z']).split(b'\0') if p]
+          if len(paths)!=1: raise SystemExit(72)
+          if hashlib.sha256(paths[0].encode()).hexdigest()!=os.environ['FORMAT_TARGET_PATH_HASH']: raise SystemExit(73)
+          PY
+          test -z "$(git status --porcelain --untracked-files=only)"
+          echo "LAS_FMT04_FULL=PASS"
+
+      - name: Commit verified formatting and fast-forward exact private ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          matched_ref="$(cat "$RUNNER_TEMP/private-ref")"
+          start_sha="$(cat "$RUNNER_TEMP/private-start-sha")"
+          auth="$(cat "$RUNNER_TEMP/private-auth")"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$start_sha"; echo "::add-mask::$auth"
+          remote_sha="$(git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote origin "$matched_ref" | awk '{print $1}')"
+          echo "::add-mask::$remote_sha"
+          test "$remote_sha" = "$start_sha"
+          python3 - <<'PY'
+          import hashlib,os,subprocess
+          paths=[p.decode() for p in subprocess.check_output(['git','diff','--name-only','-z']).split(b'\0') if p]
+          if len(paths)!=1: raise SystemExit(74)
+          if hashlib.sha256(paths[0].encode()).hexdigest()!=os.environ['FORMAT_TARGET_PATH_HASH']: raise SystemExit(75)
+          PY
+          git config user.name "LAS Exact Verifier"
+          git config user.email "las-exact-verifier@users.noreply.github.com"
+          git add -u
+          test -n "$(git diff --cached --name-only)"
+          test "$(git diff --cached --name-only | wc -l | tr -d ' ')" -eq 1
+          git commit -q -m "Format guarded resumability regressions"
+          new_sha="$(git rev-parse HEAD)"; new_tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$new_sha"; echo "::add-mask::$new_tree"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" push -q origin HEAD:"$matched_ref"
+          echo "LAS_FMT04_PUSH=PASS"
+          echo "LAS_FMT04_COMMIT_PROOF=$(printf '%s' "$new_sha" | sha256sum | awk '{print $1}')"
+          echo "LAS_FMT04_TREE_PROOF=$(printf '%s' "$new_tree" | sha256sum | awk '{print $1}')"
