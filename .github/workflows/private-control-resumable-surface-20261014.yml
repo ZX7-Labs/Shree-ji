@@ -91,8 +91,6 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          service = Path("src/effect_fabric/root_supervisor_linux_service.rs")
-          text = service.read_text()
           old_import = '''use super::root_supervisor_linux_control_session::{
               ControlSessionStep, LinuxActiveControlSession, LinuxActiveControlSessionError,
           };'''
@@ -100,21 +98,20 @@ jobs:
               ControlSessionStep, LinuxActiveControlSession, LinuxActiveControlSessionError,
               LinuxControlProcessProgress,
           };'''
+
+          service = Path("src/effect_fabric/root_supervisor_linux_service.rs")
+          text = service.read_text()
+          if "fn try_process_control(" in text:
+              raise SystemExit("service already has try_process_control")
           if text.count(old_import) != 1:
               raise SystemExit("service control import anchor mismatch")
           text = text.replace(old_import, new_import, 1)
-          old_method = '''    pub(super) fn process_control(
-              &mut self,
-              session: &mut LinuxActiveControlSession,
-              boundary: &BoundaryState,
-          ) -> Result<
-              ControlSessionStep,
-              LinuxActiveControlSessionError<ControlStore::Error, GuardedStore::Error>,
-          > {
-              session.process_one(&mut self.parts.core, boundary)
-          }
+          anchor = '''        session.process_one(&mut self.parts.core, boundary)
+              }
           '''
-          new_method = old_method + '''
+          if text.count(anchor) != 1:
+              raise SystemExit(f"service process_control tail count={text.count(anchor)}")
+          addition = anchor + '''
               /// Resume one control request/reply without waiting for future socket progress.
               /// `Pending` preserves exact session ownership; a complete command crosses the
               /// Root/effect service at most once and any staged reply must finish before a
@@ -130,24 +127,21 @@ jobs:
                   session.try_process_one(&mut self.parts.core, boundary)
               }
           '''
-          if text.count(old_method) != 1 or "fn try_process_control(" in text:
-              raise SystemExit("service process_control anchor/state mismatch")
-          service.write_text(text.replace(old_method, new_method, 1))
+          service.write_text(text.replace(anchor, addition, 1))
 
           deployment = Path("src/effect_fabric/root_supervisor_linux_deployment.rs")
           text = deployment.read_text()
+          if "fn try_process_control(" in text:
+              raise SystemExit("deployment already has try_process_control")
           if text.count(old_import) != 1:
               raise SystemExit("deployment control import anchor mismatch")
           text = text.replace(old_import, new_import, 1)
-          old_deployment = '''    pub(super) fn process_control(
-              &mut self,
-              session: &mut LinuxActiveControlSession,
-              boundary: &BoundaryState,
-          ) -> Result<ControlSessionStep, LinuxActiveControlSessionError<C::Error, G::Error>> {
-              self.service.process_control(session, boundary)
-          }
+          anchor = '''        self.service.process_control(session, boundary)
+              }
           '''
-          new_deployment = old_deployment + '''
+          if text.count(anchor) != 1:
+              raise SystemExit(f"deployment process_control tail count={text.count(anchor)}")
+          addition = anchor + '''
               /// Resume one accepted control session cooperatively. No-progress retains the
               /// exact session and staged transport state for the process owner.
               pub(super) fn try_process_control(
@@ -161,11 +155,10 @@ jobs:
                   self.service.try_process_control(session, boundary)
               }
           '''
-          if text.count(old_deployment) != 1 or "fn try_process_control(" in text:
-              raise SystemExit("deployment process_control anchor/state mismatch")
-          deployment.write_text(text.replace(old_deployment, new_deployment, 1))
+          deployment.write_text(text.replace(anchor, addition, 1))
           PY
 
+          cargo +stable fmt --all >/dev/null 2>&1 || true
           git diff --check
           changed="$(git diff --name-only)"
           test "$changed" = $'src/effect_fabric/root_supervisor_linux_deployment.rs\nsrc/effect_fabric/root_supervisor_linux_service.rs'
