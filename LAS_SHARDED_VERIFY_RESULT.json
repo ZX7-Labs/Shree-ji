@@ -1,10 +1,11 @@
 {
   "schema": "las-public-sharded-verification-v1",
-  "private_snapshot_proof": "39eb52040db60e9365602736df506b7239a2159f5afce71ee032a31343195858",
-  "canonical_verifier_blob": "9f4b3b02c936d5af877f0cfe7c1ebc46f4bb5774",
+  "private_snapshot_proof": "10b93b9415f901b8023e844fb7fb497a80da7606755c9c8b9a407378ae272276",
+  "canonical_verifier_blob": "62e3e6dc0fad5dddc7fb0a453a3cd681d911e590",
   "pre_tlc_job": "failure",
   "tlc_matrix_job": "skipped",
-  "tlc_profile_count": 158,
-  "tlc_shard_count": 32,
-  "result": "FAIL"
+  "tlc_profile_count": 191,
+  "tlc_shard_count": 191,
+  "promotion_marker": "",
+  "result": "NOT_PASS"
 }
