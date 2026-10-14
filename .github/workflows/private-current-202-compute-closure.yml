@@ -1,0 +1,214 @@
+name: Close exact repaired 202 canonical compute
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "RUN_CURRENT_202_COMPUTE_CLOSURE"
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  SOURCE_RUN_ID: "38623465219"
+  EXPECTED_SOURCE_HEAD: b065678bfd50d8ff1ecb5b0eb4e101a579bccbf1
+  EXPECTED_SOURCE_WORKFLOW_BLOB: 2cd4b0f173aecd8de5e70fc4df999ec3c0a35d9f
+  TARGET_REF_HASH: 28a52175bfc55f4f8b2b0f4312cd2616a65a7082555149f4382746e2254e1b26
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 1b139dc7920e82d5f9bdd2a68c072ad88bc0049d5ef1377380899164da5f93f9
+  EXPECTED_VERIFIER_BLOB: 62e3e6dc0fad5dddc7fb0a453a3cd681d911e590
+  EXPECTED_TLC_PROFILE_COUNT: "202"
+
+jobs:
+  close:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout latest public control shell
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Revalidate frozen private candidate
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads \
+            "https://github.com/${PRIVATE_REPOSITORY}.git" >"$refs"
+          matched_ref=""
+          matched_sha=""
+          while read -r sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+              matched_sha="$sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"
+          test -n "$matched_ref"
+          test -n "$matched_sha"
+          echo "::add-mask::$matched_ref"
+          echo "::add-mask::$matched_sha"
+          test "$(printf '%s' "$matched_sha" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          echo "LAS_CURRENT_202_CLOSURE_PRIVATE_HEAD=PASS"
+          unset PRIVATE_TOKEN PRIVATE_REPOSITORY auth matched_ref matched_sha
+
+      - name: Bind exact source workflow revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cat-file -e "$EXPECTED_SOURCE_HEAD^{commit}"
+          blob="$(git rev-parse "$EXPECTED_SOURCE_HEAD:.github/workflows/private-current-sharded-verify.yml")"
+          test "$blob" = "$EXPECTED_SOURCE_WORKFLOW_BLOB"
+          echo "LAS_CURRENT_202_CLOSURE_SOURCE_WORKFLOW=PASS"
+
+      - name: Prove exact 202 canonical compute jobs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
+          hdr=(-H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
+
+          run_json="$RUNNER_TEMP/source-run.json"
+          curl --proto '=https' --tlsv1.2 --fail-with-body -sS "${hdr[@]}" \
+            "$api/actions/runs/$SOURCE_RUN_ID" >"$run_json"
+
+          jobs_json="$RUNNER_TEMP/source-jobs.json"
+          python3 - "$api" "$SOURCE_RUN_ID" "$jobs_json" "$GH_TOKEN" <<'PY'
+          import json, sys, urllib.request
+          api, run_id, out, token = sys.argv[1:]
+          jobs = []
+          page = 1
+          while True:
+              req = urllib.request.Request(
+                  f"{api}/actions/runs/{run_id}/jobs?filter=latest&per_page=100&page={page}",
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(req) as r:
+                  payload = json.load(r)
+              batch = payload.get("jobs", [])
+              jobs.extend(batch)
+              if len(batch) < 100:
+                  break
+              page += 1
+              if page > 10:
+                  raise SystemExit("unexpected job pagination")
+          with open(out, "w", encoding="utf-8") as f:
+              json.dump(jobs, f, separators=(",", ":"))
+          PY
+
+          python3 - "$run_json" "$jobs_json" "$EXPECTED_SOURCE_HEAD" "$EXPECTED_TLC_PROFILE_COUNT" <<'PY'
+          import json, re, sys
+          run_path, jobs_path, expected_head, expected_count = sys.argv[1:]
+          expected_count = int(expected_count)
+          run = json.load(open(run_path, encoding="utf-8"))
+          jobs = json.load(open(jobs_path, encoding="utf-8"))
+
+          if str(run.get("id")) != "38623465219":
+              raise SystemExit("source run id mismatch")
+          if run.get("head_sha") != expected_head:
+              raise SystemExit("source run head mismatch")
+          if run.get("run_attempt") != 1:
+              raise SystemExit("unexpected source run attempt")
+          if run.get("status") != "completed":
+              raise SystemExit("source run is not complete")
+
+          pre = [j for j in jobs if j.get("name") == "pre_tlc"]
+          if len(pre) != 1 or pre[0].get("conclusion") != "success" or pre[0].get("head_sha") != expected_head:
+              raise SystemExit("pre_tlc evidence incomplete")
+          pre_steps = {s.get("name"): s.get("conclusion") for s in pre[0].get("steps", [])}
+          if pre_steps.get("Checkout exact hidden private revision") != "success":
+              raise SystemExit("pre_tlc private binding missing")
+          if pre_steps.get("Run exact canonical pre-TLC stage") != "success":
+              raise SystemExit("pre_tlc canonical stage missing")
+
+          seen = {}
+          pat = re.compile(r"^tlc \((\d+)\)$")
+          for job in jobs:
+              m = pat.match(job.get("name", ""))
+              if not m:
+                  continue
+              idx = int(m.group(1))
+              if idx in seen:
+                  raise SystemExit(f"duplicate TLC shard {idx}")
+              seen[idx] = job
+
+          expected = set(range(expected_count))
+          if set(seen) != expected:
+              missing = sorted(expected - set(seen))
+              extra = sorted(set(seen) - expected)
+              raise SystemExit(f"TLC shard set mismatch missing={missing} extra={extra}")
+
+          for idx in sorted(seen):
+              job = seen[idx]
+              if job.get("head_sha") != expected_head:
+                  raise SystemExit(f"TLC shard {idx} head mismatch")
+              if job.get("conclusion") != "success":
+                  raise SystemExit(f"TLC shard {idx} not successful")
+              steps = {s.get("name"): s.get("conclusion") for s in job.get("steps", [])}
+              if steps.get("Checkout exact hidden private revision") != "success":
+                  raise SystemExit(f"TLC shard {idx} private binding missing")
+              if steps.get("Run canonical TLC shard") != "success":
+                  raise SystemExit(f"TLC shard {idx} canonical execution missing")
+
+          print("LAS_CURRENT_202_CLOSURE_PRE_TLC=PASS")
+          print(f"LAS_CURRENT_202_CLOSURE_TLC_PROFILE_COUNT={len(seen)}")
+          print("LAS_CURRENT_202_CLOSURE_TLC_MATRIX=PASS")
+          PY
+
+          rm -f "$run_json" "$jobs_json"
+
+      - name: Record exact aggregate result on latest public main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "LAS Verification Integrator"
+          git config user.email "las-verification@users.noreply.github.com"
+
+          for attempt in 1 2 3; do
+            git fetch -q origin main
+            git checkout -q -B closure-write origin/main
+            cat > LAS_SHARDED_VERIFY_RESULT.json <<EOF
+          {
+            "schema": "las-public-sharded-verification-v2",
+            "source_run_id": $SOURCE_RUN_ID,
+            "source_public_head": "$EXPECTED_SOURCE_HEAD",
+            "private_snapshot_proof": "$EXPECTED_PRIVATE_SNAPSHOT_PROOF",
+            "canonical_verifier_blob": "$EXPECTED_VERIFIER_BLOB",
+            "pre_tlc_job": "success",
+            "tlc_matrix_job": "success",
+            "tlc_profile_count": $EXPECTED_TLC_PROFILE_COUNT,
+            "result": "PASS",
+            "promotion_marker": "LAS_VERIFY_ALL_RESULT=PASS"
+          }
+          EOF
+            git add LAS_SHARDED_VERIFY_RESULT.json
+            if git diff --cached --quiet; then
+              echo "LAS_CURRENT_202_CLOSURE_RESULT_ALREADY_RECORDED=PASS"
+              echo "LAS_VERIFY_ALL_RESULT=PASS"
+              exit 0
+            fi
+            git commit -q -m "Record exact repaired 202 canonical result"
+            if git push -q origin HEAD:main; then
+              echo "LAS_CURRENT_202_CLOSURE_RESULT=PASS"
+              echo "LAS_VERIFY_ALL_RESULT=PASS"
+              exit 0
+            fi
+          done
+          echo "LAS_CURRENT_202_CLOSURE_RESULT=FAIL_CONCURRENT_PUBLIC_UPDATE"
+          exit 1
