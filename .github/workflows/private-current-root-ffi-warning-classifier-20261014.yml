@@ -1,0 +1,182 @@
+name: Private current Root FFI warning classifier
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/private-current-root-ffi-warning-classifier-20261014.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 28a52175bfc55f4f8b2b0f4312cd2616a65a7082555149f4382746e2254e1b26
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 10b93b9415f901b8023e844fb7fb497a80da7606755c9c8b9a407378ae272276
+
+jobs:
+  classify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Install exact Rust and Ada build toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+
+          ALR_ZIP="$RUNNER_TEMP/alr.zip"
+          ALR_PREFIX="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+            --output "$ALR_ZIP" \
+            "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip" \
+            >/dev/null 2>&1
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $ALR_ZIP" \
+            | sha256sum --check --strict >/dev/null
+          mkdir -p "$ALR_PREFIX"
+          unzip -q "$ALR_ZIP" -d "$ALR_PREFIX"
+          export PATH="$ALR_PREFIX/bin:$PATH"
+          echo "$ALR_PREFIX/bin" >> "$GITHUB_PATH"
+          alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
+
+          ALR_WS="$RUNNER_TEMP/alire-workspace"
+          mkdir -p "$ALR_WS"
+          (
+            cd "$ALR_WS"
+            alr -n init --in-place --no-skel --lib las_verify_toolchain >/dev/null
+          )
+          GPRBUILD_WRAPPER="$RUNNER_TEMP/gprbuild-via-alire"
+          cat > "$GPRBUILD_WRAPPER" <<EOF_GPR
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$ALR_WS"
+          exec "$ALR_PREFIX/bin/alr" exec -- gprbuild "\$@"
+          EOF_GPR
+          chmod 0755 "$GPRBUILD_WRAPPER"
+          echo "GPRBUILD=$GPRBUILD_WRAPPER" >> "$GITHUB_ENV"
+
+      - name: Recover exact private snapshot opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+
+          mkdir target
+          cd target
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin > "$refs"
+          matched_ref=""
+          matched_sha=""
+          while read -r candidate_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+              matched_sha="$candidate_sha"
+            fi
+          done < "$refs"
+          rm -f "$refs"
+          test -n "$matched_ref"
+          test -n "$matched_sha"
+          echo "::add-mask::$matched_ref"
+          echo "::add-mask::$matched_sha"
+          test "$(printf '%s' "$matched_sha" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$matched_sha"
+          git checkout -q --detach "$matched_sha"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "LAS_ROOT_FFI_CLASSIFIER_SNAPSHOT=PASS"
+
+      - name: Classify strict Root FFI compiler failure
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd target
+          json="$RUNNER_TEMP/root-ffi-strict.jsonl"
+          stderr="$RUNNER_TEMP/root-ffi-strict.stderr"
+
+          set +e
+          env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" \
+            cargo +1.98.1 check --locked --features root-ffi --all-targets --message-format=json \
+            >"$json" 2>"$stderr"
+          strict_rc=$?
+          set -e
+          test "$strict_rc" -ne 0
+
+          python3 - "$json" <<'PY'
+          import collections, json, sys
+          codes = collections.Counter()
+          total = 0
+          for raw in open(sys.argv[1], encoding="utf-8", errors="replace"):
+              try:
+                  obj = json.loads(raw)
+              except Exception:
+                  continue
+              if obj.get("reason") != "compiler-message":
+                  continue
+              msg = obj.get("message") or {}
+              if msg.get("level") != "error":
+                  continue
+              code = (msg.get("code") or {}).get("code") or "NO_CODE"
+              codes[code] += 1
+              total += 1
+          print(f"LAS_ROOT_FFI_STRICT_ERROR_COUNT={total}")
+          for code, count in sorted(codes.items()):
+              print(f"LAS_ROOT_FFI_STRICT_ERROR_CODE={code}:{count}")
+          if total == 0:
+              raise SystemExit("strict failure produced no compiler error classification")
+          if set(codes) != {"dead_code"}:
+              raise SystemExit(f"unexpected strict error classes: {sorted(codes)}")
+          PY
+          rm -f "$json" "$stderr"
+          echo "LAS_ROOT_FFI_STRICT_CLASS=DEAD_CODE_ONLY"
+
+      - name: Prove dead-code allowance closes exact Root FFI build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd target
+          log="$RUNNER_TEMP/root-ffi-dead-code-check.private.log"
+          env RUSTFLAGS='-Dwarnings -Adead_code' GPRBUILD="$GPRBUILD" \
+            cargo +1.98.1 check --locked --features root-ffi --all-targets \
+            >"$log" 2>&1
+          rm -f "$log"
+          echo "LAS_ROOT_FFI_DEAD_CODE_CHECK=PASS"
+
+      - name: Prove strict Clippy except dead-code class
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd target
+          log="$RUNNER_TEMP/root-ffi-dead-code-clippy.private.log"
+          env RUSTFLAGS='-Dwarnings -Adead_code' GPRBUILD="$GPRBUILD" \
+            cargo +1.98.1 clippy --locked --features root-ffi --all-targets -- -D warnings -A dead_code \
+            >"$log" 2>&1
+          rm -f "$log"
+          echo "LAS_ROOT_FFI_DEAD_CODE_CLIPPY=PASS"
+
+      - name: Prove Root FFI tests and adapter gates execute with only dead-code relaxed
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd target
+          log="$RUNNER_TEMP/root-ffi-dead-code-tests.private.log"
+          env RUSTFLAGS='-Dwarnings -Adead_code' GPRBUILD="$GPRBUILD" \
+            cargo +1.98.1 test --locked --features root-ffi --all-targets -- --test-threads=1 \
+            >"$log" 2>&1
+          rm -f "$log"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "LAS_ROOT_FFI_DEAD_CODE_TESTS=PASS"
+          echo "LAS_ROOT_FFI_WARNING_CLASSIFIER_RESULT=PASS"
