@@ -1,0 +1,148 @@
+name: Exact private production overlay probe 12
+
+on:
+  push:
+    paths:
+      - ".github/workflows/exact-private-production-overlay-probe-20261014-12.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      TARGET_REF_HASH: 28a52175bfc55f4f8b2b0f4312cd2616a65a7082555149f4382746e2254e1b26
+      EXPECTED_TARGET_PROOF: 74fc0f762eeac47cc19fb58a768b975fd1aeec239d73a269aaf26cd1c6a3d760
+      SOURCE_REF_HASH: b04a74ff0e7f1b30935fd6807d8b17506c697daf0b895f7f778729cdfdcf3946
+    steps:
+      - name: Checkout public control shell
+        uses: actions/checkout@v4
+
+      - name: Recover exact target and source independently
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_READ_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_READ_TOKEN"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_READ_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          remote="https://github.com/${PRIVATE_REPOSITORY}.git"
+
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads "$remote" > "$refs"
+          target_ref=""; target_sha=""; source_ref=""; source_sha=""
+          while read -r sha ref; do
+            h="$(printf '%s' "$ref" | sha256sum | awk '{print $1}')"
+            if [[ "$h" == "$TARGET_REF_HASH" ]]; then target_ref="$ref"; target_sha="$sha"; fi
+            if [[ "$h" == "$SOURCE_REF_HASH" ]]; then source_ref="$ref"; source_sha="$sha"; fi
+          done < "$refs"
+          rm -f "$refs"
+          test -n "$target_ref" && test -n "$target_sha"
+          test -n "$source_ref" && test -n "$source_sha"
+          echo "::add-mask::$target_ref"; echo "::add-mask::$target_sha"
+          echo "::add-mask::$source_ref"; echo "::add-mask::$source_sha"
+          echo "LAS_OVERLAY_REFS_MATCHED=PASS"
+
+          target_root="$RUNNER_TEMP/private-target"
+          mkdir "$target_root"; cd "$target_root"; git init -q; git remote add origin "$remote"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$target_ref"
+          git checkout -q -B target FETCH_HEAD
+          actual="$(git rev-parse HEAD)"; test "$actual" = "$target_sha"
+          target_proof="$(printf '%s' "$actual" | sha256sum | awk '{print $1}')"
+          test "$target_proof" = "$EXPECTED_TARGET_PROOF"
+          echo "LAS_OVERLAY_TARGET_RECOVERY=PASS"
+
+          source_root="$RUNNER_TEMP/private-source"
+          mkdir "$source_root"; cd "$source_root"; git init -q; git remote add origin "$remote"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$source_ref"
+          git checkout -q -B source FETCH_HEAD
+          actual_source="$(git rev-parse HEAD)"; test "$actual_source" = "$source_sha"
+          echo "LAS_OVERLAY_SOURCE_RECOVERY=PASS"
+
+      - name: Overlay mature production owner without push
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="$RUNNER_TEMP/private-target"
+          source="$RUNNER_TEMP/private-source"
+          files=(
+            root_supervisor_linux_process_ingress.rs
+            root_supervisor_linux_production_bootstrap.rs
+            root_supervisor_linux_socket_activation.rs
+            root_supervisor_linux_production_resources.rs
+            root_supervisor_linux_production_process.rs
+            root_supervisor_linux_production_launch.rs
+            root_supervisor_linux_production_startup.rs
+            root_supervisor_linux_production_runtime.rs
+          )
+          for name in "${files[@]}"; do
+            cp "$source/src/effect_fabric/$name" "$target/src/effect_fabric/$name"
+          done
+          cd "$target"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/lib.rs')
+          s = p.read_text()
+          a1 = '    // Graceful rotation consumes a quiescent active epoch, retires both durable\n'
+          a2 = '    // Keep the safe executor core independently compilable/testable from the Ada FFI.\n'
+          b1 = '''    #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
+    mod root_supervisor_linux_production_bootstrap;
+    #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
+    #[allow(unsafe_code)]
+    mod root_supervisor_linux_socket_activation;
+    #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
+    mod root_supervisor_linux_production_resources;
+    #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
+    mod root_supervisor_linux_production_process;
+    #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
+    mod root_supervisor_linux_production_launch;
+    #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
+    mod root_supervisor_linux_production_startup;
+
+'''
+          b2 = '''    #[cfg(all(feature = "linux-peer-credentials", target_os = "linux"))]
+    mod root_supervisor_linux_process_ingress;
+    #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
+    mod root_supervisor_linux_production_runtime;
+
+'''
+          if 'mod root_supervisor_linux_production_process;' in s or 'mod root_supervisor_linux_process_ingress;' in s:
+              raise SystemExit('production overlay already present')
+          if s.count(a1) != 1 or s.count(a2) != 1:
+              raise SystemExit('module insertion anchor mismatch')
+          s = s.replace(a1, b1 + a1, 1).replace(a2, b2 + a2, 1)
+          p.write_text(s)
+          PY
+          git diff --check
+          echo "LAS_PRODUCTION_OVERLAY_APPLIED=PASS"
+
+      - name: Compile overlay on exact current target
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt >/dev/null
+          cargo +1.98.1 fmt --all
+          cargo +1.98.1 fmt --all -- --check
+          RUSTFLAGS='-D warnings' cargo +1.98.1 check --all-targets --features 'root-ffi linux-peer-credentials'
+          echo "LAS_PRODUCTION_OVERLAY_COMPILE=PASS"
+
+      - name: Prove no private push
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          raw="$(git rev-parse HEAD)"
+          head_proof="$(printf '%s' "$raw" | sha256sum | awk '{print $1}')"
+          test "$head_proof" = "$EXPECTED_TARGET_PROOF"
+          echo "LAS_PRODUCTION_OVERLAY_NO_PRIVATE_PUSH=PASS"
