@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 25
     env:
       TARGET_REF_HASH: 28a52175bfc55f4f8b2b0f4312cd2616a65a7082555149f4382746e2254e1b26
-      EXPECTED_TARGET_PROOF: baa9155161d246e14d94c0b4f1fac7464ffde84a4e34ad62cebfc2a1ce1765ea
+      EXPECTED_TARGET_PROOF: 79d02efaf5c818a5841bdcb3cd0c6a2014f95e1b5ccf67bfea7fd5e06a96cedc
     steps:
       - name: Checkout public control shell
         uses: actions/checkout@v4
@@ -57,6 +57,7 @@ jobs:
           proof="$(printf '%s' "$actual" | sha256sum | awk '{print $1}')"
           test "$proof" = "$EXPECTED_TARGET_PROOF"
           test -s tools/apply_linux_control_event_loop_20261014.py
+          test -s tools/fix_linux_control_event_loop_clippy_20261014.py
           printf '%s' "$matched_ref" > "$RUNNER_TEMP/target-ref"
           printf '%s' "$actual" > "$RUNNER_TEMP/target-start-sha"
           printf '%s' "$auth" > "$RUNNER_TEMP/private-auth"
@@ -69,7 +70,9 @@ jobs:
           set -euo pipefail
           cd "$RUNNER_TEMP/private-target"
           python3 tools/apply_linux_control_event_loop_20261014.py
-          rm tools/apply_linux_control_event_loop_20261014.py
+          python3 tools/fix_linux_control_event_loop_clippy_20261014.py
+          rm tools/apply_linux_control_event_loop_20261014.py \
+             tools/fix_linux_control_event_loop_clippy_20261014.py
           git diff --check
           grep -q 'pub(super) fn drive_once' src/effect_fabric/root_supervisor_linux_process_ingress.rs
           grep -q 'listener_readiness_fd' src/effect_fabric/root_supervisor_linux_deployment.rs
@@ -93,6 +96,7 @@ jobs:
           cargo +1.98.1 test --features linux-peer-credentials root_supervisor_linux_guarded_resumability_tests:: -- --nocapture
           cargo +1.98.1 test --features linux-peer-credentials root_supervisor_linux_deployment::tests:: -- --nocapture
           test ! -e tools/apply_linux_control_event_loop_20261014.py
+          test ! -e tools/fix_linux_control_event_loop_clippy_20261014.py
           git diff --check
           echo "LAS_CONTROL_EVENT_LOOP_VERIFY=PASS"
 
