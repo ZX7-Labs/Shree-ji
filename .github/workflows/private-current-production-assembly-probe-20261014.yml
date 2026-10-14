@@ -12,16 +12,16 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 30
     env:
-      TARGET_REF_HASH: 28a52175bfc55f4f8b2b0f4312cd2616a65a7082555149f4382746e2254e1b26
-      EXPECTED_TARGET_PROOF: a8a3d53c88984207d06613deab72a952bae8a9e698163bdb87491582b3dd5d1a
+      TARGET_REF_HASH: dacb3ca65e53f8133e7206c1f3f50ee1e38439e5dbcd8869616e6db414d551b3
+      EXPECTED_TARGET_PROOF: bbcce4693e0f7d0e9487232592448248aa9bfbbd21b0d7406a8f210d55e2cb8d
       SOURCE_REF_HASH: b04a74ff0e7f1b30935fd6807d8b17506c697daf0b895f7f778729cdfdcf3946
     steps:
       - name: Checkout public shell
         uses: actions/checkout@v4
 
-      - name: Recover exact target and historical assembly source
+      - name: Recover exact private integration target and historical assembly source
         shell: bash
         env:
           PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
@@ -49,12 +49,18 @@ jobs:
           echo "::add-mask::$source_ref"; echo "::add-mask::$source_sha"
           git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$target_ref"
           git checkout -q -B target FETCH_HEAD
-          test "$(printf '%s' "$(git rev-parse HEAD)" | sha256sum | awk '{print $1}')" = "$EXPECTED_TARGET_PROOF"
+          actual="$(git rev-parse HEAD)"; test "$actual" = "$target_sha"
+          test "$(printf '%s' "$actual" | sha256sum | awk '{print $1}')" = "$EXPECTED_TARGET_PROOF"
+          test -s tools/apply_current_production_assembly_rebase_20261014.py
           git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$source_ref"
           printf '%s' "$source_sha" > "$RUNNER_TEMP/source-sha"
-          echo "LAS_PRODUCTION_ASSEMBLY_RECOVERY=PASS"
+          printf '%s' "$target_ref" > "$RUNNER_TEMP/target-ref"
+          printf '%s' "$target_sha" > "$RUNNER_TEMP/target-start-sha"
+          printf '%s' "$auth" > "$RUNNER_TEMP/private-auth"
+          chmod 600 "$RUNNER_TEMP/source-sha" "$RUNNER_TEMP/target-ref" "$RUNNER_TEMP/target-start-sha" "$RUNNER_TEMP/private-auth"
+          echo "LAS_PRODUCTION_REBASE_RECOVERY=PASS"
 
-      - name: Overlay assembly layers only
+      - name: Overlay assembly source and apply private current-native rebase
         shell: bash
         run: |
           set -euo pipefail
@@ -72,37 +78,12 @@ jobs:
           for file in "${files[@]}"; do
             git show "${source_sha}:${file}" > "$file"
           done
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('src/lib.rs')
-          t = p.read_text()
-          anchor = '''    // Graceful rotation consumes a quiescent active epoch, retires both durable
-          '''.replace('          ', '')
-          if t.count(anchor) != 1:
-              raise SystemExit(f'lib insertion anchor count={t.count(anchor)}')
-          block = '''    // Current-native concrete production assembly. These modules stop before the
-              // event loop: the final runtime owner is the already-verified readiness-driven path.
-              #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
-              mod root_supervisor_linux_production_bootstrap;
-              #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
-              #[allow(unsafe_code)]
-              mod root_supervisor_linux_socket_activation;
-              #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
-              mod root_supervisor_linux_production_resources;
-              #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
-              mod root_supervisor_linux_production_process;
-              #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
-              mod root_supervisor_linux_production_launch;
-              #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
-              mod root_supervisor_linux_production_startup;
-
-          '''.replace('              ', '    ')
-          p.write_text(t.replace(anchor, block + anchor, 1))
-          PY
+          python3 tools/apply_current_production_assembly_rebase_20261014.py
+          rm tools/apply_current_production_assembly_rebase_20261014.py
           git diff --check
-          echo "LAS_PRODUCTION_ASSEMBLY_OVERLAY=PASS"
+          echo "LAS_PRODUCTION_REBASE_PATCH=PASS"
 
-      - name: Compile current plus production assembly
+      - name: Strict compile and focused verification
         shell: bash
         run: |
           set -euo pipefail
@@ -136,5 +117,30 @@ jobs:
           cargo +1.98.1 fmt --all -- --check
           RUSTFLAGS='-D warnings' GPRBUILD="$GPRBUILD_WRAPPER" cargo +1.98.1 check --all-targets --features 'linux-peer-credentials root-ffi'
           GPRBUILD="$GPRBUILD_WRAPPER" cargo +1.98.1 clippy --all-targets --features 'linux-peer-credentials root-ffi' -- -D warnings
+          GPRBUILD="$GPRBUILD_WRAPPER" cargo +1.98.1 test --features 'linux-peer-credentials root-ffi' root_supervisor_linux_production_process:: -- --nocapture
+          GPRBUILD="$GPRBUILD_WRAPPER" cargo +1.98.1 test --features 'linux-peer-credentials root-ffi' root_supervisor_linux_control_resumability_tests:: -- --nocapture
+          test ! -e tools/apply_current_production_assembly_rebase_20261014.py
           git diff --check
-          echo "LAS_PRODUCTION_ASSEMBLY_PROBE=PASS"
+          echo "LAS_PRODUCTION_REBASE_VERIFY=PASS"
+
+      - name: Commit verified private integration branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-probe"
+          target_ref="$(cat "$RUNNER_TEMP/target-ref")"
+          start_sha="$(cat "$RUNNER_TEMP/target-start-sha")"
+          auth="$(cat "$RUNNER_TEMP/private-auth")"
+          remote_sha="$(git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote origin "$target_ref" | awk '{print $1}')"
+          echo "::add-mask::$remote_sha"
+          test "$remote_sha" = "$start_sha"
+          git config user.name "LAS Verification Integrator"
+          git config user.email "las-verification@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -q -m "Rebase Linux production assembly onto readiness runtime"
+          new_sha="$(git rev-parse HEAD)"
+          echo "::add-mask::$new_sha"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" push -q origin HEAD:"$target_ref"
+          echo "LAS_PRODUCTION_REBASE_RESULT=PASS"
+          echo "LAS_PRODUCTION_REBASE_COMMIT_PROOF=$(printf '%s' "$new_sha" | sha256sum | awk '{print $1}')"
