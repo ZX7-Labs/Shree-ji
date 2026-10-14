@@ -16,8 +16,8 @@ jobs:
       TARGET_REF_HASH: 28a52175bfc55f4f8b2b0f4312cd2616a65a7082555149f4382746e2254e1b26
       EXPECTED_TARGET_PROOF: 74fc0f762eeac47cc19fb58a768b975fd1aeec239d73a269aaf26cd1c6a3d760
       SOURCE_REF_HASH: b04a74ff0e7f1b30935fd6807d8b17506c697daf0b895f7f778729cdfdcf3946
-      PRIVATE_REPOSITORY: ${{ secrets.PRIVATE_REPOSITORY }}
-      PRIVATE_READ_TOKEN: ${{ secrets.PRIVATE_WRITE_TOKEN }}
+      PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+      PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_WRITE_TOKEN }}
     steps:
       - name: Checkout public control shell
         uses: actions/checkout@v4
