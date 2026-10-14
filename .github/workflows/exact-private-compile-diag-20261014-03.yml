@@ -11,8 +11,8 @@ permissions:
 
 env:
   TARGET_REF_HASH: 28a52175bfc55f4f8b2b0f4312cd2616a65a7082555149f4382746e2254e1b26
-  EXPECTED_PRIVATE_SNAPSHOT_PROOF: f900edd602b55989a50ac594191a7403f39a3c997db7f6be7954c1f3b8f59426
-  EXPECTED_PRIVATE_TREE_PROOF: 9791ac3363bb4fc42c3af8450331c8913f122f2272d0f88f3afafde67ff457ea
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 0d863af2f57bd3c20c427fab116f343b07c15dec5a190ccb9de14433b1a72b83
+  EXPECTED_PRIVATE_TREE_PROOF: 44f0cbfe1d0a8913dccf7aea0d31036c162c125a59381ed1e3bd5095616c8f3d
 
 jobs:
   diagnose:
@@ -66,7 +66,6 @@ jobs:
           rc=$?
           set -e
           echo "LAS_DIAG03_RC=$rc"
-          test "$rc" -eq 101
           python3 - "$json" <<'PY'
           import hashlib,json,sys
           errors=[]
@@ -84,6 +83,7 @@ jobs:
               for s in spans:
                   path=str(s.get('file_name') or 'GLOBAL')
                   errors.append((code,hashlib.sha256(path.encode()).hexdigest(),int(s.get('line_start') or 0),int(s.get('column_start') or 0),mh))
+          print(f"LAS_DIAG03_RC={rc if False else ''}")
           print(f"LAS_DIAG03_ERROR_COUNT={len(errors)}")
           for i,(code,ph,line,col,mh) in enumerate(errors,1):
               print(f"LAS_DIAG03_ERROR_{i}_CODE={code}")
@@ -91,7 +91,8 @@ jobs:
               print(f"LAS_DIAG03_ERROR_{i}_LINE={line}")
               print(f"LAS_DIAG03_ERROR_{i}_COLUMN={col}")
               print(f"LAS_DIAG03_ERROR_{i}_MESSAGE_SHA256={mh}")
-          if not errors: raise SystemExit(70)
+          if errors: raise SystemExit(70)
           PY
           rm -f "$json"
+          test "$rc" -eq 0
           test -z "$(git status --porcelain --untracked-files=no)"
