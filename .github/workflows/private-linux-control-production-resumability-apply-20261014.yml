@@ -92,8 +92,11 @@ jobs:
           set -euo pipefail
           cd "$RUNNER_TEMP/private-target"
           test -f tools/apply_linux_control_production_resumability_20261014.py
+          test -f tools/fix_linux_control_production_resumability_test_20261014.py
           python3 tools/apply_linux_control_production_resumability_20261014.py
+          python3 tools/fix_linux_control_production_resumability_test_20261014.py
           rm tools/apply_linux_control_production_resumability_20261014.py
+          rm tools/fix_linux_control_production_resumability_test_20261014.py
           cargo +1.98.1 fmt --all
           git diff --check
 
@@ -161,6 +164,7 @@ jobs:
           src/effect_fabric/root_supervisor_linux_deployment.rs
           src/effect_fabric/root_supervisor_linux_service.rs
           tools/apply_linux_control_production_resumability_20261014.py
+          tools/fix_linux_control_production_resumability_test_20261014.py
           EOF
           sort -o "$RUNNER_TEMP/expected-paths" "$RUNNER_TEMP/expected-paths"
           diff -u "$RUNNER_TEMP/expected-paths" "$changed"
@@ -170,7 +174,7 @@ jobs:
           git config user.name 'LAS Verification Integrator'
           git config user.email 'las-verification@users.noreply.github.com'
           git add -- src/effect_fabric/root_supervisor_linux_service.rs src/effect_fabric/root_supervisor_linux_deployment.rs src/effect_fabric/root_supervisor_linux_control_resumability_tests.rs
-          git add -u -- tools/apply_linux_control_production_resumability_20261014.py
+          git add -u -- tools/apply_linux_control_production_resumability_20261014.py tools/fix_linux_control_production_resumability_test_20261014.py
           git diff --cached --check
           git commit -q -m 'Wire resumable Linux control through deployment'
           new_sha="$(git rev-parse HEAD)"
