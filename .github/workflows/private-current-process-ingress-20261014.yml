@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 20
     env:
       TARGET_REF_HASH: 28a52175bfc55f4f8b2b0f4312cd2616a65a7082555149f4382746e2254e1b26
-      EXPECTED_TARGET_PROOF: 18de475fb0b6b9a3820e65df0bcb4c5516e7b92eb9176ee10dd9f4ba071d6963
+      EXPECTED_TARGET_PROOF: 5c4471f042872623f02eed214e1a4a828b383769d257c983e1bd033cff79e815
     steps:
       - name: Checkout public control shell
         uses: actions/checkout@v4
