@@ -1,0 +1,115 @@
+name: Private current production assembly probe
+
+on:
+  push:
+    paths:
+      - ".github/workflows/private-current-production-assembly-probe-20261014.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      TARGET_REF_HASH: 28a52175bfc55f4f8b2b0f4312cd2616a65a7082555149f4382746e2254e1b26
+      EXPECTED_TARGET_PROOF: a8a3d53c88984207d06613deab72a952bae8a9e698163bdb87491582b3dd5d1a
+      SOURCE_REF_HASH: b04a74ff0e7f1b30935fd6807d8b17506c697daf0b895f7f778729cdfdcf3946
+    steps:
+      - name: Checkout public shell
+        uses: actions/checkout@v4
+
+      - name: Recover exact target and historical assembly source
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_WRITE_TOKEN: ${{ secrets.LAS_PRIVATE_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY" && test -n "$PRIVATE_WRITE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_WRITE_TOKEN"
+          root="$RUNNER_TEMP/private-probe"; mkdir "$root"; cd "$root"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_WRITE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin > "$refs"
+          target_ref=""; target_sha=""; source_ref=""; source_sha=""
+          while read -r sha ref; do
+            h="$(printf '%s' "$ref" | sha256sum | awk '{print $1}')"
+            if [[ "$h" == "$TARGET_REF_HASH" ]]; then target_ref="$ref"; target_sha="$sha"; fi
+            if [[ "$h" == "$SOURCE_REF_HASH" ]]; then source_ref="$ref"; source_sha="$sha"; fi
+          done < "$refs"
+          rm -f "$refs"
+          test -n "$target_ref" && test -n "$target_sha" && test -n "$source_ref" && test -n "$source_sha"
+          echo "::add-mask::$target_ref"; echo "::add-mask::$target_sha"
+          echo "::add-mask::$source_ref"; echo "::add-mask::$source_sha"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$target_ref"
+          git checkout -q -B target FETCH_HEAD
+          test "$(printf '%s' "$(git rev-parse HEAD)" | sha256sum | awk '{print $1}')" = "$EXPECTED_TARGET_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$source_ref"
+          printf '%s' "$source_sha" > "$RUNNER_TEMP/source-sha"
+          echo "LAS_PRODUCTION_ASSEMBLY_RECOVERY=PASS"
+
+      - name: Overlay assembly layers only
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-probe"
+          source_sha="$(cat "$RUNNER_TEMP/source-sha")"
+          echo "::add-mask::$source_sha"
+          files=(
+            src/effect_fabric/root_supervisor_linux_production_bootstrap.rs
+            src/effect_fabric/root_supervisor_linux_socket_activation.rs
+            src/effect_fabric/root_supervisor_linux_production_resources.rs
+            src/effect_fabric/root_supervisor_linux_production_process.rs
+            src/effect_fabric/root_supervisor_linux_production_launch.rs
+            src/effect_fabric/root_supervisor_linux_production_startup.rs
+          )
+          for file in "${files[@]}"; do
+            git show "${source_sha}:${file}" > "$file"
+          done
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/lib.rs')
+          t = p.read_text()
+          anchor = '''    // Graceful rotation consumes a quiescent active epoch, retires both durable
+          '''.replace('          ', '')
+          if t.count(anchor) != 1:
+              raise SystemExit(f'lib insertion anchor count={t.count(anchor)}')
+          block = '''    // Current-native concrete production assembly. These modules stop before the
+              // event loop: the final runtime owner is the already-verified readiness-driven path.
+              #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
+              mod root_supervisor_linux_production_bootstrap;
+              #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
+              #[allow(unsafe_code)]
+              mod root_supervisor_linux_socket_activation;
+              #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
+              mod root_supervisor_linux_production_resources;
+              #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
+              mod root_supervisor_linux_production_process;
+              #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
+              mod root_supervisor_linux_production_launch;
+              #[cfg(all(feature = "root-ffi", feature = "linux-peer-credentials", target_os = "linux"))]
+              mod root_supervisor_linux_production_startup;
+
+          '''.replace('              ', '    ')
+          p.write_text(t.replace(anchor, block + anchor, 1))
+          PY
+          git diff --check
+          echo "LAS_PRODUCTION_ASSEMBLY_OVERLAY=PASS"
+
+      - name: Compile current plus production assembly
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-probe"
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          cargo +1.98.1 fmt --all -- --check
+          RUSTFLAGS='-D warnings' cargo +1.98.1 check --all-targets --features 'linux-peer-credentials root-ffi'
+          cargo +1.98.1 clippy --all-targets --features 'linux-peer-credentials root-ffi' -- -D warnings
+          echo "LAS_PRODUCTION_ASSEMBLY_PROBE=PASS"
