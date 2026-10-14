@@ -304,9 +304,15 @@ jobs:
           args+=(-config "$cfg_base" "$tla_base")
 
           set +e
-          (cd "$cfg_dir"; java -XX:+UseParallelGC -jar "$TLA_JAR" "${args[@]}") >"$log" 2>&1 &
+          (cd "$cfg_dir"; exec java -XX:+UseParallelGC -jar "$TLA_JAR" "${args[@]}") >"$log" 2>&1 &
           tlc_pid=$!
           set -e
+
+          tlc_running() {
+            local stat
+            stat="$(ps -o stat= -p "$tlc_pid" 2>/dev/null | awk 'NR==1 {print $1}')"
+            [[ -n "$stat" && "$stat" != Z* ]]
+          }
 
           started="$(date +%s)"
           deadline="$((started + SLICE_SECONDS))"
@@ -314,7 +320,7 @@ jobs:
           barrier_failed=0
           cut_reason="none"
 
-          while kill -0 "$tlc_pid" 2>/dev/null; do
+          while tlc_running; do
             now="$(date +%s)"
             free_kb="$(df -Pk "$RUNNER_TEMP" | awk 'NR==2 {print $4}')"
             if (( now >= deadline || free_kb <= MIN_FREE_KB )); then
@@ -330,7 +336,7 @@ jobs:
               echo "LAS_REPAIRED_202_TLC39_BARRIER_REQUESTED=1"
               echo "LAS_REPAIRED_202_TLC39_BARRIER_REASON=$cut_reason"
 
-              while kill -0 "$tlc_pid" 2>/dev/null; do
+              while tlc_running; do
                 ends_now="$(grep -cF 'Checkpointing completed at (' "$log" 2>/dev/null || true)"
                 if (( ends_now >= target_ends )); then
                   slice_cut=1
