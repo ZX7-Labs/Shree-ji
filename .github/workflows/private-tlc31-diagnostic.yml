@@ -1,10 +1,7 @@
-name: Private TLC31 opaque diagnostic
+name: Private TLC31 opaque diagnostic (retired)
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "RUN_DIAG_TLC31"
+  workflow_dispatch:
 
 permissions:
   contents: read
