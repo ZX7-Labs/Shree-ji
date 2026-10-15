@@ -1,23 +1,24 @@
-name: Private assurance slow TLC continuation
+name: Private current-202 TLC continuation
 
 on:
   workflow_dispatch:
     inputs:
       index:
-        description: Opaque canonical TLC profile index (profile 39 is intentionally rejected)
+        description: Exact canonical TLC profile index; profile 39 uses its dedicated continuation path
         required: true
         type: string
       segment:
         description: Continuation segment number
         required: true
+        default: "1"
         type: string
       resume_run_id:
-        description: Prior workflow run containing encrypted checkpoint
+        description: Prior workflow run containing the authenticated encrypted checkpoint
         required: false
         default: ""
         type: string
       resume_artifact:
-        description: Prior encrypted checkpoint artifact name
+        description: Prior authenticated encrypted checkpoint artifact name
         required: false
         default: ""
         type: string
@@ -26,8 +27,42 @@ permissions:
   contents: read
   actions: write
 
+concurrency:
+  group: current-202-v4-tlc-${{ inputs.index }}
+  cancel-in-progress: false
+
 jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Validate immutable runner request
+        shell: bash
+        env:
+          TARGET_INDEX: ${{ inputs.index }}
+          SEGMENT: ${{ inputs.segment }}
+          RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+          RESUME_ARTIFACT: ${{ inputs.resume_artifact }}
+          CONTINUATION_REF: current-202-tlc-continuation-v4-runner
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "$CONTINUATION_REF"
+          [[ "$TARGET_INDEX" =~ ^[0-9]+$ ]]
+          [[ "$SEGMENT" =~ ^[0-9]+$ ]]
+          test "$TARGET_INDEX" -ge 0
+          test "$TARGET_INDEX" -lt 202
+          test "$TARGET_INDEX" -ne 39
+          test "$SEGMENT" -ge 1
+          if [[ "$SEGMENT" -eq 1 ]]; then
+            test -z "$RESUME_RUN_ID"
+            test -z "$RESUME_ARTIFACT"
+          else
+            [[ "$RESUME_RUN_ID" =~ ^[0-9]+$ ]]
+            test "$RESUME_ARTIFACT" = "current-202-v4-state-${TARGET_INDEX}-$((SEGMENT - 1))"
+          fi
+          echo "LAS_CURRENT_202_ORCHESTRATOR_REQUEST=PASS"
+
   continuation:
+    needs: validate
     uses: ./.github/workflows/_private-assurance-tlc-continuation-slice.yml
     with:
       index: ${{ fromJSON(inputs.index) }}
