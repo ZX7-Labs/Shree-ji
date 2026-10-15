@@ -1,10 +1,7 @@
-name: Private TLC throughput probe
+name: Private TLC throughput probe (retired)
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "RUN_TLC_THROUGHPUT_PROBE"
+  workflow_dispatch:
 
 permissions:
   contents: read
