@@ -40,6 +40,7 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     outputs:
+      terminal_run_id: ${{ steps.request.outputs.terminal_run_id }}
       segment: ${{ steps.terminal.outputs.segment }}
       terminal_job_id: ${{ steps.terminal.outputs.job_id }}
       terminal_job_log_sha256: ${{ steps.terminal.outputs.job_log_sha256 }}
@@ -55,6 +56,7 @@ jobs:
           fetch-depth: 1
 
       - name: Validate terminal attestation request
+        id: request
         shell: bash
         run: |
           set -euo pipefail
@@ -65,6 +67,7 @@ jobs:
           fi
           [[ "$requested" =~ ^[1-9][0-9]*$ ]]
           echo "TERMINAL_RUN_ID=$requested" >>"$GITHUB_ENV"
+          echo "terminal_run_id=$requested" >>"$GITHUB_OUTPUT"
           echo "LAS_REPAIRED_202_TLC39_ATTEST_REQUEST=PASS"
 
       - name: Revalidate exact frozen private candidate
@@ -138,9 +141,11 @@ jobs:
           event = data.get("event")
           branch = data.get("head_branch")
           if event == "push":
-              if branch != "main": raise SystemExit("terminal push run is not bound to main")
+              if branch != "main":
+                  raise SystemExit("terminal push run is not bound to main")
           elif event == "workflow_dispatch":
-              if branch != runner_ref: raise SystemExit("terminal continuation run is not bound to stable runner ref")
+              if branch != runner_ref:
+                  raise SystemExit("terminal continuation run is not bound to stable runner ref")
           else:
               raise SystemExit("unexpected terminal run event")
           PY
@@ -168,22 +173,30 @@ jobs:
           read -r job_id segment_mode < <(
             python3 - "$jobs_json" <<'PY'
           import json, sys
-          data=json.load(open(sys.argv[1],encoding="utf-8")); jobs=data.get("jobs",[])
+          data = json.load(open(sys.argv[1], encoding="utf-8"))
+          jobs = data.get("jobs", [])
           if data.get("total_count") != 1 or len(jobs) != 1 or jobs[0].get("name") != "slice":
               raise SystemExit("terminal run must contain exactly one slice job")
-          job=jobs[0]
+          job = jobs[0]
           if job.get("status") != "completed" or job.get("conclusion") != "success":
               raise SystemExit("terminal slice job is not successful")
-          steps={s.get("name"):(s.get("status"),s.get("conclusion")) for s in job.get("steps",[])}
-          for name in ("Validate exact continuation request","Reclaim runner storage for exhaustive TLC","Recover exact frozen repaired candidate","Bind exact canonical map and profile 39","Run exact canonical TLC39 slice"):
-              if steps.get(name) != ("completed","success"): raise SystemExit(f"required terminal step not successful: {name}")
-          for name in ("Seal authenticated encrypted checkpoint","Upload authenticated encrypted checkpoint","Dispatch next exact slice"):
-              if steps.get(name) != ("completed","skipped"): raise SystemExit(f"terminal PASS unexpectedly continued checkpoint chain: {name}")
-          download=steps.get("Download prior authenticated encrypted checkpoint"); restore=steps.get("Authenticate and restore prior checkpoint")
-          if download == ("completed","skipped") and restore == ("completed","skipped"): mode="initial"
-          elif download == ("completed","success") and restore == ("completed","success"): mode="resumed"
-          else: raise SystemExit("checkpoint restore steps are inconsistent")
-          print(job["id"],mode)
+          steps = {s.get("name"): (s.get("status"), s.get("conclusion")) for s in job.get("steps", [])}
+          required = ("Validate exact continuation request", "Reclaim runner storage for exhaustive TLC", "Recover exact frozen repaired candidate", "Bind exact canonical map and profile 39", "Run exact canonical TLC39 slice")
+          for name in required:
+              if steps.get(name) != ("completed", "success"):
+                  raise SystemExit(f"required terminal step not successful: {name}")
+          for name in ("Seal authenticated encrypted checkpoint", "Upload authenticated encrypted checkpoint", "Dispatch next exact slice"):
+              if steps.get(name) != ("completed", "skipped"):
+                  raise SystemExit(f"terminal PASS unexpectedly continued checkpoint chain: {name}")
+          download = steps.get("Download prior authenticated encrypted checkpoint")
+          restore = steps.get("Authenticate and restore prior checkpoint")
+          if download == ("completed", "skipped") and restore == ("completed", "skipped"):
+              mode = "initial"
+          elif download == ("completed", "success") and restore == ("completed", "success"):
+              mode = "resumed"
+          else:
+              raise SystemExit("checkpoint restore steps are inconsistent")
+          print(job["id"], mode)
           PY
           )
           [[ "$job_id" =~ ^[1-9][0-9]*$ ]]
@@ -195,33 +208,65 @@ jobs:
           read -r segment tlc_log_sha256 generated distinct queued cut_reason < <(
             python3 - "$log" "$segment_mode" "$EXPECTED_CHECKPOINT_SCHEMA" "$EXPECTED_TLC_WORKERS" <<'PY'
           import re, sys
-          path,mode,schema,workers=sys.argv[1:]
-          stamp=re.compile(r'^\d{4}-\d{2}-\d{2}T\S+Z (.*)$'); emitted=[]
-          for line in open(path,encoding="utf-8",errors="replace"):
-              m=stamp.match(line.rstrip("\n"))
-              if m: emitted.append(m.group(1))
-          required={"LAS_REPAIRED_202_TLC39_REQUEST=PASS",f"LAS_REPAIRED_202_TLC39_CHECKPOINT_SCHEMA={schema}",f"LAS_REPAIRED_202_TLC39_WORKERS={workers}","LAS_REPAIRED_202_TLC39_RECOVERY=PASS","LAS_REPAIRED_202_TLC39_BINDING=PASS","LAS_REPAIRED_202_TLC39_RC=0","LAS_REPAIRED_202_TLC39_RESULT=PASS"}
-          if required.difference(emitted): raise SystemExit("missing emitted terminal PASS markers")
-          forbidden=("LAS_REPAIRED_202_TLC39_RESULT=FAIL","LAS_REPAIRED_202_TLC39_RESULT=FAIL_CLOSED","LAS_REPAIRED_202_TLC39_RESULT=FAIL_BARRIER","LAS_REPAIRED_202_TLC39_RESULT=SLICE_CHECKPOINT","LAS_REPAIRED_202_TLC39_BARRIER_TIMEOUT=1")
-          if any(line.startswith(forbidden) for line in emitted): raise SystemExit("terminal log contains non-PASS TLC39 evidence")
-          def one(pattern,label):
-              values=[m.group(1) for line in emitted if (m:=re.fullmatch(pattern,line))]
-              if len(values)!=1: raise SystemExit(f"missing or ambiguous {label}")
+          path, mode, schema, workers = sys.argv[1:]
+          stamp = re.compile(r'^\d{4}-\d{2}-\d{2}T\S+Z (.*)$')
+          emitted = []
+          for line in open(path, encoding="utf-8", errors="replace"):
+              match = stamp.match(line.rstrip("\n"))
+              if match:
+                  emitted.append(match.group(1))
+          required = {
+              "LAS_REPAIRED_202_TLC39_REQUEST=PASS",
+              f"LAS_REPAIRED_202_TLC39_CHECKPOINT_SCHEMA={schema}",
+              f"LAS_REPAIRED_202_TLC39_WORKERS={workers}",
+              "LAS_REPAIRED_202_TLC39_RECOVERY=PASS",
+              "LAS_REPAIRED_202_TLC39_BINDING=PASS",
+              "LAS_REPAIRED_202_TLC39_RC=0",
+              "LAS_REPAIRED_202_TLC39_RESULT=PASS",
+          }
+          if required.difference(emitted):
+              raise SystemExit("missing emitted terminal PASS markers")
+          forbidden = (
+              "LAS_REPAIRED_202_TLC39_RESULT=FAIL",
+              "LAS_REPAIRED_202_TLC39_RESULT=FAIL_CLOSED",
+              "LAS_REPAIRED_202_TLC39_RESULT=FAIL_BARRIER",
+              "LAS_REPAIRED_202_TLC39_RESULT=SLICE_CHECKPOINT",
+              "LAS_REPAIRED_202_TLC39_BARRIER_TIMEOUT=1",
+          )
+          if any(line.startswith(forbidden) for line in emitted):
+              raise SystemExit("terminal log contains non-PASS TLC39 evidence")
+          def one(pattern, label):
+              values = [m.group(1) for line in emitted if (m := re.fullmatch(pattern, line))]
+              if len(values) != 1:
+                  raise SystemExit(f"missing or ambiguous {label}")
               return values[0]
-          segment=int(one(r'LAS_REPAIRED_202_TLC39_SEGMENT=([1-9][0-9]*)',"segment"))
-          tlc_log_sha=one(r'LAS_REPAIRED_202_TLC39_LOG_SHA256=([0-9a-f]{64})',"TLC log digest")
-          generated=int(one(r'LAS_REPAIRED_202_TLC39_GENERATED=([0-9]+)',"generated count")); distinct=int(one(r'LAS_REPAIRED_202_TLC39_DISTINCT=([0-9]+)',"distinct count")); queued=int(one(r'LAS_REPAIRED_202_TLC39_QUEUE=([0-9]+)',"queue count")); cut_reason=one(r'LAS_REPAIRED_202_TLC39_CUT_REASON=([a-z]+)',"cut reason")
+          segment = int(one(r'LAS_REPAIRED_202_TLC39_SEGMENT=([1-9][0-9]*)', "segment"))
+          tlc_log_sha = one(r'LAS_REPAIRED_202_TLC39_LOG_SHA256=([0-9a-f]{64})', "TLC log digest")
+          generated = int(one(r'LAS_REPAIRED_202_TLC39_GENERATED=([0-9]+)', "generated count"))
+          distinct = int(one(r'LAS_REPAIRED_202_TLC39_DISTINCT=([0-9]+)', "distinct count"))
+          queued = int(one(r'LAS_REPAIRED_202_TLC39_QUEUE=([0-9]+)', "queue count"))
+          cut_reason = one(r'LAS_REPAIRED_202_TLC39_CUT_REASON=([a-z]+)', "cut reason")
           if mode == "initial":
-              if segment != 1: raise SystemExit("initial terminal run is not segment 1")
+              if segment != 1:
+                  raise SystemExit("initial terminal run is not segment 1")
           else:
-              if segment <= 1: raise SystemExit("resumed terminal run has invalid segment")
-              for marker in ("LAS_REPAIRED_202_TLC39_CHECKPOINT_AUTH=PASS","LAS_REPAIRED_202_TLC39_RECOVER_DIR=PASS"):
-                  if marker not in emitted: raise SystemExit("resumed terminal run lacks authenticated recovery evidence")
-          print(segment,tlc_log_sha,generated,distinct,queued,cut_reason)
+              if segment <= 1:
+                  raise SystemExit("resumed terminal run has invalid segment")
+              for marker in ("LAS_REPAIRED_202_TLC39_CHECKPOINT_AUTH=PASS", "LAS_REPAIRED_202_TLC39_RECOVER_DIR=PASS"):
+                  if marker not in emitted:
+                      raise SystemExit("resumed terminal run lacks authenticated recovery evidence")
+          print(segment, tlc_log_sha, generated, distinct, queued, cut_reason)
           PY
           )
           job_log_sha256="$(sha256sum "$log" | awk '{print $1}')"
-          echo "segment=$segment" >>"$GITHUB_OUTPUT"; echo "job_id=$job_id" >>"$GITHUB_OUTPUT"; echo "job_log_sha256=$job_log_sha256" >>"$GITHUB_OUTPUT"; echo "tlc_log_sha256=$tlc_log_sha256" >>"$GITHUB_OUTPUT"; echo "generated=$generated" >>"$GITHUB_OUTPUT"; echo "distinct=$distinct" >>"$GITHUB_OUTPUT"; echo "queued=$queued" >>"$GITHUB_OUTPUT"; echo "cut_reason=$cut_reason" >>"$GITHUB_OUTPUT"
+          echo "segment=$segment" >>"$GITHUB_OUTPUT"
+          echo "job_id=$job_id" >>"$GITHUB_OUTPUT"
+          echo "job_log_sha256=$job_log_sha256" >>"$GITHUB_OUTPUT"
+          echo "tlc_log_sha256=$tlc_log_sha256" >>"$GITHUB_OUTPUT"
+          echo "generated=$generated" >>"$GITHUB_OUTPUT"
+          echo "distinct=$distinct" >>"$GITHUB_OUTPUT"
+          echo "queued=$queued" >>"$GITHUB_OUTPUT"
+          echo "cut_reason=$cut_reason" >>"$GITHUB_OUTPUT"
           echo "LAS_REPAIRED_202_TLC39_TERMINAL_RUN=PASS"
           rm -f "$run_json" "$jobs_json" "$workflow_json" "$log"
 
@@ -231,6 +276,7 @@ jobs:
     permissions:
       contents: write
     env:
+      TERMINAL_RUN_ID: ${{ needs.verify.outputs.terminal_run_id }}
       TERMINAL_SEGMENT: ${{ needs.verify.outputs.segment }}
       TERMINAL_JOB_ID: ${{ needs.verify.outputs.terminal_job_id }}
       TERMINAL_JOB_LOG_SHA256: ${{ needs.verify.outputs.terminal_job_log_sha256 }}
@@ -248,6 +294,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          [[ "$TERMINAL_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           git fetch -q origin main
           git checkout -q -B tlc39-terminal-attestation origin/main
           cat > LAS_REPAIRED_202_TLC39_TERMINAL.json <<EOF
@@ -275,11 +322,19 @@ jobs:
           }
           EOF
           git add LAS_REPAIRED_202_TLC39_TERMINAL.json
-          if git diff --cached --quiet; then echo "LAS_REPAIRED_202_TLC39_TERMINAL_ATTESTATION=UNCHANGED"; exit 0; fi
-          git -c user.name='LAS Verification Attestor' -c user.email='las-verification@users.noreply.github.com' commit -q -m 'Record exact TLC39 terminal attestation'
+          if git diff --cached --quiet; then
+            echo "LAS_REPAIRED_202_TLC39_TERMINAL_ATTESTATION=UNCHANGED"
+            exit 0
+          fi
+          git -c user.name='LAS Verification Attestor' \
+              -c user.email='las-verification@users.noreply.github.com' \
+              commit -q -m 'Record exact TLC39 terminal attestation'
           pushed=0
           for attempt in 1 2 3; do
-            if git push -q origin HEAD:main; then pushed=1; break; fi
+            if git push -q origin HEAD:main; then
+              pushed=1
+              break
+            fi
             git fetch -q origin main
             git rebase -q origin/main
           done
