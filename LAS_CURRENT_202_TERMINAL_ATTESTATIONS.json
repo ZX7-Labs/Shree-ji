@@ -1,0 +1,11 @@
+{
+  "schema": "las-current-202-non39-terminal-registry-v1",
+  "private_snapshot_proof": "1b139dc7920e82d5f9bdd2a68c072ad88bc0049d5ef1377380899164da5f93f9",
+  "private_tree_proof": "7fb364587ed7c9f76d8fd9f69cb4a4d58e576a44a1e653d019c8114ccb65353f",
+  "canonical_verifier_blob": "62e3e6dc0fad5dddc7fb0a453a3cd681d911e590",
+  "tlc_map_sha256": "da7bb51d531d0e5e5e6994c80be8f254a110cb8181e6121e3a557fdff9428cee",
+  "runner_sha": "3d37edb1debc9a4dd32da51ec3164840dbc4b252",
+  "wrapper_workflow_blob": "70b8c18144f55625460e86337e8c5999a699facf",
+  "slice_workflow_blob": "30f44487a8d433045bfc5c3310aa7356a5b8d2ea",
+  "profiles": {}
+}
