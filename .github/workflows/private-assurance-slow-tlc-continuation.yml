@@ -1,23 +1,23 @@
-name: Retired default-branch legacy TLC continuation
+name: Private current-202 TLC continuation
 
 on:
   workflow_dispatch:
     inputs:
       index:
-        description: Legacy canonical TLC profile index
+        description: Canonical current-202 profile index; default-branch execution is retired
         required: true
         type: string
       segment:
-        description: Legacy continuation segment number
+        description: Continuation segment number
         required: true
         type: string
       resume_run_id:
-        description: Prior legacy workflow run containing checkpoint
+        description: Prior checkpoint run id
         required: false
         default: ""
         type: string
       resume_artifact:
-        description: Prior legacy checkpoint artifact name
+        description: Prior checkpoint artifact name
         required: false
         default: ""
         type: string
@@ -26,7 +26,8 @@ permissions:
   contents: read
 
 jobs:
-  retired:
+  retired-default-branch:
+    if: github.ref_name == 'main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -35,5 +36,18 @@ jobs:
         run: |
           set -euo pipefail
           echo "LAS_DEFAULT_BRANCH_LEGACY_TLC_CONTINUATION=RETIRED"
-          echo "Canonical current-202 generic continuation is bound to current-202-tlc-continuation-v4-runner and its frozen workflow blobs."
+          echo "Canonical current-202 generic execution is allowed only from current-202-tlc-continuation-v4-runner, whose frozen workflow revision is independently bound and verified."
+          exit 1
+
+  reject-unexpected-ref:
+    if: github.ref_name != 'main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Reject non-frozen default workflow revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "LAS_DEFAULT_WORKFLOW_REVISION_NONCANONICAL_REF=REJECTED"
+          echo "Dispatches to current-202-tlc-continuation-v4-runner execute that ref's frozen workflow, not this default-branch revision."
           exit 1
