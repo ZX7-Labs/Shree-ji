@@ -10,7 +10,7 @@ on:
 
 permissions:
   actions: read
-  contents: write
+  contents: read
 
 concurrency:
   group: current-202-terminal-attestation
@@ -34,8 +34,20 @@ env:
   TERMINAL_RUN_ID: ${{ inputs.terminal_run_id }}
 
 jobs:
-  attest:
+  verify:
     runs-on: ubuntu-24.04
+    outputs:
+      profile_index: ${{ steps.terminal.outputs.profile_index }}
+      segment: ${{ steps.terminal.outputs.segment }}
+      validate_job_id: ${{ steps.terminal.outputs.validate_job_id }}
+      terminal_job_id: ${{ steps.terminal.outputs.terminal_job_id }}
+      terminal_log_sha256: ${{ steps.terminal.outputs.terminal_log_sha256 }}
+      tlc_log_sha256: ${{ steps.terminal.outputs.tlc_log_sha256 }}
+      profile_binding: ${{ steps.terminal.outputs.profile_binding }}
+      generated: ${{ steps.terminal.outputs.generated }}
+      distinct: ${{ steps.terminal.outputs.distinct }}
+      queued: ${{ steps.terminal.outputs.queued }}
+      cut_reason: ${{ steps.terminal.outputs.cut_reason }}
     steps:
       - name: Checkout attestation request
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -347,25 +359,31 @@ jobs:
           rm -f "$run_json" "$jobs_json" "$wrapper_json" "$slice_json" "$validate_log" "$terminal_log" "$map_py" "$map"
           unset line cfg tla deadlock expectation profile_binding
 
-      - name: Checkout latest public control shell
+  record:
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      PROFILE_INDEX: ${{ needs.verify.outputs.profile_index }}
+      TERMINAL_SEGMENT: ${{ needs.verify.outputs.segment }}
+      VALIDATE_JOB_ID: ${{ needs.verify.outputs.validate_job_id }}
+      TERMINAL_JOB_ID: ${{ needs.verify.outputs.terminal_job_id }}
+      TERMINAL_LOG_SHA256: ${{ needs.verify.outputs.terminal_log_sha256 }}
+      TLC_LOG_SHA256: ${{ needs.verify.outputs.tlc_log_sha256 }}
+      PROFILE_BINDING_SHA256: ${{ needs.verify.outputs.profile_binding }}
+      GENERATED: ${{ needs.verify.outputs.generated }}
+      DISTINCT: ${{ needs.verify.outputs.distinct }}
+      QUEUED: ${{ needs.verify.outputs.queued }}
+      CUT_REASON: ${{ needs.verify.outputs.cut_reason }}
+    steps:
+      - name: Checkout public control shell
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
       - name: Record durable non-sensitive terminal attestation
         shell: bash
-        env:
-          PROFILE_INDEX: ${{ steps.terminal.outputs.profile_index }}
-          TERMINAL_SEGMENT: ${{ steps.terminal.outputs.segment }}
-          VALIDATE_JOB_ID: ${{ steps.terminal.outputs.validate_job_id }}
-          TERMINAL_JOB_ID: ${{ steps.terminal.outputs.terminal_job_id }}
-          TERMINAL_LOG_SHA256: ${{ steps.terminal.outputs.terminal_log_sha256 }}
-          TLC_LOG_SHA256: ${{ steps.terminal.outputs.tlc_log_sha256 }}
-          PROFILE_BINDING_SHA256: ${{ steps.terminal.outputs.profile_binding }}
-          GENERATED: ${{ steps.terminal.outputs.generated }}
-          DISTINCT: ${{ steps.terminal.outputs.distinct }}
-          QUEUED: ${{ steps.terminal.outputs.queued }}
-          CUT_REASON: ${{ steps.terminal.outputs.cut_reason }}
         run: |
           set -euo pipefail
           git fetch -q origin main
