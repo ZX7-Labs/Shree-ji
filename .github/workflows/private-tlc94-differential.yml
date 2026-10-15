@@ -1,10 +1,7 @@
-name: Private TLC94 semantic differential
+name: Private TLC94 semantic differential (retired)
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "RUN_TLC94_DIFF"
+  workflow_dispatch:
 
 permissions:
   contents: read
