@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: eae447f-full-202-source
+  group: b93de29c-full-202-source
   cancel-in-progress: false
 
 env:
@@ -104,6 +104,13 @@ jobs:
           record "tracked tree unchanged after pre-TLC verification" bash -c '
             test -z "$(git status --porcelain --untracked-files=no)"
           '
+          if (( FAIL != 0 )); then
+            for failed in "${FAILED[@]}"; do
+              printf 'FAILED_CHECK=%s\n' "$failed"
+            done
+            echo "LAS_EAE202_PRE_TLC_RESULT=FAIL"
+            exit 1
+          fi
           echo "LAS_EAE202_PRE_TLC_RESULT=PASS"
           exit 0
 
