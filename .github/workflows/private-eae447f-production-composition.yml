@@ -17,8 +17,8 @@ concurrency:
 
 env:
   TARGET_REF_HASH: fa860b84036231adb90c52b224a64957c56e4d15e36c54f1d5a40761bee6edff
-  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 1ef8f82c1338a03bcd0eeac36aa4ca98cd53930f06ea331a7d865e294472c092
-  EXPECTED_PRIVATE_TREE_PROOF: bbf0c608ccce7525cc901fec2ca8dd94116acd9bb8596e137a716973bdd5a07b
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 7bc2e8d511e630d09b44c6e2a55fb870b4bc42ef778e8b4a0c183ca0ce2f38a8
+  EXPECTED_PRIVATE_TREE_PROOF: 96a3745079b2b11d50de0d56dd7acb9d3ff50c1070c06f8294cbe528ead0e7b4
   EXPECTED_VERIFIER_BLOB: 62e3e6dc0fad5dddc7fb0a453a3cd681d911e590
 
 jobs:
@@ -113,8 +113,17 @@ jobs:
           alr -n init --in-place --no-skel --lib production_linux_root_toolchain
           alr exec -- gnatmake --version
           alr exec -- gprbuild --version
-          gpr_path="$(alr exec -- sh -lc 'command -v gprbuild')"
-          printf 'GPRBUILD=%s\n' "$gpr_path" >>"$GITHUB_ENV"
+
+          alr_path="$(command -v alr)"
+          wrapper="$RUNNER_TEMP/gprbuild-via-alire"
+          cat > "$wrapper" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$workspace"
+          exec "$alr_path" exec -- gprbuild "\$@"
+          EOF
+          chmod 0755 "$wrapper"
+          printf 'GPRBUILD=%s\n' "$wrapper" >>"$GITHUB_ENV"
 
       - name: Check formatting
         shell: bash
