@@ -1,0 +1,136 @@
+name: Exact promotable candidate pre-TLC 20261016
+
+on:
+  push:
+    branches:
+      - "verify/candidate3-pre-tlc-20261016"
+    paths:
+      - ".github/workflows/private-candidate3-pre-tlc-20261016.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exact-candidate3-pre-tlc-20261016
+  cancel-in-progress: false
+
+env:
+  TARGET_REF_HASH: a5f3dd87c6174b2ec1aafe984e6a5722b8cf90562d8ff21cb5e7b12f271466c2
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: cf54130a58208b8fc6f80a50e956d5fef9e5db950e7ae6fb3ae3c01ca5e19932
+  EXPECTED_PRIVATE_TREE_PROOF: d9f99ed116c710670c93246947072090773745329af9a6655113a372bc5f133e
+  EXPECTED_VERIFIER_BLOB: 62e3e6dc0fad5dddc7fb0a453a3cd681d911e590
+
+jobs:
+  pre_tlc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Recover exact frozen private candidate
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+
+          mkdir target
+          cd target
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""
+          matched_sha=""
+          while read -r sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+              matched_sha="$sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"
+          test -n "$matched_ref"
+          test -n "$matched_sha"
+          echo "::add-mask::$matched_ref"
+          echo "::add-mask::$matched_sha"
+
+          test "$(printf '%s' "$matched_sha" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          actual="$(git rev-parse FETCH_HEAD)"
+          echo "::add-mask::$actual"
+          test "$actual" = "$matched_sha"
+          test "$(printf '%s' "$actual" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git checkout -q --detach "$actual"
+
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test "$(git hash-object tools/verify_codespaces_all.sh)" = "$EXPECTED_VERIFIER_BLOB"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git checkout -q -B verify-target "$actual"
+
+          unset PRIVATE_TOKEN auth matched_ref matched_sha actual tree
+          echo "LAS_CANDIDATE3_RECOVERY=PASS"
+
+      - name: Run exact canonical pre-TLC stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd target
+          staged="$RUNNER_TEMP/verify-pre-tlc.sh"
+
+          python3 - tools/verify_codespaces_all.sh "$staged" <<'PY'
+          from pathlib import Path
+          import sys
+
+          src = Path(sys.argv[1]).read_text(encoding="utf-8")
+          needle = 'TLC_MAP="$TMP/tlc-map.tsv"'
+          if src.count(needle) != 1:
+              raise SystemExit("canonical TLC boundary not unique")
+
+          insertion = r'''
+          record "tracked tree unchanged after pre-TLC verification" bash -c '
+            test -z "$(git status --porcelain --untracked-files=no)"
+          '
+          echo "LAS_CANDIDATE3_PRE_TLC_RESULT=PASS"
+          exit 0
+
+          '''
+          Path(sys.argv[2]).write_text(
+              src.replace(needle, insertion + needle, 1),
+              encoding="utf-8",
+          )
+          PY
+
+          chmod 0700 "$staged"
+          private_log="$RUNNER_TEMP/pre-tlc-private.log"
+          set +e
+          LAS_VERIFY_EXPECTED_BRANCH=verify-target bash "$staged" >"$private_log" 2>&1
+          rc=$?
+          set -e
+
+          if [[ "$rc" -eq 0 ]] && grep -q '^LAS_CANDIDATE3_PRE_TLC_RESULT=PASS$' "$private_log"; then
+            rm -f "$private_log"
+            echo "LAS_CANDIDATE3_PRE_TLC_RESULT=PASS"
+            exit 0
+          fi
+
+          fail_count=0
+          while IFS= read -r failed; do
+            [[ -n "$failed" ]] || continue
+            fail_count=$((fail_count + 1))
+            echo "LAS_CANDIDATE3_PRE_TLC_FAILED_HASH=$(printf '%s' "$failed" | sha256sum | awk '{print $1}')"
+          done < <(sed -n 's/^FAILED_CHECK=//p' "$private_log")
+          echo "LAS_CANDIDATE3_PRE_TLC_FAILED_COUNT=$fail_count"
+          echo "LAS_CANDIDATE3_PRE_TLC_LOG_SHA256=$(sha256sum "$private_log" | awk '{print $1}')"
+          rm -f "$private_log"
+          echo "LAS_CANDIDATE3_PRE_TLC_RESULT=FAIL"
+          exit 1
