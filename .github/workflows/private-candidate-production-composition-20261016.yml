@@ -1,0 +1,206 @@
+name: Exact candidate production composition 20261016
+
+on:
+  push:
+    branches:
+      - "verify/candidate-production-composition-20261016"
+    paths:
+      - ".github/workflows/private-candidate-production-composition-20261016.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exact-candidate-production-composition-20261016
+  cancel-in-progress: false
+
+env:
+  TARGET_REF_HASH: e04eb87a790a725015422c3d7b65932bcf9a3620a6105b4021c369f163d3a8c6
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 7bc2e8d511e630d09b44c6e2a55fb870b4bc42ef778e8b4a0c183ca0ce2f38a8
+  EXPECTED_PRIVATE_TREE_PROOF: 96a3745079b2b11d50de0d56dd7acb9d3ff50c1070c06f8294cbe528ead0e7b4
+  EXPECTED_VERIFIER_BLOB: 62e3e6dc0fad5dddc7fb0a453a3cd681d911e590
+  EXPECTED_PRODUCTION_WORKFLOW_BLOB: c6675fd4bae431619e586cda1c9986de86accb6e
+
+jobs:
+  verify-production-composition:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Recover exact frozen private candidate
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+
+          root="$GITHUB_WORKSPACE/target"
+          mkdir "$root"
+          cd "$root"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""
+          matched_sha=""
+          while read -r sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+              matched_sha="$sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"
+          test -n "$matched_ref"
+          test -n "$matched_sha"
+          echo "::add-mask::$matched_ref"
+          echo "::add-mask::$matched_sha"
+
+          test "$(printf '%s' "$matched_sha" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          actual="$(git rev-parse FETCH_HEAD)"
+          echo "::add-mask::$actual"
+          test "$actual" = "$matched_sha"
+          test "$(printf '%s' "$actual" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git checkout -q --detach "$actual"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test "$(git hash-object tools/verify_codespaces_all.sh)" = "$EXPECTED_VERIFIER_BLOB"
+          test "$(git hash-object .github/workflows/production-linux-root-integration.yml)" = "$EXPECTED_PRODUCTION_WORKFLOW_BLOB"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          unset PRIVATE_TOKEN auth matched_ref matched_sha actual tree
+          echo "LAS_PRODUCTION_BINDING=PASS"
+
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          cargo +1.98.1 --version
+          rustc +1.98.1 --version --verbose
+
+      - name: Install checksum-pinned Alire and exact Ada build toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/alr.zip"
+          prefix="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+            --output "$archive" \
+            "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip" \
+            >/dev/null 2>&1
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $archive" \
+            | sha256sum --check --strict >/dev/null
+          mkdir -p "$prefix"
+          unzip -q "$archive" -d "$prefix"
+          echo "$prefix/bin" >>"$GITHUB_PATH"
+          export PATH="$prefix/bin:$PATH"
+
+          alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
+          workspace="$RUNNER_TEMP/production-linux-root-toolchain"
+          mkdir -p "$workspace"
+          cd "$workspace"
+          alr -n init --in-place --no-skel --lib production_linux_root_toolchain >/dev/null
+          alr exec -- gnatmake --version
+          alr exec -- gprbuild --version
+
+          alr_path="$(command -v alr)"
+          wrapper="$RUNNER_TEMP/gprbuild-via-alire"
+          cat >"$wrapper" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$workspace"
+          exec "$alr_path" exec -- gprbuild "\$@"
+          EOF
+          chmod 0755 "$wrapper"
+          printf 'GPRBUILD=%s\n' "$wrapper" >>"$GITHUB_ENV"
+
+      - name: Check exact production formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          log="$RUNNER_TEMP/private-production-fmt.log"
+          if cargo +1.98.1 fmt --all -- --check >"$log" 2>&1; then
+            rm -f "$log"
+            echo "LAS_PRODUCTION_FMT=PASS"
+          else
+            echo "LAS_PRODUCTION_FMT_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')"
+            rm -f "$log"
+            echo "LAS_PRODUCTION_FMT=FAIL"
+            exit 1
+          fi
+
+      - name: Compile exact production feature composition
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          log="$RUNNER_TEMP/private-production-check.log"
+          if RUSTFLAGS='-Dwarnings' cargo +1.98.1 check --locked --features 'root-ffi linux-peer-credentials' --all-targets >"$log" 2>&1; then
+            rm -f "$log"
+            echo "LAS_PRODUCTION_CHECK=PASS"
+          else
+            echo "LAS_PRODUCTION_CHECK_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')"
+            rm -f "$log"
+            echo "LAS_PRODUCTION_CHECK=FAIL"
+            exit 1
+          fi
+
+      - name: Clippy exact production feature composition
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          log="$RUNNER_TEMP/private-production-clippy.log"
+          if cargo +1.98.1 clippy --locked --features 'root-ffi linux-peer-credentials' --all-targets -- -D warnings >"$log" 2>&1; then
+            rm -f "$log"
+            echo "LAS_PRODUCTION_CLIPPY=PASS"
+          else
+            echo "LAS_PRODUCTION_CLIPPY_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')"
+            rm -f "$log"
+            echo "LAS_PRODUCTION_CLIPPY=FAIL"
+            exit 1
+          fi
+
+      - name: Test exact production feature composition
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          log="$RUNNER_TEMP/private-production-test.log"
+          if RUSTFLAGS='-Dwarnings' cargo +1.98.1 test --locked --features 'root-ffi linux-peer-credentials' --lib -- --test-threads=1 >"$log" 2>&1; then
+            rm -f "$log"
+            echo "LAS_PRODUCTION_TEST=PASS"
+          else
+            echo "LAS_PRODUCTION_TEST_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')"
+            rm -f "$log"
+            echo "LAS_PRODUCTION_TEST=FAIL"
+            exit 1
+          fi
+
+      - name: Recheck exact immutable candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          actual="$(git rev-parse HEAD)"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$actual"
+          echo "::add-mask::$tree"
+          test "$(printf '%s' "$actual" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test "$(git hash-object tools/verify_codespaces_all.sh)" = "$EXPECTED_VERIFIER_BLOB"
+          test "$(git hash-object .github/workflows/production-linux-root-integration.yml)" = "$EXPECTED_PRODUCTION_WORKFLOW_BLOB"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "LAS_PRODUCTION_COMPOSITION_RESULT=PASS"
