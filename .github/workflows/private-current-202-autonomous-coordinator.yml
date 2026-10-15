@@ -37,10 +37,13 @@ env:
   TLC39_RUNNER_REF: repaired-202-tlc39-v3-runner
   TLC39_RUNNER_SHA: d806afec7b4eb903febea33c595365322cd9652b
   TLC39_WORKFLOW_BLOB: 44986289bf12aec99e8359b7348401bc061b015d
+  EXPECTED_DIRECT_SUCCESS_COUNT: "191"
+  EXPECTED_REPLACEMENT_COUNT: "11"
 
 jobs:
   coordinate:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     env:
       GH_TOKEN: ${{ github.token }}
       SOURCE_WORKFLOW: ${{ github.event.workflow_run.name }}
@@ -78,29 +81,67 @@ jobs:
           }
 
           assert_ref() {
-            local ref="$1" expected="$2" json="$RUNNER_TEMP/ref.json"
+            local ref="$1" expected="$2" json="$RUNNER_TEMP/ref-${ref//\//_}.json"
             api_get "$api/git/ref/heads/$ref" >"$json"
             python3 - "$json" "$expected" <<'PY'
-          import json,sys
-          data=json.load(open(sys.argv[1],encoding="utf-8"))
-          if data.get("object",{}).get("sha") != sys.argv[2]:
+          import json, sys
+          data = json.load(open(sys.argv[1], encoding="utf-8"))
+          if data.get("object", {}).get("sha") != sys.argv[2]:
               raise SystemExit("frozen continuation ref drift")
           PY
           }
 
+          assert_blob() {
+            local path="$1" ref="$2" expected="$3" json="$RUNNER_TEMP/blob.json"
+            encoded="$(python3 - "$path" <<'PY'
+          import sys, urllib.parse
+          print(urllib.parse.quote(sys.argv[1], safe="/"))
+          PY
+          )"
+            api_get "$api/contents/$encoded?ref=$ref" >"$json"
+            python3 - "$json" "$expected" <<'PY'
+          import json, sys
+          data = json.load(open(sys.argv[1], encoding="utf-8"))
+          if data.get("type") != "file" or data.get("sha") != sys.argv[2]:
+              raise SystemExit("frozen workflow blob drift")
+          PY
+          }
+
           read_main_json() {
-            local path="$1" out="$2" meta="$RUNNER_TEMP/contents.json"
-            if ! api_get "$api/contents/$path?ref=main" >"$meta"; then
+            local path="$1" out="$2" mode="${3:-required}"
+            local encoded meta status
+            encoded="$(python3 - "$path" <<'PY'
+          import sys, urllib.parse
+          print(urllib.parse.quote(sys.argv[1], safe="/"))
+          PY
+          )"
+            meta="$RUNNER_TEMP/contents-${path//\//_}.json"
+            if ! status="$(curl --proto '=https' --tlsv1.2 -sS \
+              -o "$meta" -w '%{http_code}' \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$api/contents/$encoded?ref=main")"; then
+              echo "GitHub contents transport failure for $path" >&2
+              rm -f "$meta"
+              exit 1
+            fi
+            if [[ "$status" = "404" && "$mode" = "optional" ]]; then
               rm -f "$meta"
               return 1
             fi
+            if [[ "$status" != "200" ]]; then
+              echo "Unexpected GitHub contents status $status for $path" >&2
+              rm -f "$meta"
+              exit 1
+            fi
             python3 - "$meta" "$out" <<'PY'
-          import base64,json,sys
-          data=json.load(open(sys.argv[1],encoding="utf-8"))
+          import base64, json, sys
+          data = json.load(open(sys.argv[1], encoding="utf-8"))
           if data.get("type") != "file" or data.get("encoding") != "base64":
               raise SystemExit("unexpected GitHub contents response")
-          raw=base64.b64decode(data.get("content","").replace("\n",""), validate=True)
-          open(sys.argv[2],"wb").write(raw)
+          raw = base64.b64decode(data.get("content", "").replace("\n", ""), validate=True)
+          open(sys.argv[2], "wb").write(raw)
           PY
             rm -f "$meta"
           }
@@ -109,23 +150,62 @@ jobs:
             local run_id="$1" run_json="$RUNNER_TEMP/generic-run.json" jobs_json="$RUNNER_TEMP/generic-jobs.json"
             api_get "$api/actions/runs/$run_id" >"$run_json"
             api_get "$api/actions/runs/$run_id/jobs?per_page=100" >"$jobs_json"
-            python3 - "$run_json" "$jobs_json" "$GENERIC_RUNNER_REF" "$GENERIC_RUNNER_SHA" <<'PY'
-          import json,sys
-          run_path,jobs_path,ref,sha=sys.argv[1:]
-          run=json.load(open(run_path,encoding="utf-8"))
-          expected={"status":"completed","conclusion":"success","event":"workflow_dispatch","head_branch":ref,"head_sha":sha,"path":".github/workflows/private-assurance-slow-tlc-continuation.yml"}
-          for key,value in expected.items():
-              if run.get(key)!=value: raise SystemExit(f"generic continuation provenance mismatch: {key}")
-          jobs=json.load(open(jobs_path,encoding="utf-8")).get("jobs",[])
-          by={job.get("name"):job for job in jobs}
-          if set(by)!={"validate","continuation / slice"}: raise SystemExit("generic continuation job set mismatch")
-          if any(job.get("status")!="completed" or job.get("conclusion")!="success" for job in jobs):
+            python3 - "$run_json" "$jobs_json" "$GENERIC_RUNNER_REF" "$GENERIC_RUNNER_SHA" "$GITHUB_REPOSITORY" <<'PY'
+          import json, sys
+          run_path, jobs_path, ref, sha, repo = sys.argv[1:]
+          run = json.load(open(run_path, encoding="utf-8"))
+          expected = {
+              "status": "completed",
+              "conclusion": "success",
+              "run_attempt": 1,
+              "event": "workflow_dispatch",
+              "head_branch": ref,
+              "head_sha": sha,
+              "path": ".github/workflows/private-assurance-slow-tlc-continuation.yml",
+          }
+          for key, value in expected.items():
+              if run.get(key) != value:
+                  raise SystemExit(f"generic continuation provenance mismatch: {key}")
+          refs = run.get("referenced_workflows") or []
+          if len(refs) != 1:
+              raise SystemExit("generic continuation reusable workflow count mismatch")
+          r = refs[0]
+          if (
+              r.get("sha") != sha
+              or r.get("ref") != f"refs/heads/{ref}"
+              or r.get("path") != f"{repo}/.github/workflows/_private-assurance-tlc-continuation-slice.yml@{sha}"
+          ):
+              raise SystemExit("generic continuation reusable workflow binding mismatch")
+          jobs = json.load(open(jobs_path, encoding="utf-8")).get("jobs", [])
+          by = {job.get("name"): job for job in jobs}
+          if set(by) != {"validate", "continuation / slice"} or len(jobs) != 2:
+              raise SystemExit("generic continuation job set mismatch")
+          if any(job.get("status") != "completed" or job.get("conclusion") != "success" for job in jobs):
               raise SystemExit("generic continuation required job not successful")
-          steps={s.get("name"):(s.get("status"),s.get("conclusion")) for s in by["continuation / slice"].get("steps",[])}
-          tail=[steps.get(name) for name in ("Seal authenticated encrypted checkpoint","Upload authenticated encrypted checkpoint","Dispatch next exact slice")]
-          if tail==[("completed","skipped")]*3: print("terminal")
-          elif tail==[("completed","success")]*3: print("slice")
-          else: raise SystemExit("generic continuation tail state invalid")
+          vsteps = {s.get("name"): (s.get("status"), s.get("conclusion")) for s in by["validate"].get("steps", [])}
+          if vsteps.get("Validate immutable runner request") != ("completed", "success"):
+              raise SystemExit("generic immutable request validation not successful")
+          steps = {s.get("name"): (s.get("status"), s.get("conclusion")) for s in by["continuation / slice"].get("steps", [])}
+          for name in (
+              "Validate exact continuation request",
+              "Reclaim runner storage for exhaustive TLC",
+              "Recover exact frozen private candidate",
+              "Bind exact canonical map and selected profile",
+              "Run exact canonical TLC slice",
+          ):
+              if steps.get(name) != ("completed", "success"):
+                  raise SystemExit(f"generic required step not successful: {name}")
+          tail = [steps.get(name) for name in (
+              "Seal authenticated encrypted checkpoint",
+              "Upload authenticated encrypted checkpoint",
+              "Dispatch next exact slice",
+          )]
+          if tail == [("completed", "skipped")] * 3:
+              print("terminal")
+          elif tail == [("completed", "success")] * 3:
+              print("slice")
+          else:
+              raise SystemExit("generic continuation tail state invalid")
           PY
           }
 
@@ -134,28 +214,56 @@ jobs:
             api_get "$api/actions/runs/$run_id" >"$run_json"
             api_get "$api/actions/runs/$run_id/jobs?per_page=100" >"$jobs_json"
             python3 - "$run_json" "$jobs_json" "$TLC39_RUNNER_REF" "$TLC39_RUNNER_SHA" <<'PY'
-          import json,sys
-          run_path,jobs_path,ref,sha=sys.argv[1:]
-          run=json.load(open(run_path,encoding="utf-8"))
-          if run.get("status")!="completed" or run.get("conclusion")!="success" or run.get("head_sha")!=sha or run.get("path")!=".github/workflows/private-repaired-202-tlc39-continuation.yml":
+          import json, sys
+          run_path, jobs_path, ref, sha = sys.argv[1:]
+          run = json.load(open(run_path, encoding="utf-8"))
+          if (
+              run.get("status") != "completed"
+              or run.get("conclusion") != "success"
+              or run.get("run_attempt") != 1
+              or run.get("head_sha") != sha
+              or run.get("path") != ".github/workflows/private-repaired-202-tlc39-continuation.yml"
+          ):
               raise SystemExit("TLC39 continuation provenance mismatch")
-          event,branch=run.get("event"),run.get("head_branch")
-          if not ((event=="push" and branch=="main") or (event=="workflow_dispatch" and branch==ref)):
+          event, branch = run.get("event"), run.get("head_branch")
+          if not ((event == "push" and branch == "main") or (event == "workflow_dispatch" and branch == ref)):
               raise SystemExit("TLC39 continuation event/ref mismatch")
-          jobs=json.load(open(jobs_path,encoding="utf-8")).get("jobs",[])
-          if len(jobs)!=1 or jobs[0].get("name")!="slice" or jobs[0].get("status")!="completed" or jobs[0].get("conclusion")!="success":
+          jobs = json.load(open(jobs_path, encoding="utf-8")).get("jobs", [])
+          if len(jobs) != 1 or jobs[0].get("name") != "slice":
               raise SystemExit("TLC39 continuation job set mismatch")
-          steps={s.get("name"):(s.get("status"),s.get("conclusion")) for s in jobs[0].get("steps",[])}
-          tail=[steps.get(name) for name in ("Seal authenticated encrypted checkpoint","Upload authenticated encrypted checkpoint","Dispatch next exact slice")]
-          if tail==[("completed","skipped")]*3: print("terminal")
-          elif tail==[("completed","success")]*3: print("slice")
-          else: raise SystemExit("TLC39 continuation tail state invalid")
+          job = jobs[0]
+          if job.get("status") != "completed" or job.get("conclusion") != "success":
+              raise SystemExit("TLC39 continuation job not successful")
+          steps = {s.get("name"): (s.get("status"), s.get("conclusion")) for s in job.get("steps", [])}
+          for name in (
+              "Validate exact continuation request",
+              "Reclaim runner storage for exhaustive TLC",
+              "Recover exact frozen repaired candidate",
+              "Bind exact canonical map and profile 39",
+              "Run exact canonical TLC39 slice",
+          ):
+              if steps.get(name) != ("completed", "success"):
+                  raise SystemExit(f"TLC39 required step not successful: {name}")
+          tail = [steps.get(name) for name in (
+              "Seal authenticated encrypted checkpoint",
+              "Upload authenticated encrypted checkpoint",
+              "Dispatch next exact slice",
+          )]
+          if tail == [("completed", "skipped")] * 3:
+              print("terminal")
+          elif tail == [("completed", "success")] * 3:
+              print("slice")
+          else:
+              raise SystemExit("TLC39 continuation tail state invalid")
           PY
           }
 
           assert_ref "$GENERIC_RUNNER_REF" "$GENERIC_RUNNER_SHA"
           assert_ref "$TLC39_RUNNER_REF" "$TLC39_RUNNER_SHA"
-          echo "LAS_CURRENT_202_COORDINATOR_RUNNER_REFS=PASS"
+          assert_blob ".github/workflows/private-assurance-slow-tlc-continuation.yml" "$GENERIC_RUNNER_SHA" "$GENERIC_WRAPPER_BLOB"
+          assert_blob ".github/workflows/_private-assurance-tlc-continuation-slice.yml" "$GENERIC_RUNNER_SHA" "$GENERIC_SLICE_BLOB"
+          assert_blob ".github/workflows/private-repaired-202-tlc39-continuation.yml" "$TLC39_RUNNER_SHA" "$TLC39_WORKFLOW_BLOB"
+          echo "LAS_CURRENT_202_COORDINATOR_RUNNER_BINDINGS=PASS"
 
           if [[ "$GITHUB_EVENT_NAME" = "workflow_run" ]]; then
             if [[ "$SOURCE_WORKFLOW_CONCLUSION" != "success" ]]; then
@@ -170,8 +278,8 @@ jobs:
                   active="$(( $(run_count private-current-202-terminal-attestation.yml in_progress) + $(run_count private-current-202-terminal-attestation.yml queued) ))"
                   test "$active" -eq 0
                   payload="$(python3 - "$SOURCE_WORKFLOW_RUN_ID" <<'PY'
-          import json,sys
-          print(json.dumps({"ref":"main","inputs":{"terminal_run_id":sys.argv[1]}}))
+          import json, sys
+          print(json.dumps({"ref": "main", "inputs": {"terminal_run_id": sys.argv[1]}}))
           PY
           )"
                   dispatch private-current-202-terminal-attestation.yml main "$payload"
@@ -186,8 +294,8 @@ jobs:
                   active="$(( $(run_count private-repaired-202-tlc39-terminal-attestation.yml in_progress) + $(run_count private-repaired-202-tlc39-terminal-attestation.yml queued) ))"
                   test "$active" -eq 0
                   payload="$(python3 - "$SOURCE_WORKFLOW_RUN_ID" <<'PY'
-          import json,sys
-          print(json.dumps({"ref":"main","inputs":{"terminal_run_id":sys.argv[1]}}))
+          import json, sys
+          print(json.dumps({"ref": "main", "inputs": {"terminal_run_id": sys.argv[1]}}))
           PY
           )"
                   dispatch private-repaired-202-tlc39-terminal-attestation.yml main "$payload"
@@ -207,64 +315,119 @@ jobs:
           source_run="$RUNNER_TEMP/source-run.json"
           api_get "$api/actions/runs/$SOURCE_RUN_ID" >"$source_run"
           python3 - "$source_run" "$EXPECTED_SOURCE_HEAD" <<'PY'
-          import json,sys
-          data=json.load(open(sys.argv[1],encoding="utf-8"))
-          if data.get("head_sha")!=sys.argv[2] or data.get("path")!=".github/workflows/private-current-sharded-verify.yml" or data.get("status")!="completed":
-              raise SystemExit("source sharded run provenance mismatch")
+          import json, sys
+          data = json.load(open(sys.argv[1], encoding="utf-8"))
+          expected = {
+              "id": 38623465219,
+              "head_sha": sys.argv[2],
+              "head_branch": "main",
+              "path": ".github/workflows/private-current-sharded-verify.yml",
+              "event": "push",
+              "run_attempt": 1,
+              "status": "completed",
+          }
+          for key, value in expected.items():
+              if data.get(key) != value:
+                  raise SystemExit(f"source sharded run provenance mismatch: {key}")
           PY
+
           for page in 1 2 3; do
             api_get "$api/actions/runs/$SOURCE_RUN_ID/jobs?filter=latest&per_page=100&page=$page" >"$RUNNER_TEMP/source-jobs-$page.json"
           done
           python3 - "$RUNNER_TEMP/source-jobs-1.json" "$RUNNER_TEMP/source-jobs-2.json" "$RUNNER_TEMP/source-jobs-3.json" "$EXPECTED_REPLACEMENTS" <<'PY'
-          import json,re,sys
-          paths=sys.argv[1:4]; expected={int(x) for x in sys.argv[4].split()}; jobs=[]
-          for path in paths: jobs.extend(json.load(open(path,encoding="utf-8")).get("jobs",[]))
-          tlc={}
+          import json, re, sys
+          paths = sys.argv[1:4]
+          expected = {int(x) for x in sys.argv[4].split()}
+          jobs = []
+          for path in paths:
+              jobs.extend(json.load(open(path, encoding="utf-8")).get("jobs", []))
+          tlc = {}
           for job in jobs:
-              m=re.fullmatch(r"tlc \(([0-9]+)\)",job.get("name",""))
-              if m:
-                  i=int(m.group(1))
-                  if i in tlc: raise SystemExit("duplicate source TLC profile job")
-                  tlc[i]=job.get("conclusion")
-          if set(tlc)!=set(range(202)): raise SystemExit("source TLC profile coverage is not exactly 202")
-          cancelled={i for i,c in tlc.items() if c=="cancelled"}; failed={i for i,c in tlc.items() if c=="failure"}
-          other={i:c for i,c in tlc.items() if c not in {"success","cancelled","failure"}}
-          if cancelled!=expected: raise SystemExit(f"source cancelled set drift: {sorted(cancelled)}")
-          if failed!={39}: raise SystemExit(f"source failed set drift: {sorted(failed)}")
-          if other: raise SystemExit(f"unexpected source conclusions: {other}")
+              match = re.fullmatch(r"tlc \(([0-9]+)\)", job.get("name", ""))
+              if not match:
+                  continue
+              index = int(match.group(1))
+              if index in tlc:
+                  raise SystemExit("duplicate source TLC profile job")
+              tlc[index] = job.get("conclusion")
+          if set(tlc) != set(range(202)):
+              raise SystemExit("source TLC profile coverage is not exactly 202")
+          cancelled = {i for i, conclusion in tlc.items() if conclusion == "cancelled"}
+          failed = {i for i, conclusion in tlc.items() if conclusion == "failure"}
+          other = {i: conclusion for i, conclusion in tlc.items() if conclusion not in {"success", "cancelled", "failure"}}
+          if cancelled != expected:
+              raise SystemExit(f"source cancelled set drift: {sorted(cancelled)}")
+          if failed != {39}:
+              raise SystemExit(f"source failed set drift: {sorted(failed)}")
+          if other:
+              raise SystemExit(f"unexpected source conclusions: {other}")
           print("LAS_CURRENT_202_COORDINATOR_SOURCE_SET=PASS")
           PY
 
           registry="$RUNNER_TEMP/generic-registry.json"
-          if ! read_main_json LAS_CURRENT_202_TERMINAL_ATTESTATIONS.json "$registry"; then
-            printf '{"profiles":{}}\n' >"$registry"
-          fi
+          read_main_json LAS_CURRENT_202_TERMINAL_ATTESTATIONS.json "$registry" required
           next_index="$(python3 - "$registry" "$EXPECTED_REPLACEMENTS" "$EXPECTED_PRIVATE_SNAPSHOT_PROOF" "$EXPECTED_PRIVATE_TREE_PROOF" "$EXPECTED_VERIFIER_BLOB" "$EXPECTED_TLC_MAP_SHA256" "$GENERIC_RUNNER_SHA" "$GENERIC_WRAPPER_BLOB" "$GENERIC_SLICE_BLOB" <<'PY'
-          import json,sys
-          path,indices,snapshot,tree,verifier,mapping,runner,wrapper,slice_blob=sys.argv[1:]
-          data=json.load(open(path,encoding="utf-8")); expected=[int(x) for x in indices.split()]
-          if data=={"profiles":{}}: print(expected[0]); raise SystemExit
-          profiles=data.get("profiles")
-          if not isinstance(profiles,dict): raise SystemExit("generic registry profile map invalid")
-          bindings={"schema":"las-current-202-non39-terminal-registry-v1","private_snapshot_proof":snapshot,"private_tree_proof":tree,"canonical_verifier_blob":verifier,"tlc_map_sha256":mapping,"runner_sha":runner,"wrapper_workflow_blob":wrapper,"slice_workflow_blob":slice_blob}
-          for key,value in bindings.items():
-              if data.get(key)!=value: raise SystemExit(f"generic registry binding mismatch: {key}")
-          keys={int(k) for k in profiles}
-          if not keys.issubset(set(expected)): raise SystemExit("generic registry contains unexpected profile")
-          if any(value.get("result")!="PASS" for value in profiles.values()): raise SystemExit("generic registry contains non-PASS entry")
-          missing=[i for i in expected if i not in keys]
+          import json, sys
+          path, indices, snapshot, tree, verifier, mapping, runner, wrapper, slice_blob = sys.argv[1:]
+          data = json.load(open(path, encoding="utf-8"))
+          expected = [int(x) for x in indices.split()]
+          profiles = data.get("profiles")
+          if not isinstance(profiles, dict):
+              raise SystemExit("generic registry profile map invalid")
+          bindings = {
+              "schema": "las-current-202-non39-terminal-registry-v1",
+              "private_snapshot_proof": snapshot,
+              "private_tree_proof": tree,
+              "canonical_verifier_blob": verifier,
+              "tlc_map_sha256": mapping,
+              "runner_sha": runner,
+              "wrapper_workflow_blob": wrapper,
+              "slice_workflow_blob": slice_blob,
+          }
+          for key, value in bindings.items():
+              if data.get(key) != value:
+                  raise SystemExit(f"generic registry binding mismatch: {key}")
+          try:
+              keys = {int(key) for key in profiles}
+          except Exception as exc:
+              raise SystemExit("generic registry contains a non-numeric profile key") from exc
+          if {str(index) for index in keys} != set(profiles):
+              raise SystemExit("generic registry profile keys are not canonical decimal indices")
+          if not keys.issubset(set(expected)):
+              raise SystemExit("generic registry contains unexpected profile")
+          for key, value in profiles.items():
+              if not isinstance(value, dict) or value.get("result") != "PASS":
+                  raise SystemExit(f"generic registry profile {key} is not PASS")
+              for field in ("terminal_run_id", "validation_job_id", "terminal_job_id", "terminal_segment"):
+                  if not isinstance(value.get(field), int) or value[field] <= 0:
+                      raise SystemExit(f"generic registry profile {key} has invalid {field}")
+          missing = [index for index in expected if index not in keys]
           print(missing[0] if missing else "NONE")
           PY
           )"
 
           if [[ "$next_index" != "NONE" ]]; then
             active="$(( $(run_count private-assurance-slow-tlc-continuation.yml in_progress "$GENERIC_RUNNER_REF") + $(run_count private-assurance-slow-tlc-continuation.yml queued "$GENERIC_RUNNER_REF") ))"
-            if (( active > 0 )); then echo "LAS_CURRENT_202_COORDINATOR_GENERIC_ACTIVE=$active"; exit 0; fi
+            if (( active > 0 )); then
+              echo "LAS_CURRENT_202_COORDINATOR_GENERIC_ACTIVE=$active"
+              exit 0
+            fi
             active_attest="$(( $(run_count private-current-202-terminal-attestation.yml in_progress) + $(run_count private-current-202-terminal-attestation.yml queued) ))"
-            if (( active_attest > 0 )); then echo "LAS_CURRENT_202_COORDINATOR_GENERIC_ATTEST_ACTIVE=$active_attest"; exit 0; fi
+            if (( active_attest > 0 )); then
+              echo "LAS_CURRENT_202_COORDINATOR_GENERIC_ATTEST_ACTIVE=$active_attest"
+              exit 0
+            fi
             payload="$(python3 - "$GENERIC_RUNNER_REF" "$next_index" <<'PY'
-          import json,sys
-          print(json.dumps({"ref":sys.argv[1],"inputs":{"index":sys.argv[2],"segment":"1","resume_run_id":"","resume_artifact":""}}))
+          import json, sys
+          print(json.dumps({
+              "ref": sys.argv[1],
+              "inputs": {
+                  "index": sys.argv[2],
+                  "segment": "1",
+                  "resume_run_id": "",
+                  "resume_artifact": "",
+              },
+          }))
           PY
           )"
             dispatch private-assurance-slow-tlc-continuation.yml "$GENERIC_RUNNER_REF" "$payload"
@@ -273,33 +436,104 @@ jobs:
           fi
 
           tlc39="$RUNNER_TEMP/tlc39-terminal.json"
-          if ! read_main_json LAS_REPAIRED_202_TLC39_TERMINAL.json "$tlc39"; then
+          if ! read_main_json LAS_REPAIRED_202_TLC39_TERMINAL.json "$tlc39" optional; then
             active="$(( $(run_count private-repaired-202-tlc39-continuation.yml in_progress) + $(run_count private-repaired-202-tlc39-continuation.yml queued) + $(run_count private-repaired-202-tlc39-terminal-attestation.yml in_progress) + $(run_count private-repaired-202-tlc39-terminal-attestation.yml queued) ))"
-            if (( active > 0 )); then echo "LAS_CURRENT_202_COORDINATOR_TLC39_ACTIVE=$active"; exit 0; fi
+            if (( active > 0 )); then
+              echo "LAS_CURRENT_202_COORDINATOR_TLC39_ACTIVE=$active"
+              exit 0
+            fi
             echo "TLC39 terminal evidence missing with no active continuation/attestation" >&2
             exit 1
           fi
           python3 - "$tlc39" "$EXPECTED_PRIVATE_SNAPSHOT_PROOF" "$EXPECTED_PRIVATE_TREE_PROOF" "$EXPECTED_VERIFIER_BLOB" "$EXPECTED_TLC_MAP_SHA256" "$TLC39_RUNNER_SHA" "$TLC39_WORKFLOW_BLOB" <<'PY'
-          import json,sys
-          path,snapshot,tree,verifier,mapping,runner,workflow=sys.argv[1:]
-          data=json.load(open(path,encoding="utf-8"))
-          expected={"schema":"las-repaired-202-tlc39-terminal-v2","private_snapshot_proof":snapshot,"private_tree_proof":tree,"canonical_verifier_blob":verifier,"tlc_map_sha256":mapping,"profile_index":39,"runner_sha":runner,"continuation_workflow_blob":workflow,"result":"PASS"}
-          for key,value in expected.items():
-              if data.get(key)!=value: raise SystemExit(f"TLC39 terminal binding mismatch: {key}")
+          import json, sys
+          path, snapshot, tree, verifier, mapping, runner, workflow = sys.argv[1:]
+          data = json.load(open(path, encoding="utf-8"))
+          expected = {
+              "schema": "las-repaired-202-tlc39-terminal-v2",
+              "private_snapshot_proof": snapshot,
+              "private_tree_proof": tree,
+              "canonical_verifier_blob": verifier,
+              "tlc_map_sha256": mapping,
+              "profile_index": 39,
+              "runner_sha": runner,
+              "continuation_workflow_blob": workflow,
+              "result": "PASS",
+          }
+          for key, value in expected.items():
+              if data.get(key) != value:
+                  raise SystemExit(f"TLC39 terminal binding mismatch: {key}")
+          for field in ("terminal_run_id", "terminal_job_id", "terminal_segment"):
+              if not isinstance(data.get(field), int) or data[field] <= 0:
+                  raise SystemExit(f"TLC39 terminal evidence has invalid {field}")
           PY
 
           result="$RUNNER_TEMP/closure-result.json"
-          if read_main_json LAS_SHARDED_VERIFY_RESULT.json "$result"; then
-            if python3 - "$result" "$EXPECTED_PRIVATE_SNAPSHOT_PROOF" "$EXPECTED_VERIFIER_BLOB" <<'PY'
-          import json,sys
-          data=json.load(open(sys.argv[1],encoding="utf-8"))
-          ok=(data.get("schema")=="las-public-sharded-verification-v3" and data.get("private_snapshot_proof")==sys.argv[2] and data.get("canonical_verifier_blob")==sys.argv[3] and data.get("result")=="PASS")
+          if read_main_json LAS_SHARDED_VERIFY_RESULT.json "$result" optional; then
+            if python3 - "$result" "$EXPECTED_REPLACEMENTS" "$EXPECTED_PRIVATE_SNAPSHOT_PROOF" "$EXPECTED_PRIVATE_TREE_PROOF" "$EXPECTED_VERIFIER_BLOB" "$EXPECTED_TLC_MAP_SHA256" "$EXPECTED_DIRECT_SUCCESS_COUNT" "$EXPECTED_REPLACEMENT_COUNT" <<'PY'
+          import json, sys
+          path, generic_indices, snapshot, tree, verifier, mapping, direct_count, replacement_count = sys.argv[1:]
+          data = json.load(open(path, encoding="utf-8"))
+          expected_replacements = {int(x) for x in generic_indices.split()} | {39}
+          replacement = data.get("replacement_evidence")
+          ok = (
+              data.get("schema") == "las-public-sharded-verification-v3"
+              and data.get("source_run_id") == 38623465219
+              and data.get("source_public_head") == "b065678bfd50d8ff1ecb5b0eb4e101a579bccbf1"
+              and data.get("private_snapshot_proof") == snapshot
+              and data.get("private_tree_proof") == tree
+              and data.get("canonical_verifier_blob") == verifier
+              and data.get("tlc_map_sha256") == mapping
+              and data.get("pre_tlc_job") == "success"
+              and data.get("direct_success_count") == int(direct_count)
+              and data.get("replacement_count") == int(replacement_count)
+              and data.get("tlc_profile_count") == 202
+              and data.get("result") == "PASS"
+              and data.get("promotion_marker") == "LAS_VERIFY_ALL_RESULT=PASS"
+              and isinstance(replacement, dict)
+              and {int(key) for key in replacement if key.isdigit()} == expected_replacements
+              and len(replacement) == len(expected_replacements)
+          )
+          if ok:
+              for index in expected_replacements:
+                  item = replacement.get(str(index))
+                  if not isinstance(item, dict):
+                      ok = False
+                      break
+                  expected_source = "tlc39-v3" if index == 39 else "current-202-v4"
+                  if (
+                      item.get("source") != expected_source
+                      or not isinstance(item.get("terminal_run_id"), int)
+                      or item["terminal_run_id"] <= 0
+                      or not isinstance(item.get("terminal_segment"), int)
+                      or item["terminal_segment"] <= 0
+                  ):
+                      ok = False
+                      break
           raise SystemExit(0 if ok else 1)
           PY
-            then echo "LAS_CURRENT_202_COORDINATOR_CLOSURE=ALREADY_PASS"; exit 0; fi
+            then
+              echo "LAS_CURRENT_202_COORDINATOR_CLOSURE=ALREADY_PASS"
+              exit 0
+            fi
           fi
 
-          active_closure="$(( $(run_count private-current-202-compute-closure.yml in_progress) + $(run_count private-current-202-compute-closure.yml queued) ))"
-          if (( active_closure > 0 )); then echo "LAS_CURRENT_202_COORDINATOR_CLOSURE_ACTIVE=$active_closure"; exit 0; fi
+          active_all="$(( \
+            $(run_count private-assurance-slow-tlc-continuation.yml in_progress "$GENERIC_RUNNER_REF") + \
+            $(run_count private-assurance-slow-tlc-continuation.yml queued "$GENERIC_RUNNER_REF") + \
+            $(run_count private-current-202-terminal-attestation.yml in_progress) + \
+            $(run_count private-current-202-terminal-attestation.yml queued) + \
+            $(run_count private-repaired-202-tlc39-continuation.yml in_progress) + \
+            $(run_count private-repaired-202-tlc39-continuation.yml queued) + \
+            $(run_count private-repaired-202-tlc39-terminal-attestation.yml in_progress) + \
+            $(run_count private-repaired-202-tlc39-terminal-attestation.yml queued) + \
+            $(run_count private-current-202-compute-closure.yml in_progress) + \
+            $(run_count private-current-202-compute-closure.yml queued) \
+          ))"
+          if (( active_all > 0 )); then
+            echo "LAS_CURRENT_202_COORDINATOR_ACTIVE_BEFORE_CLOSURE=$active_all"
+            exit 0
+          fi
+
           dispatch private-current-202-compute-closure.yml main '{"ref":"main"}'
           echo "LAS_CURRENT_202_COORDINATOR_CLOSURE_DISPATCH=PASS"
