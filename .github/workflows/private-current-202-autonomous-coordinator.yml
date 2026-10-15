@@ -81,7 +81,8 @@ jobs:
           }
 
           assert_ref() {
-            local ref="$1" expected="$2" json="$RUNNER_TEMP/ref-${ref//\//_}.json"
+            local ref="$1" expected="$2"
+            local json="$RUNNER_TEMP/ref.json"
             api_get "$api/git/ref/heads/$ref" >"$json"
             python3 - "$json" "$expected" <<'PY'
           import json, sys
