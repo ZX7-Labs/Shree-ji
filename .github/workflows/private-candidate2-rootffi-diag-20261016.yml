@@ -1,0 +1,124 @@
+name: Exact corrected candidate Root FFI diagnostic 20261016
+
+on:
+  push:
+    branches:
+      - "verify/candidate2-rootffi-diag-20261016"
+    paths:
+      - ".github/workflows/private-candidate2-rootffi-diag-20261016.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exact-candidate2-rootffi-diag-20261016
+  cancel-in-progress: false
+
+env:
+  TARGET_REF_HASH: ac6732310a6062459e52db66215e0023ebddaadc1367c5bfa35f13246696ae91
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 9ea3aea7619d8af69ac39107ef1604a40baa0a350d83f2307089edffadd1062e
+  EXPECTED_PRIVATE_TREE_PROOF: d9f99ed116c710670c93246947072090773745329af9a6655113a372bc5f133e
+  EXPECTED_VERIFIER_BLOB: 62e3e6dc0fad5dddc7fb0a453a3cd681d911e590
+
+jobs:
+  rootffi:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Recover exact frozen private candidate
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$GITHUB_WORKSPACE/target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; matched_sha=""
+          while read -r sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"; matched_ref="$ref"; matched_sha="$sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$matched_sha"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$matched_sha"
+          test "$(printf '%s' "$matched_sha" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          actual="$(git rev-parse FETCH_HEAD)"; echo "::add-mask::$actual"; test "$actual" = "$matched_sha"
+          git checkout -q --detach "$actual"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test "$(git hash-object tools/verify_codespaces_all.sh)" = "$EXPECTED_VERIFIER_BLOB"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          unset PRIVATE_TOKEN auth matched_ref matched_sha actual tree
+          echo "LAS_CANDIDATE2_ROOTFFI_BINDING=PASS"
+
+      - name: Install exact Rust and Ada build toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          archive="$RUNNER_TEMP/alr.zip"; prefix="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --output "$archive" \
+            "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip" >/dev/null 2>&1
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $archive" | sha256sum --check --strict >/dev/null
+          mkdir -p "$prefix"; unzip -q "$archive" -d "$prefix"; export PATH="$prefix/bin:$PATH"
+          alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
+          workspace="$RUNNER_TEMP/rootffi-toolchain"; mkdir -p "$workspace"; cd "$workspace"
+          alr -n init --in-place --no-skel --lib rootffi_toolchain >/dev/null
+          alr_path="$(command -v alr)"; wrapper="$RUNNER_TEMP/gprbuild-via-alire"
+          cat >"$wrapper" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$workspace"
+          exec "$alr_path" exec -- gprbuild "\$@"
+          EOF
+          chmod 0755 "$wrapper"; printf 'GPRBUILD=%s\n' "$wrapper" >>"$GITHUB_ENV"
+
+      - name: Cargo check Root FFI
+        shell: bash
+        run: |
+          set -euo pipefail; cd "$GITHUB_WORKSPACE/target"; log="$RUNNER_TEMP/rootffi-check.log"
+          if env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 check --locked --features root-ffi --all-targets >"$log" 2>&1; then rm -f "$log"; echo "LAS_ROOTFFI_CHECK=PASS"; else echo "LAS_ROOTFFI_CHECK_LOG_SHA256=$(sha256sum "$log"|awk '{print $1}')"; rm -f "$log"; exit 1; fi
+
+      - name: Clippy Root FFI
+        shell: bash
+        run: |
+          set -euo pipefail; cd "$GITHUB_WORKSPACE/target"; log="$RUNNER_TEMP/rootffi-clippy.log"
+          if env GPRBUILD="$GPRBUILD" cargo +1.98.1 clippy --locked --features root-ffi --all-targets -- -D warnings >"$log" 2>&1; then rm -f "$log"; echo "LAS_ROOTFFI_CLIPPY=PASS"; else echo "LAS_ROOTFFI_CLIPPY_LOG_SHA256=$(sha256sum "$log"|awk '{print $1}')"; rm -f "$log"; exit 1; fi
+
+      - name: Tests Root FFI
+        shell: bash
+        run: |
+          set -euo pipefail; cd "$GITHUB_WORKSPACE/target"; log="$RUNNER_TEMP/rootffi-tests.log"
+          if env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --features root-ffi --all-targets -- --test-threads=1 >"$log" 2>&1; then rm -f "$log"; echo "LAS_ROOTFFI_TESTS=PASS"; else echo "LAS_ROOTFFI_TESTS_LOG_SHA256=$(sha256sum "$log"|awk '{print $1}')"; rm -f "$log"; exit 1; fi
+
+      - name: Root adapter memory-layout baseline
+        shell: bash
+        run: |
+          set -euo pipefail; cd "$GITHUB_WORKSPACE/target"; log="$RUNNER_TEMP/rootffi-memory.log"
+          if env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --features root-ffi effect_fabric::root_ffi_benchmark::root_adapter_memory_layout_baseline_is_reported -- --exact --test-threads=1 --nocapture >"$log" 2>&1; then rm -f "$log"; echo "LAS_ROOTFFI_MEMORY=PASS"; else echo "LAS_ROOTFFI_MEMORY_LOG_SHA256=$(sha256sum "$log"|awk '{print $1}')"; rm -f "$log"; exit 1; fi
+
+      - name: Root adapter p95 gate
+        shell: bash
+        run: |
+          set -euo pipefail; cd "$GITHUB_WORKSPACE/target"; log="$RUNNER_TEMP/rootffi-p95.log"
+          if env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --release --features root-ffi effect_fabric::root_ffi_benchmark::full_root_adapter_p95_is_within_twenty_milliseconds -- --exact --test-threads=1 --nocapture >"$log" 2>&1; then rm -f "$log"; echo "LAS_ROOTFFI_P95=PASS"; else echo "LAS_ROOTFFI_P95_LOG_SHA256=$(sha256sum "$log"|awk '{print $1}')"; rm -f "$log"; exit 1; fi
+
+      - name: Recheck exact immutable candidate
+        shell: bash
+        run: |
+          set -euo pipefail; cd "$GITHUB_WORKSPACE/target"
+          actual="$(git rev-parse HEAD)"; tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$actual"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$actual" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test "$(git hash-object tools/verify_codespaces_all.sh)" = "$EXPECTED_VERIFIER_BLOB"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "LAS_CANDIDATE2_ROOTFFI_DIAGNOSTIC=PASS"
