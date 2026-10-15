@@ -1,0 +1,53 @@
+name: Launch current-202 v4 TLC2 canary
+
+on:
+  push:
+    branches: [current-202-tlc-v4-launcher]
+    paths:
+      - "RUN_CURRENT_202_V4_PROFILE2"
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  CONTINUATION_REF: current-202-tlc-continuation-v4-runner
+  EXPECTED_RUNNER_SHA: 3d37edb1debc9a4dd32da51ec3164840dbc4b252
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Bind immutable runner and dispatch profile 2
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ref_json="$RUNNER_TEMP/continuation-ref.json"
+          curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/git/ref/heads/$CONTINUATION_REF" >"$ref_json"
+          actual="$(python3 - "$ref_json" <<'PY'
+          import json, sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              print(json.load(handle)["object"]["sha"])
+          PY
+          )"
+          rm -f "$ref_json"
+          test "$actual" = "$EXPECTED_RUNNER_SHA"
+
+          payload="$(python3 - "$CONTINUATION_REF" <<'PY'
+          import json, sys
+          print(json.dumps({"ref": sys.argv[1], "inputs": {"index": "2", "segment": "1", "resume_run_id": "", "resume_artifact": ""}}))
+          PY
+          )"
+          curl --proto '=https' --tlsv1.2 --fail-with-body -sS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/private-assurance-slow-tlc-continuation.yml/dispatches" \
+            -d "$payload" >/dev/null
+          echo "LAS_CURRENT_202_V4_PROFILE2_DISPATCH=PASS"
