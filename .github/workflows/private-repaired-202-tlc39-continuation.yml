@@ -1,54 +1,20 @@
-name: Repaired exact 202 TLC39 continuation
+name: Repaired exact 202 TLC39 continuation (default branch retired)
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "RUN_REPAIRED_202_TLC39"
   workflow_dispatch:
-    inputs:
-      segment:
-        description: Continuation segment number
-        required: true
-        default: "1"
-        type: string
-      resume_run_id:
-        description: Prior checkpoint run id
-        required: false
-        default: ""
-        type: string
-      resume_artifact:
-        description: Prior checkpoint artifact name
-        required: false
-        default: ""
-        type: string
 
 permissions:
   contents: read
 
 jobs:
   retired-default-branch:
-    if: github.ref_name == 'main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Reject redundant default-branch TLC39 execution
+      - name: Reject default-branch TLC39 continuation
         shell: bash
         run: |
           set -euo pipefail
           echo "LAS_REPAIRED_202_TLC39_DEFAULT_BRANCH=RETIRED"
-          echo "Canonical TLC39 execution is bound to repaired-202-tlc39-v3-runner and its frozen workflow blob."
-          exit 1
-
-  reject-unexpected-ref:
-    if: github.ref_name != 'main'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Reject non-frozen default workflow revision
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "LAS_TLC39_DEFAULT_WORKFLOW_REVISION_NONCANONICAL_REF=REJECTED"
-          echo "Dispatches to repaired-202-tlc39-v3-runner execute that ref's frozen workflow, not this default-branch revision."
+          echo "Canonical TLC39 execution is bound exclusively to repaired-202-tlc39-v3-runner and its frozen workflow revision."
           exit 1
