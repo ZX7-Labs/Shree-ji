@@ -1,10 +1,7 @@
-name: Private SANY exit diagnostic
+name: Private SANY exit diagnostic (retired)
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "RUN_SANY_EXIT_DIAG"
+  workflow_dispatch:
 
 permissions:
   contents: read
