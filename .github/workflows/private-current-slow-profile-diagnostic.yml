@@ -1,10 +1,6 @@
 name: Current exact slow-profile diagnostic
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/private-current-slow-profile-diagnostic.yml"
   workflow_dispatch:
 
 permissions:
