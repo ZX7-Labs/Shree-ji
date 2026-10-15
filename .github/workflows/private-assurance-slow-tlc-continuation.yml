@@ -34,15 +34,16 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-24.04
+    env:
+      TARGET_INDEX: ${{ inputs.index }}
+      SEGMENT: ${{ inputs.segment }}
+      RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+      RESUME_ARTIFACT: ${{ inputs.resume_artifact }}
+      CONTINUATION_REF: current-202-tlc-continuation-v4-runner
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Validate immutable runner request
         shell: bash
-        env:
-          TARGET_INDEX: ${{ inputs.index }}
-          SEGMENT: ${{ inputs.segment }}
-          RESUME_RUN_ID: ${{ inputs.resume_run_id }}
-          RESUME_ARTIFACT: ${{ inputs.resume_artifact }}
-          CONTINUATION_REF: current-202-tlc-continuation-v4-runner
         run: |
           set -euo pipefail
           test "$GITHUB_REF_NAME" = "$CONTINUATION_REF"
@@ -59,7 +60,23 @@ jobs:
             [[ "$RESUME_RUN_ID" =~ ^[0-9]+$ ]]
             test "$RESUME_ARTIFACT" = "current-202-v4-state-${TARGET_INDEX}-$((SEGMENT - 1))"
           fi
+
+          ref_json="$RUNNER_TEMP/continuation-ref.json"
+          curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/git/ref/heads/$CONTINUATION_REF" >"$ref_json"
+          continuation_sha="$(python3 - "$ref_json" <<'PY'
+          import json, sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              print(json.load(handle)["object"]["sha"])
+          PY
+          )"
+          rm -f "$ref_json"
+          test "$continuation_sha" = "$GITHUB_SHA"
           echo "LAS_CURRENT_202_ORCHESTRATOR_REQUEST=PASS"
+          echo "LAS_CURRENT_202_ORCHESTRATOR_REF_BINDING=PASS"
 
   continuation:
     needs: validate
