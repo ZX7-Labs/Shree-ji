@@ -1,10 +1,6 @@
 name: Current exact canonical 203 acceptance
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/private-current-exact-canonical-202-minus39.yml"
   workflow_dispatch:
 
 permissions:
