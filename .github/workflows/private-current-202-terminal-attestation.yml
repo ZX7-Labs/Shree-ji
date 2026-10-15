@@ -1,0 +1,446 @@
+name: Private current-202 terminal attestation
+
+on:
+  workflow_dispatch:
+    inputs:
+      terminal_run_id:
+        description: Completed current-202 v4 continuation run that claims terminal PASS
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: current-202-terminal-attestation
+  cancel-in-progress: false
+
+env:
+  TARGET_REF_HASH: 28a52175bfc55f4f8b2b0f4312cd2616a65a7082555149f4382746e2254e1b26
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 1b139dc7920e82d5f9bdd2a68c072ad88bc0049d5ef1377380899164da5f93f9
+  EXPECTED_PRIVATE_TREE_PROOF: 7fb364587ed7c9f76d8fd9f69cb4a4d58e576a44a1e653d019c8114ccb65353f
+  EXPECTED_VERIFIER_BLOB: 62e3e6dc0fad5dddc7fb0a453a3cd681d911e590
+  EXPECTED_TLC_PROFILE_COUNT: "202"
+  EXPECTED_TLC_MAP_SHA256: da7bb51d531d0e5e5e6994c80be8f254a110cb8181e6121e3a557fdff9428cee
+  EXPECTED_RUNNER_SHA: 3d37edb1debc9a4dd32da51ec3164840dbc4b252
+  EXPECTED_RUNNER_REF: current-202-tlc-continuation-v4-runner
+  EXPECTED_WRAPPER_WORKFLOW_BLOB: 70b8c18144f55625460e86337e8c5999a699facf
+  EXPECTED_WRAPPER_WORKFLOW_PATH: .github/workflows/private-assurance-slow-tlc-continuation.yml
+  EXPECTED_SLICE_WORKFLOW_BLOB: 30f44487a8d433045bfc5c3310aa7356a5b8d2ea
+  EXPECTED_SLICE_WORKFLOW_PATH: .github/workflows/_private-assurance-tlc-continuation-slice.yml
+  EXPECTED_CHECKPOINT_SCHEMA: current-202-periodic-barrier-v4
+  EXPECTED_TLC_WORKERS: "4"
+  TERMINAL_RUN_ID: ${{ inputs.terminal_run_id }}
+
+jobs:
+  attest:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout attestation request
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+
+      - name: Validate terminal attestation request
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TERMINAL_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          echo "LAS_CURRENT_202_ATTEST_REQUEST=PASS"
+
+      - name: Revalidate exact frozen private candidate
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+
+          ROOT="$GITHUB_WORKSPACE/private-target"
+          mkdir "$ROOT"
+          cd "$ROOT"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""
+          while read -r sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+            fi
+          done <"$refs"
+          rm -f "$refs"
+          test -n "$matched_ref"
+          echo "::add-mask::$matched_ref"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          actual="$(git rev-parse FETCH_HEAD)"
+          echo "::add-mask::$actual"
+          test "$(printf '%s' "$actual" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git checkout -q --detach "$actual"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test "$(git hash-object tools/verify_codespaces_all.sh)" = "$EXPECTED_VERIFIER_BLOB"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "LAS_CURRENT_202_ATTEST_PRIVATE_BINDING=PASS"
+          unset PRIVATE_TOKEN auth matched_ref actual tree
+
+      - name: Verify exact terminal continuation run
+        id: terminal
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
+          run_json="$RUNNER_TEMP/terminal-run.json"
+          jobs_json="$RUNNER_TEMP/terminal-jobs.json"
+          wrapper_json="$RUNNER_TEMP/wrapper-workflow.json"
+          slice_json="$RUNNER_TEMP/slice-workflow.json"
+          validate_log="$RUNNER_TEMP/validate-job.log"
+          terminal_log="$RUNNER_TEMP/terminal-job.log"
+
+          curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$api/actions/runs/$TERMINAL_RUN_ID" >"$run_json"
+
+          python3 - "$run_json" "$GITHUB_REPOSITORY" "$EXPECTED_RUNNER_REF" "$EXPECTED_RUNNER_SHA" "$EXPECTED_WRAPPER_WORKFLOW_PATH" "$EXPECTED_SLICE_WORKFLOW_PATH" <<'PY'
+          import json, sys
+          path, repository, runner_ref, runner_sha, wrapper_path, slice_path = sys.argv[1:]
+          data = json.load(open(path, encoding="utf-8"))
+          expected = {
+              "status": "completed",
+              "conclusion": "success",
+              "run_attempt": 1,
+              "event": "workflow_dispatch",
+              "head_branch": runner_ref,
+              "head_sha": runner_sha,
+              "path": wrapper_path,
+          }
+          for key, value in expected.items():
+              if data.get(key) != value:
+                  raise SystemExit(f"unexpected terminal run {key}")
+          refs = data.get("referenced_workflows") or []
+          if len(refs) != 1:
+              raise SystemExit("terminal run does not have exactly one reusable workflow binding")
+          ref = refs[0]
+          if ref.get("sha") != runner_sha or ref.get("ref") != f"refs/heads/{runner_ref}":
+              raise SystemExit("terminal reusable workflow revision is not exact")
+          if ref.get("path") != f"{repository}/{slice_path}@{runner_sha}":
+              raise SystemExit("terminal reusable workflow path is not exact")
+          PY
+
+          for spec in \
+            "$EXPECTED_WRAPPER_WORKFLOW_PATH|$EXPECTED_WRAPPER_WORKFLOW_BLOB|$wrapper_json" \
+            "$EXPECTED_SLICE_WORKFLOW_PATH|$EXPECTED_SLICE_WORKFLOW_BLOB|$slice_json"; do
+            IFS='|' read -r workflow_path expected_blob out_json <<<"$spec"
+            encoded_path="$(python3 - "$workflow_path" <<'PY'
+          import sys, urllib.parse
+          print(urllib.parse.quote(sys.argv[1], safe='/'))
+          PY
+          )"
+            curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$api/contents/$encoded_path?ref=$EXPECTED_RUNNER_SHA" >"$out_json"
+            actual_blob="$(python3 - "$out_json" <<'PY'
+          import json, sys
+          print(json.load(open(sys.argv[1], encoding="utf-8")).get("sha", ""))
+          PY
+          )"
+            test "$actual_blob" = "$expected_blob"
+          done
+
+          curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$api/actions/runs/$TERMINAL_RUN_ID/jobs?per_page=100" >"$jobs_json"
+
+          read -r validate_job_id terminal_job_id segment_mode < <(
+            python3 - "$jobs_json" <<'PY'
+          import json, sys
+          data = json.load(open(sys.argv[1], encoding="utf-8"))
+          jobs = data.get("jobs", [])
+          if data.get("total_count") != 2 or len(jobs) != 2:
+              raise SystemExit("terminal run must contain exactly two jobs")
+          by_name = {job.get("name"): job for job in jobs}
+          if set(by_name) != {"validate", "continuation / slice"}:
+              raise SystemExit("terminal run job set is not exact")
+          validate = by_name["validate"]
+          terminal = by_name["continuation / slice"]
+          for job in (validate, terminal):
+              if job.get("status") != "completed" or job.get("conclusion") != "success":
+                  raise SystemExit("terminal run contains a non-successful required job")
+          validate_steps = {s.get("name"): (s.get("status"), s.get("conclusion")) for s in validate.get("steps", [])}
+          if validate_steps.get("Validate immutable runner request") != ("completed", "success"):
+              raise SystemExit("immutable runner validation did not succeed")
+          steps = {s.get("name"): (s.get("status"), s.get("conclusion")) for s in terminal.get("steps", [])}
+          required_success = [
+              "Validate exact continuation request",
+              "Reclaim runner storage for exhaustive TLC",
+              "Recover exact frozen private candidate",
+              "Bind exact canonical map and selected profile",
+              "Run exact canonical TLC slice",
+          ]
+          for name in required_success:
+              if steps.get(name) != ("completed", "success"):
+                  raise SystemExit(f"required terminal step not successful: {name}")
+          for name in (
+              "Seal authenticated encrypted checkpoint",
+              "Upload authenticated encrypted checkpoint",
+              "Dispatch next exact slice",
+          ):
+              if steps.get(name) != ("completed", "skipped"):
+                  raise SystemExit(f"terminal PASS unexpectedly continued checkpoint chain: {name}")
+          download = steps.get("Download prior authenticated encrypted checkpoint")
+          restore = steps.get("Authenticate and restore prior checkpoint")
+          if download == ("completed", "skipped") and restore == ("completed", "skipped"):
+              mode = "initial"
+          elif download == ("completed", "success") and restore == ("completed", "success"):
+              mode = "resumed"
+          else:
+              raise SystemExit("checkpoint restore steps are inconsistent")
+          print(validate["id"], terminal["id"], mode)
+          PY
+          )
+          [[ "$validate_job_id" =~ ^[1-9][0-9]*$ ]]
+          [[ "$terminal_job_id" =~ ^[1-9][0-9]*$ ]]
+
+          curl --proto '=https' --tlsv1.2 --fail-with-body -sSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$api/actions/jobs/$validate_job_id/logs" >"$validate_log"
+          curl --proto '=https' --tlsv1.2 --fail-with-body -sSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$api/actions/jobs/$terminal_job_id/logs" >"$terminal_log"
+
+          read -r profile_index segment tlc_log_sha256 generated distinct queued cut_reason < <(
+            python3 - "$validate_log" "$terminal_log" "$segment_mode" "$EXPECTED_CHECKPOINT_SCHEMA" "$EXPECTED_TLC_WORKERS" <<'PY'
+          import re, sys
+          validate_path, terminal_path, mode, schema, workers = sys.argv[1:]
+          stamp = re.compile(r'^\d{4}-\d{2}-\d{2}T\S+Z (.*)$')
+          def emitted(path):
+              out = []
+              for line in open(path, encoding="utf-8", errors="replace"):
+                  match = stamp.match(line.rstrip("\n"))
+                  if match:
+                      out.append(match.group(1))
+              return out
+          validate = emitted(validate_path)
+          terminal = emitted(terminal_path)
+          for marker in (
+              "LAS_CURRENT_202_ORCHESTRATOR_REQUEST=PASS",
+              "LAS_CURRENT_202_ORCHESTRATOR_REF_BINDING=PASS",
+          ):
+              if marker not in validate:
+                  raise SystemExit("missing immutable runner validation marker")
+          required = {
+              "LAS_CURRENT_202_RESUME_REQUEST=PASS",
+              f"LAS_CURRENT_202_RESUME_SCHEMA={schema}",
+              f"LAS_CURRENT_202_RESUME_WORKERS={workers}",
+              "LAS_CURRENT_202_RESUME_RECOVERY=PASS",
+              "LAS_CURRENT_202_RESUME_BINDING=PASS",
+              "LAS_CURRENT_202_RESUME_RC=0",
+              "LAS_CURRENT_202_RESUME_RESULT=PASS",
+          }
+          if required.difference(terminal):
+              raise SystemExit("missing emitted terminal PASS markers")
+          forbidden = (
+              "LAS_CURRENT_202_RESUME_RESULT=FAIL",
+              "LAS_CURRENT_202_RESUME_RESULT=FAIL_CLOSED",
+              "LAS_CURRENT_202_RESUME_RESULT=FAIL_BARRIER",
+              "LAS_CURRENT_202_RESUME_RESULT=SLICE_CHECKPOINT",
+              "LAS_CURRENT_202_RESUME_BARRIER_TIMEOUT=1",
+          )
+          if any(line.startswith(forbidden) for line in terminal):
+              raise SystemExit("terminal log contains non-PASS continuation evidence")
+          def one(pattern, label):
+              values = [m.group(1) for line in terminal if (m := re.fullmatch(pattern, line))]
+              if len(values) != 1:
+                  raise SystemExit(f"missing or ambiguous {label}")
+              return values[0]
+          index = int(one(r'LAS_CURRENT_202_RESUME_INDEX=([0-9]+)', "profile index"))
+          segment = int(one(r'LAS_CURRENT_202_RESUME_SEGMENT=([1-9][0-9]*)', "segment"))
+          tlc_log_sha = one(r'LAS_CURRENT_202_RESUME_LOG_SHA256=([0-9a-f]{64})', "TLC log digest")
+          generated = int(one(r'LAS_CURRENT_202_RESUME_GENERATED=([0-9]+)', "generated count"))
+          distinct = int(one(r'LAS_CURRENT_202_RESUME_DISTINCT=([0-9]+)', "distinct count"))
+          queued = int(one(r'LAS_CURRENT_202_RESUME_QUEUE=([0-9]+)', "queue count"))
+          cut_reason = one(r'LAS_CURRENT_202_RESUME_CUT_REASON=([a-z]+)', "cut reason")
+          if not 0 <= index < 202 or index == 39:
+              raise SystemExit("terminal profile index is outside the generic non-39 domain")
+          if mode == "initial":
+              if segment != 1:
+                  raise SystemExit("initial terminal run is not segment 1")
+          else:
+              if segment <= 1:
+                  raise SystemExit("resumed terminal run has invalid segment")
+              for marker in (
+                  "LAS_CURRENT_202_RESUME_CHECKPOINT_AUTH=PASS",
+                  "LAS_CURRENT_202_RESUME_RECOVER_DIR=PASS",
+              ):
+                  if marker not in terminal:
+                      raise SystemExit("resumed terminal run lacks authenticated recovery evidence")
+          print(index, segment, tlc_log_sha, generated, distinct, queued, cut_reason)
+          PY
+          )
+
+          ROOT="$GITHUB_WORKSPACE/private-target"
+          map_py="$RUNNER_TEMP/attest-tlc-map.py"
+          python3 - "$ROOT/tools/verify_codespaces_all.sh" "$map_py" <<'PY'
+          from pathlib import Path
+          import sys
+          src = Path(sys.argv[1]).read_text(encoding="utf-8")
+          mh = 'python3 - "$ROOT" > "$TLC_MAP" <<\'PY\'\n'
+          me = '\nPY\n\nrun_tlc_profile() {'
+          if src.count(mh) != 1 or src.count(me) != 1:
+              raise SystemExit("canonical map anchors not unique")
+          start = src.index(mh) + len(mh)
+          end = src.index(me, start)
+          Path(sys.argv[2]).write_text(src[start:end] + "\n", encoding="utf-8")
+          PY
+          map="$RUNNER_TEMP/attest-tlc-map.tsv"
+          map_err="$RUNNER_TEMP/attest-tlc-map.private.err"
+          if ! python3 "$map_py" "$ROOT" >"$map" 2>"$map_err"; then
+            echo "LAS_CURRENT_202_ATTEST_MAP_ERROR_SHA256=$(sha256sum "$map_err" | awk '{print $1}')"
+            rm -f "$map_err"
+            exit 1
+          fi
+          rm -f "$map_err"
+          test "$(wc -l <"$map" | tr -d ' ')" = "$EXPECTED_TLC_PROFILE_COUNT"
+          test "$(sha256sum "$map" | awk '{print $1}')" = "$EXPECTED_TLC_MAP_SHA256"
+          line="$(sed -n "$((profile_index + 1))p" "$map")"
+          test -n "$line"
+          IFS=$'\t' read -r cfg tla deadlock expectation <<<"$line"
+          test -n "$cfg"; test -n "$tla"; test -z "$expectation"
+          test "$cfg" != "spec/defence_evolution/CandidateAssuranceEvidenceCase.cfg"
+          profile_binding="$(printf '%s\0%s\0%s\0%s' "$cfg" "$tla" "$deadlock" "$expectation" | sha256sum | awk '{print $1}')"
+          test -n "$profile_binding"
+
+          terminal_log_sha256="$(sha256sum "$terminal_log" | awk '{print $1}')"
+          echo "profile_index=$profile_index" >>"$GITHUB_OUTPUT"
+          echo "segment=$segment" >>"$GITHUB_OUTPUT"
+          echo "validate_job_id=$validate_job_id" >>"$GITHUB_OUTPUT"
+          echo "terminal_job_id=$terminal_job_id" >>"$GITHUB_OUTPUT"
+          echo "terminal_log_sha256=$terminal_log_sha256" >>"$GITHUB_OUTPUT"
+          echo "tlc_log_sha256=$tlc_log_sha256" >>"$GITHUB_OUTPUT"
+          echo "profile_binding=$profile_binding" >>"$GITHUB_OUTPUT"
+          echo "generated=$generated" >>"$GITHUB_OUTPUT"
+          echo "distinct=$distinct" >>"$GITHUB_OUTPUT"
+          echo "queued=$queued" >>"$GITHUB_OUTPUT"
+          echo "cut_reason=$cut_reason" >>"$GITHUB_OUTPUT"
+          echo "LAS_CURRENT_202_TERMINAL_RUN=PASS"
+          rm -f "$run_json" "$jobs_json" "$wrapper_json" "$slice_json" "$validate_log" "$terminal_log" "$map_py" "$map"
+          unset line cfg tla deadlock expectation profile_binding
+
+      - name: Checkout latest public control shell
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Record durable non-sensitive terminal attestation
+        shell: bash
+        env:
+          PROFILE_INDEX: ${{ steps.terminal.outputs.profile_index }}
+          TERMINAL_SEGMENT: ${{ steps.terminal.outputs.segment }}
+          VALIDATE_JOB_ID: ${{ steps.terminal.outputs.validate_job_id }}
+          TERMINAL_JOB_ID: ${{ steps.terminal.outputs.terminal_job_id }}
+          TERMINAL_LOG_SHA256: ${{ steps.terminal.outputs.terminal_log_sha256 }}
+          TLC_LOG_SHA256: ${{ steps.terminal.outputs.tlc_log_sha256 }}
+          PROFILE_BINDING_SHA256: ${{ steps.terminal.outputs.profile_binding }}
+          GENERATED: ${{ steps.terminal.outputs.generated }}
+          DISTINCT: ${{ steps.terminal.outputs.distinct }}
+          QUEUED: ${{ steps.terminal.outputs.queued }}
+          CUT_REASON: ${{ steps.terminal.outputs.cut_reason }}
+        run: |
+          set -euo pipefail
+          git fetch -q origin main
+          git checkout -q -B current-202-terminal-attestation origin/main
+
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          path = Path("LAS_CURRENT_202_TERMINAL_ATTESTATIONS.json")
+          expected = {
+              "schema": "las-current-202-non39-terminal-registry-v1",
+              "private_snapshot_proof": os.environ["EXPECTED_PRIVATE_SNAPSHOT_PROOF"],
+              "private_tree_proof": os.environ["EXPECTED_PRIVATE_TREE_PROOF"],
+              "canonical_verifier_blob": os.environ["EXPECTED_VERIFIER_BLOB"],
+              "tlc_map_sha256": os.environ["EXPECTED_TLC_MAP_SHA256"],
+              "runner_sha": os.environ["EXPECTED_RUNNER_SHA"],
+              "wrapper_workflow_blob": os.environ["EXPECTED_WRAPPER_WORKFLOW_BLOB"],
+              "slice_workflow_blob": os.environ["EXPECTED_SLICE_WORKFLOW_BLOB"],
+          }
+          if path.exists():
+              data = json.loads(path.read_text(encoding="utf-8"))
+              for key, value in expected.items():
+                  if data.get(key) != value:
+                      raise SystemExit(f"existing terminal registry binding mismatch: {key}")
+              profiles = data.get("profiles")
+              if not isinstance(profiles, dict):
+                  raise SystemExit("existing terminal registry has invalid profile map")
+          else:
+              data = {**expected, "profiles": {}}
+              profiles = data["profiles"]
+
+          index = os.environ["PROFILE_INDEX"]
+          entry = {
+              "profile_binding_sha256": os.environ["PROFILE_BINDING_SHA256"],
+              "terminal_run_id": int(os.environ["TERMINAL_RUN_ID"]),
+              "validation_job_id": int(os.environ["VALIDATE_JOB_ID"]),
+              "terminal_job_id": int(os.environ["TERMINAL_JOB_ID"]),
+              "terminal_segment": int(os.environ["TERMINAL_SEGMENT"]),
+              "terminal_job_log_sha256": os.environ["TERMINAL_LOG_SHA256"],
+              "tlc_log_sha256": os.environ["TLC_LOG_SHA256"],
+              "states_generated": int(os.environ["GENERATED"]),
+              "distinct_states": int(os.environ["DISTINCT"]),
+              "states_left_on_queue": int(os.environ["QUEUED"]),
+              "cut_reason": os.environ["CUT_REASON"],
+              "result": "PASS",
+          }
+          prior = profiles.get(index)
+          if prior is not None and prior != entry:
+              raise SystemExit("conflicting terminal attestation already exists for this profile")
+          profiles[index] = entry
+          data["profiles"] = {key: profiles[key] for key in sorted(profiles, key=lambda value: int(value))}
+          path.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+          PY
+
+          git add LAS_CURRENT_202_TERMINAL_ATTESTATIONS.json
+          if git diff --cached --quiet; then
+            echo "LAS_CURRENT_202_TERMINAL_ATTESTATION=UNCHANGED"
+            exit 0
+          fi
+          git -c user.name='LAS Verification Attestor' \
+              -c user.email='las-verification@users.noreply.github.com' \
+              commit -q -m "Record exact current-202 terminal attestation for profile $PROFILE_INDEX"
+
+          pushed=0
+          for attempt in 1 2 3; do
+            if git push -q origin HEAD:main; then
+              pushed=1
+              break
+            fi
+            git fetch -q origin main
+            git rebase -q origin/main
+          done
+          test "$pushed" -eq 1
+          attestation_commit="$(git rev-parse HEAD)"
+          git fetch -q origin main
+          git merge-base --is-ancestor "$attestation_commit" origin/main
+          echo "LAS_CURRENT_202_TERMINAL_ATTESTATION=PASS"
