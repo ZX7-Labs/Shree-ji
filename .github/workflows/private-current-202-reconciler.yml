@@ -1,0 +1,623 @@
+name: Current-202 assurance reconciler
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/private-current-202-reconciler.yml"
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - "Private current-202 TLC continuation"
+      - "Repaired exact 202 TLC39 continuation"
+      - "Private current-202 terminal attestation"
+      - "Repaired exact 202 TLC39 terminal attestation"
+      - "Close exact repaired 202 canonical compute"
+    types: [completed]
+  schedule:
+    - cron: "23 * * * *"
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: current-202-assurance-reconciler
+  cancel-in-progress: false
+
+env:
+  SOURCE_RUN_ID: "38623465219"
+  EXPECTED_SOURCE_HEAD: b065678bfd50d8ff1ecb5b0eb4e101a579bccbf1
+  EXPECTED_REPLACEMENTS: "2 28 29 36 109 114 155 156 167 171"
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 1b139dc7920e82d5f9bdd2a68c072ad88bc0049d5ef1377380899164da5f93f9
+  EXPECTED_PRIVATE_TREE_PROOF: 7fb364587ed7c9f76d8fd9f69cb4a4d58e576a44a1e653d019c8114ccb65353f
+  EXPECTED_VERIFIER_BLOB: 62e3e6dc0fad5dddc7fb0a453a3cd681d911e590
+  EXPECTED_TLC_MAP_SHA256: da7bb51d531d0e5e5e6994c80be8f254a110cb8181e6121e3a557fdff9428cee
+
+  GENERIC_RUNNER_REF: current-202-tlc-continuation-v4-runner
+  GENERIC_RUNNER_SHA: 3d37edb1debc9a4dd32da51ec3164840dbc4b252
+  GENERIC_WRAPPER_WORKFLOW: private-assurance-slow-tlc-continuation.yml
+  GENERIC_WRAPPER_PATH: .github/workflows/private-assurance-slow-tlc-continuation.yml
+  GENERIC_WRAPPER_BLOB: 70b8c18144f55625460e86337e8c5999a699facf
+  GENERIC_SLICE_PATH: .github/workflows/_private-assurance-tlc-continuation-slice.yml
+  GENERIC_SLICE_BLOB: 30f44487a8d433045bfc5c3310aa7356a5b8d2ea
+  GENERIC_ATTEST_WORKFLOW: private-current-202-terminal-attestation.yml
+  GENERIC_ATTEST_PATH: .github/workflows/private-current-202-terminal-attestation.yml
+  GENERIC_ATTEST_BLOB: 6e89c4e6c04322505dd0236ab0932b8562b227c5
+
+  TLC39_RUNNER_REF: repaired-202-tlc39-v3-runner
+  TLC39_RUNNER_SHA: d806afec7b4eb903febea33c595365322cd9652b
+  TLC39_WORKFLOW: private-repaired-202-tlc39-continuation.yml
+  TLC39_WORKFLOW_PATH: .github/workflows/private-repaired-202-tlc39-continuation.yml
+  TLC39_WORKFLOW_BLOB: 44986289bf12aec99e8359b7348401bc061b015d
+  TLC39_ATTEST_WORKFLOW: private-repaired-202-tlc39-terminal-attestation.yml
+  TLC39_ATTEST_PATH: .github/workflows/private-repaired-202-tlc39-terminal-attestation.yml
+  TLC39_ATTEST_BLOB: 07affe2bcac9f1f8d4618b201a42722340bd417d
+
+  CLOSURE_WORKFLOW: private-current-202-compute-closure.yml
+  CLOSURE_PATH: .github/workflows/private-current-202-compute-closure.yml
+  CLOSURE_BLOB: 219071b03d5b52e4c1d3d5eb520bdf459589c067
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Reconcile exact current-202 proof state
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import re
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          import time
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GH_TOKEN"]
+          api = f"https://api.github.com/repos/{repo}"
+
+          source_run_id = int(os.environ["SOURCE_RUN_ID"])
+          source_head = os.environ["EXPECTED_SOURCE_HEAD"]
+          replacement_order = [int(x) for x in os.environ["EXPECTED_REPLACEMENTS"].split()]
+          replacement_set = set(replacement_order)
+
+          generic_ref = os.environ["GENERIC_RUNNER_REF"]
+          generic_sha = os.environ["GENERIC_RUNNER_SHA"]
+          generic_workflow = os.environ["GENERIC_WRAPPER_WORKFLOW"]
+          generic_path = os.environ["GENERIC_WRAPPER_PATH"]
+          generic_attest = os.environ["GENERIC_ATTEST_WORKFLOW"]
+
+          tlc39_ref = os.environ["TLC39_RUNNER_REF"]
+          tlc39_sha = os.environ["TLC39_RUNNER_SHA"]
+          tlc39_workflow = os.environ["TLC39_WORKFLOW"]
+          tlc39_path = os.environ["TLC39_WORKFLOW_PATH"]
+          tlc39_attest = os.environ["TLC39_ATTEST_WORKFLOW"]
+
+          def request(url, *, method="GET", payload=None):
+              data = None if payload is None else json.dumps(payload).encode("utf-8")
+              req = urllib.request.Request(
+                  url,
+                  data=data,
+                  method=method,
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "User-Agent": "living-assurance-current-202-reconciler",
+                      **({"Content-Type": "application/json"} if data is not None else {}),
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  body = response.read()
+                  if not body:
+                      return None
+                  return json.loads(body)
+
+          def get_json(url):
+              value = request(url)
+              if not isinstance(value, dict):
+                  raise SystemExit(f"unexpected non-object response from {url}")
+              return value
+
+          def contents(path, *, ref="main", optional=False):
+              encoded = urllib.parse.quote(path, safe="/")
+              url = f"{api}/contents/{encoded}?ref={urllib.parse.quote(ref, safe='')}"
+              try:
+                  meta = get_json(url)
+              except urllib.error.HTTPError as exc:
+                  if optional and exc.code == 404:
+                      return None
+                  raise
+              if meta.get("type") != "file" or meta.get("encoding") != "base64":
+                  raise SystemExit(f"unexpected contents response for {path}@{ref}")
+              try:
+                  raw = base64.b64decode(meta["content"].replace("\n", ""), validate=True)
+              except Exception as exc:
+                  raise SystemExit(f"invalid base64 contents for {path}@{ref}") from exc
+              return meta, raw.decode("utf-8")
+
+          def assert_blob(path, ref, expected):
+              meta, _ = contents(path, ref=ref)
+              if meta.get("sha") != expected:
+                  raise SystemExit(f"frozen workflow blob drift: {path}@{ref}")
+
+          def assert_ref(ref, expected):
+              encoded = urllib.parse.quote(ref, safe="")
+              data = get_json(f"{api}/git/ref/heads/{encoded}")
+              if data.get("object", {}).get("sha") != expected:
+                  raise SystemExit(f"frozen continuation ref drift: {ref}")
+
+          def workflow_runs(workflow, *, status=None, branch=None, max_pages=5):
+              out = []
+              for page in range(1, max_pages + 1):
+                  params = {"per_page": "100", "page": str(page)}
+                  if status:
+                      params["status"] = status
+                  if branch:
+                      params["branch"] = branch
+                  query = urllib.parse.urlencode(params)
+                  data = get_json(f"{api}/actions/workflows/{urllib.parse.quote(workflow, safe='')}/runs?{query}")
+                  batch = data.get("workflow_runs")
+                  if not isinstance(batch, list):
+                      raise SystemExit(f"workflow run list malformed: {workflow}")
+                  out.extend(batch)
+                  if len(batch) < 100:
+                      break
+              return out
+
+          def active_count(workflow, *, branch=None):
+              total = 0
+              for status in ("queued", "in_progress"):
+                  params = {"per_page": "1", "status": status}
+                  if branch:
+                      params["branch"] = branch
+                  data = get_json(
+                      f"{api}/actions/workflows/{urllib.parse.quote(workflow, safe='')}/runs?"
+                      + urllib.parse.urlencode(params)
+                  )
+                  count = data.get("total_count")
+                  if not isinstance(count, int):
+                      raise SystemExit(f"active run count malformed: {workflow}")
+                  total += count
+              return total
+
+          def jobs(run_id):
+              out = []
+              for page in range(1, 5):
+                  data = get_json(f"{api}/actions/runs/{run_id}/jobs?filter=latest&per_page=100&page={page}")
+                  batch = data.get("jobs")
+                  if not isinstance(batch, list):
+                      raise SystemExit(f"job list malformed for run {run_id}")
+                  out.extend(batch)
+                  if len(batch) < 100:
+                      break
+              return out
+
+          def job_log(job_id):
+              req = urllib.request.Request(
+                  f"{api}/actions/jobs/{job_id}/logs",
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "User-Agent": "living-assurance-current-202-reconciler",
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  return response.read().decode("utf-8", errors="replace")
+
+          stamp = re.compile(r"^\d{4}-\d{2}-\d{2}T\S+Z (.*)$")
+
+          def emitted(log):
+              out = []
+              for line in log.splitlines():
+                  match = stamp.match(line)
+                  if match:
+                      out.append(match.group(1))
+              return out
+
+          def exactly_one(lines, pattern, label):
+              regex = re.compile(pattern)
+              values = [m.group(1) for line in lines if (m := regex.fullmatch(line))]
+              if len(values) != 1:
+                  raise ValueError(f"missing or ambiguous {label}")
+              return values[0]
+
+          def dispatch(workflow, ref, inputs=None):
+              payload = {"ref": ref}
+              if inputs is not None:
+                  payload["inputs"] = inputs
+              request(
+                  f"{api}/actions/workflows/{urllib.parse.quote(workflow, safe='')}/dispatches",
+                  method="POST",
+                  payload=payload,
+              )
+
+          # Re-establish the immutable source-run shape before spending more compute.
+          source = get_json(f"{api}/actions/runs/{source_run_id}")
+          source_expected = {
+              "id": source_run_id,
+              "head_sha": source_head,
+              "head_branch": "main",
+              "path": ".github/workflows/private-current-sharded-verify.yml",
+              "event": "push",
+              "run_attempt": 1,
+              "status": "completed",
+          }
+          for key, value in source_expected.items():
+              if source.get(key) != value:
+                  raise SystemExit(f"source sharded run provenance mismatch: {key}")
+
+          source_jobs = jobs(source_run_id)
+          pre = [job for job in source_jobs if job.get("name") == "pre_tlc"]
+          if len(pre) != 1 or pre[0].get("conclusion") != "success":
+              raise SystemExit("source pre_tlc is not exactly one successful job")
+          tlc = {}
+          for job in source_jobs:
+              match = re.fullmatch(r"tlc \(([0-9]+)\)", job.get("name", ""))
+              if not match:
+                  continue
+              index = int(match.group(1))
+              if index in tlc:
+                  raise SystemExit("duplicate source TLC profile job")
+              tlc[index] = job.get("conclusion")
+          if set(tlc) != set(range(202)):
+              raise SystemExit("source TLC profile coverage is not exactly 202")
+          cancelled = {i for i, conclusion in tlc.items() if conclusion == "cancelled"}
+          failed = {i for i, conclusion in tlc.items() if conclusion == "failure"}
+          other = {
+              i: conclusion
+              for i, conclusion in tlc.items()
+              if conclusion not in {"success", "cancelled", "failure"}
+          }
+          if cancelled != replacement_set or failed != {39} or other:
+              raise SystemExit(
+                  f"source result-set drift: cancelled={sorted(cancelled)} "
+                  f"failed={sorted(failed)} other={other}"
+              )
+          if sum(1 for conclusion in tlc.values() if conclusion == "success") != 191:
+              raise SystemExit("source direct-success count drift")
+          print("LAS_CURRENT_202_RECONCILER_SOURCE_SET=PASS")
+
+          # The reconciler never weakens or rewrites a proof runner. It only drives
+          # immutable runners and independent attestors already used by final closure.
+          assert_ref(generic_ref, generic_sha)
+          assert_blob(generic_path, generic_sha, os.environ["GENERIC_WRAPPER_BLOB"])
+          assert_blob(os.environ["GENERIC_SLICE_PATH"], generic_sha, os.environ["GENERIC_SLICE_BLOB"])
+          assert_ref(tlc39_ref, tlc39_sha)
+          assert_blob(tlc39_path, tlc39_sha, os.environ["TLC39_WORKFLOW_BLOB"])
+          assert_blob(
+              os.environ["GENERIC_ATTEST_PATH"],
+              "main",
+              os.environ["GENERIC_ATTEST_BLOB"],
+          )
+          assert_blob(
+              os.environ["TLC39_ATTEST_PATH"],
+              "main",
+              os.environ["TLC39_ATTEST_BLOB"],
+          )
+          assert_blob(
+              os.environ["CLOSURE_PATH"],
+              "main",
+              os.environ["CLOSURE_BLOB"],
+          )
+          print("LAS_CURRENT_202_RECONCILER_RUNNER_BINDINGS=PASS")
+
+          registry_meta, registry_text = contents("LAS_CURRENT_202_TERMINAL_ATTESTATIONS.json")
+          registry = json.loads(registry_text)
+          registry_expected = {
+              "schema": "las-current-202-non39-terminal-registry-v1",
+              "private_snapshot_proof": os.environ["EXPECTED_PRIVATE_SNAPSHOT_PROOF"],
+              "private_tree_proof": os.environ["EXPECTED_PRIVATE_TREE_PROOF"],
+              "canonical_verifier_blob": os.environ["EXPECTED_VERIFIER_BLOB"],
+              "tlc_map_sha256": os.environ["EXPECTED_TLC_MAP_SHA256"],
+              "runner_sha": generic_sha,
+              "wrapper_workflow_blob": os.environ["GENERIC_WRAPPER_BLOB"],
+              "slice_workflow_blob": os.environ["GENERIC_SLICE_BLOB"],
+          }
+          for key, value in registry_expected.items():
+              if registry.get(key) != value:
+                  raise SystemExit(f"terminal registry binding mismatch: {key}")
+          profiles = registry.get("profiles")
+          if not isinstance(profiles, dict):
+              raise SystemExit("terminal registry profile map is invalid")
+          try:
+              profile_indices = {int(key) for key in profiles}
+          except Exception as exc:
+              raise SystemExit("terminal registry contains non-numeric profile key") from exc
+          if {str(index) for index in profile_indices} != set(profiles):
+              raise SystemExit("terminal registry profile keys are not canonical decimal indices")
+          if not profile_indices.issubset(replacement_set):
+              raise SystemExit("terminal registry contains unexpected profile")
+          for key, entry in profiles.items():
+              if not isinstance(entry, dict) or entry.get("result") != "PASS":
+                  raise SystemExit(f"terminal registry profile {key} is not PASS")
+              for field in ("terminal_run_id", "validation_job_id", "terminal_job_id", "terminal_segment"):
+                  if not isinstance(entry.get(field), int) or entry[field] <= 0:
+                      raise SystemExit(f"terminal registry profile {key} has invalid {field}")
+
+          missing = [index for index in replacement_order if index not in profile_indices]
+
+          def generic_terminal_run(target):
+              candidates = []
+              for run in workflow_runs(generic_workflow, status="success", branch=generic_ref):
+                  expected = {
+                      "status": "completed",
+                      "conclusion": "success",
+                      "run_attempt": 1,
+                      "event": "workflow_dispatch",
+                      "head_branch": generic_ref,
+                      "head_sha": generic_sha,
+                      "path": generic_path,
+                  }
+                  if any(run.get(key) != value for key, value in expected.items()):
+                      continue
+                  refs = run.get("referenced_workflows") or []
+                  if len(refs) != 1:
+                      continue
+                  ref = refs[0]
+                  if (
+                      ref.get("sha") != generic_sha
+                      or ref.get("ref") != f"refs/heads/{generic_ref}"
+                      or ref.get("path")
+                      != f"{repo}/{os.environ['GENERIC_SLICE_PATH']}@{generic_sha}"
+                  ):
+                      continue
+                  run_jobs = jobs(run["id"])
+                  by = {job.get("name"): job for job in run_jobs}
+                  if set(by) != {"validate", "continuation / slice"} or len(run_jobs) != 2:
+                      continue
+                  if any(
+                      job.get("status") != "completed" or job.get("conclusion") != "success"
+                      for job in run_jobs
+                  ):
+                      continue
+                  validate_steps = {
+                      s.get("name"): (s.get("status"), s.get("conclusion"))
+                      for s in by["validate"].get("steps", [])
+                  }
+                  if validate_steps.get("Validate immutable runner request") != ("completed", "success"):
+                      continue
+                  terminal = by["continuation / slice"]
+                  steps = {
+                      s.get("name"): (s.get("status"), s.get("conclusion"))
+                      for s in terminal.get("steps", [])
+                  }
+                  required = (
+                      "Validate exact continuation request",
+                      "Reclaim runner storage for exhaustive TLC",
+                      "Recover exact frozen private candidate",
+                      "Bind exact canonical map and selected profile",
+                      "Run exact canonical TLC slice",
+                  )
+                  if any(steps.get(name) != ("completed", "success") for name in required):
+                      continue
+                  tail = (
+                      "Seal authenticated encrypted checkpoint",
+                      "Upload authenticated encrypted checkpoint",
+                      "Dispatch next exact slice",
+                  )
+                  if any(steps.get(name) != ("completed", "skipped") for name in tail):
+                      continue
+                  lines = emitted(job_log(terminal["id"]))
+                  try:
+                      index = int(
+                          exactly_one(
+                              lines,
+                              r"LAS_CURRENT_202_RESUME_INDEX=([0-9]+)",
+                              "generic profile index",
+                          )
+                      )
+                      queued = int(
+                          exactly_one(
+                              lines,
+                              r"LAS_CURRENT_202_RESUME_QUEUE=([0-9]+)",
+                              "generic queue",
+                          )
+                      )
+                  except ValueError:
+                      continue
+                  required_markers = {
+                      "LAS_CURRENT_202_RESUME_RC=0",
+                      "LAS_CURRENT_202_RESUME_RESULT=PASS",
+                      "LAS_CURRENT_202_RESUME_BINDING=PASS",
+                      "LAS_CURRENT_202_RESUME_RECOVERY=PASS",
+                  }
+                  if index != target or queued != 0 or required_markers.difference(lines):
+                      continue
+                  if any(
+                      line.startswith(
+                          (
+                              "LAS_CURRENT_202_RESUME_RESULT=FAIL",
+                              "LAS_CURRENT_202_RESUME_RESULT=SLICE_CHECKPOINT",
+                          )
+                      )
+                      for line in lines
+                  ):
+                      continue
+                  candidates.append(run["id"])
+              return max(candidates) if candidates else None
+
+          if missing:
+              target = missing[0]
+              active = (
+                  active_count(generic_workflow, branch=generic_ref)
+                  + active_count(generic_attest)
+              )
+              if active:
+                  print(f"LAS_CURRENT_202_RECONCILER_GENERIC_ACTIVE={active}")
+                  raise SystemExit(0)
+
+              terminal_run = generic_terminal_run(target)
+              if terminal_run is not None:
+                  dispatch(generic_attest, "main", {"terminal_run_id": str(terminal_run)})
+                  print(
+                      f"LAS_CURRENT_202_RECONCILER_RECOVER_GENERIC={target}:{terminal_run}"
+                  )
+                  raise SystemExit(0)
+
+              dispatch(
+                  generic_workflow,
+                  generic_ref,
+                  {
+                      "index": str(target),
+                      "segment": "1",
+                      "resume_run_id": "",
+                      "resume_artifact": "",
+                  },
+              )
+              print(f"LAS_CURRENT_202_RECONCILER_START_GENERIC={target}")
+              raise SystemExit(0)
+
+          print("LAS_CURRENT_202_RECONCILER_GENERIC_SET=PASS")
+
+          def tlc39_terminal_run():
+              candidates = []
+              for run in workflow_runs(tlc39_workflow, status="success", branch=tlc39_ref):
+                  expected = {
+                      "status": "completed",
+                      "conclusion": "success",
+                      "run_attempt": 1,
+                      "event": "workflow_dispatch",
+                      "head_branch": tlc39_ref,
+                      "head_sha": tlc39_sha,
+                      "path": tlc39_path,
+                  }
+                  if any(run.get(key) != value for key, value in expected.items()):
+                      continue
+                  run_jobs = jobs(run["id"])
+                  if len(run_jobs) != 1 or run_jobs[0].get("name") != "slice":
+                      continue
+                  job = run_jobs[0]
+                  if job.get("status") != "completed" or job.get("conclusion") != "success":
+                      continue
+                  steps = {
+                      s.get("name"): (s.get("status"), s.get("conclusion"))
+                      for s in job.get("steps", [])
+                  }
+                  required = (
+                      "Validate exact continuation request",
+                      "Reclaim runner storage for exhaustive TLC",
+                      "Recover exact frozen repaired candidate",
+                      "Bind exact canonical map and profile 39",
+                      "Run exact canonical TLC39 slice",
+                  )
+                  if any(steps.get(name) != ("completed", "success") for name in required):
+                      continue
+                  tail = (
+                      "Seal authenticated encrypted checkpoint",
+                      "Upload authenticated encrypted checkpoint",
+                      "Dispatch next exact slice",
+                  )
+                  if any(steps.get(name) != ("completed", "skipped") for name in tail):
+                      continue
+                  lines = emitted(job_log(job["id"]))
+                  try:
+                      queued = int(
+                          exactly_one(
+                              lines,
+                              r"LAS_REPAIRED_202_TLC39_QUEUE=([0-9]+)",
+                              "TLC39 queue",
+                          )
+                      )
+                  except ValueError:
+                      continue
+                  required_markers = {
+                      "LAS_REPAIRED_202_TLC39_RC=0",
+                      "LAS_REPAIRED_202_TLC39_RESULT=PASS",
+                      "LAS_REPAIRED_202_TLC39_BINDING=PASS",
+                  }
+                  if queued != 0 or required_markers.difference(lines):
+                      continue
+                  if any(
+                      line.startswith(
+                          (
+                              "LAS_REPAIRED_202_TLC39_RESULT=FAIL",
+                              "LAS_REPAIRED_202_TLC39_RESULT=SLICE_CHECKPOINT",
+                          )
+                      )
+                      for line in lines
+                  ):
+                      continue
+                  candidates.append(run["id"])
+              return max(candidates) if candidates else None
+
+          tlc39_value = contents("LAS_REPAIRED_202_TLC39_TERMINAL.json", optional=True)
+          if tlc39_value is None:
+              active = active_count(tlc39_workflow, branch=tlc39_ref) + active_count(tlc39_attest)
+              if active:
+                  print(f"LAS_CURRENT_202_RECONCILER_TLC39_ACTIVE={active}")
+                  raise SystemExit(0)
+
+              terminal_run = tlc39_terminal_run()
+              if terminal_run is not None:
+                  dispatch(tlc39_attest, "main", {"terminal_run_id": str(terminal_run)})
+                  print(f"LAS_CURRENT_202_RECONCILER_RECOVER_TLC39={terminal_run}")
+                  raise SystemExit(0)
+
+              dispatch(
+                  tlc39_workflow,
+                  tlc39_ref,
+                  {"segment": "1", "resume_run_id": "", "resume_artifact": ""},
+              )
+              print("LAS_CURRENT_202_RECONCILER_START_TLC39=1")
+              raise SystemExit(0)
+
+          _, tlc39_text = tlc39_value
+          tlc39 = json.loads(tlc39_text)
+          tlc39_expected = {
+              "schema": "las-repaired-202-tlc39-terminal-v2",
+              "private_snapshot_proof": os.environ["EXPECTED_PRIVATE_SNAPSHOT_PROOF"],
+              "private_tree_proof": os.environ["EXPECTED_PRIVATE_TREE_PROOF"],
+              "canonical_verifier_blob": os.environ["EXPECTED_VERIFIER_BLOB"],
+              "tlc_map_sha256": os.environ["EXPECTED_TLC_MAP_SHA256"],
+              "profile_index": 39,
+              "runner_sha": tlc39_sha,
+              "continuation_workflow_blob": os.environ["TLC39_WORKFLOW_BLOB"],
+              "result": "PASS",
+          }
+          for key, value in tlc39_expected.items():
+              if tlc39.get(key) != value:
+                  raise SystemExit(f"TLC39 terminal binding mismatch: {key}")
+          for field in ("terminal_run_id", "terminal_job_id", "terminal_segment"):
+              if not isinstance(tlc39.get(field), int) or tlc39[field] <= 0:
+                  raise SystemExit(f"TLC39 terminal evidence has invalid {field}")
+          print("LAS_CURRENT_202_RECONCILER_TLC39=PASS")
+
+          closure = contents("LAS_SHARDED_VERIFY_RESULT.json", optional=True)
+          if closure is not None:
+              _, closure_text = closure
+              data = json.loads(closure_text)
+              if (
+                  data.get("schema") == "las-public-sharded-verification-v3"
+                  and data.get("source_run_id") == source_run_id
+                  and data.get("source_public_head") == source_head
+                  and data.get("private_snapshot_proof") == os.environ["EXPECTED_PRIVATE_SNAPSHOT_PROOF"]
+                  and data.get("private_tree_proof") == os.environ["EXPECTED_PRIVATE_TREE_PROOF"]
+                  and data.get("canonical_verifier_blob") == os.environ["EXPECTED_VERIFIER_BLOB"]
+                  and data.get("tlc_map_sha256") == os.environ["EXPECTED_TLC_MAP_SHA256"]
+                  and data.get("pre_tlc_job") == "success"
+                  and data.get("direct_success_count") == 191
+                  and data.get("replacement_count") == 11
+                  and data.get("tlc_profile_count") == 202
+                  and data.get("result") == "PASS"
+                  and data.get("promotion_marker") == "LAS_VERIFY_ALL_RESULT=PASS"
+              ):
+                  print("LAS_CURRENT_202_RECONCILER_CLOSURE=ALREADY_PASS")
+                  raise SystemExit(0)
+
+          if active_count(os.environ["CLOSURE_WORKFLOW"]):
+              print("LAS_CURRENT_202_RECONCILER_CLOSURE_ACTIVE=1")
+              raise SystemExit(0)
+
+          dispatch(os.environ["CLOSURE_WORKFLOW"], "main")
+          print("LAS_CURRENT_202_RECONCILER_CLOSURE_DISPATCH=PASS")
+          PY
