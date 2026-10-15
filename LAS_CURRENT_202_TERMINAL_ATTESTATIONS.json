@@ -7,5 +7,20 @@
   "runner_sha": "3d37edb1debc9a4dd32da51ec3164840dbc4b252",
   "wrapper_workflow_blob": "70b8c18144f55625460e86337e8c5999a699facf",
   "slice_workflow_blob": "30f44487a8d433045bfc5c3310aa7356a5b8d2ea",
-  "profiles": {}
+  "profiles": {
+    "2": {
+      "profile_binding_sha256": "69fae3c83c7327b5333a0368d72c93e2fa824d056319f1a27c8a34f66b41e9f5",
+      "terminal_run_id": 38727897541,
+      "validation_job_id": 116398196304,
+      "terminal_job_id": 116398226197,
+      "terminal_segment": 2,
+      "terminal_job_log_sha256": "561271f86d62194176cddf795c1deaef522019985a909338ab910c7331323a41",
+      "tlc_log_sha256": "94a59b0ed40e0a61eddedb2c94a55256a2b53db7ef863515dc8527bf8c2a6fcd",
+      "states_generated": 4217662040,
+      "distinct_states": 17869249,
+      "states_left_on_queue": 0,
+      "cut_reason": "none",
+      "result": "PASS"
+    }
+  }
 }
