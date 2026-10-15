@@ -9,96 +9,15 @@ on:
 permissions:
   contents: read
 
-env:
-  TARGET_REF_HASH: ed3bb0cf5d74f44e15d4ad6983d8f69de6f84c85ad861805ae2834a02dab9143
-  EXPECTED_PRIVATE_SNAPSHOT_PROOF: b5112adc429935d9024eb5805c9c49dd2c0f2cb161849cc987f7ba20af212f5c
-  EXPECTED_PRIVATE_TREE_PROOF: 07b34736f34510f45a7cf6200057da51df415958c1f04281a583e87e4743fe97
-  EXPECTED_CANONICAL_VERIFIER_BLOB: 8ea6dbe77db10592baf8f56c9719626c36687f9a
-  EXPECTED_PROFILE39_RUNNER_BLOB: 39475a3fd64dcac34998f9eb947cd3acf7d9d653
-  EXPECTED_CANONICAL_CI_BLOB: 850143334887ea7996aa78d4ea3a0856170e8897
-  EXPECTED_QUOTIENT_CHECKER_BLOB: 0cdf683516f05383d97228f315f2da34fd038aa0
-  EXPECTED_CONTRACT_CHECKER_BLOB: 6c6b781b6109470cffaf3e080aece82e547176b2
-  EXPECTED_DEPENDENCY_CHECKER_BLOB: 4d38410507f1c0c3829976e9b8e9a9aa772deb69
-  EXPECTED_PROFILE_CHECKER_BLOB: 5b6aada4cf6a22ed1f7d1a8740521ee7fcc3da82
-  EXPECTED_PREFIX_CHECKER_BLOB: ecdccd48cd9a893033ad2c6a76e4ff38e51160a7
-  EXPECTED_SUFFIX_CHECKER_BLOB: 0e496590ee97e92863201179d814a9a22057916d
-  EXPECTED_PREFIX_MODULE_BLOB: 2c27605936564b29ac674e890f35065ebb371186
-  EXPECTED_PREFIX_MODEL_BLOB: 264e9062f6dcf529fb7adc3ac56c7feda295811d
-  EXPECTED_PREFIX_CFG_BLOB: c624fc4920e5595947be2625e36cd50ae0e955fc
-  TLA_SHA1: bee4a54f3ee3d4afc347c3240ec2d9e93b075104
-
 jobs:
-  canonical_profile39:
+  retired:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 5
     steps:
-      - name: Recover exact canonical candidate opaquely
-        shell: bash
-        env:
-          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
-          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
-        run: |
-          set -euo pipefail
-          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
-          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
-          mkdir target; cd target; git init -q; git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
-          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; refs="$RUNNER_TEMP/heads"
-          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
-          matched=""
-          while read -r sha ref; do [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" != "$TARGET_REF_HASH" ]] || { test -z "$matched"; matched="$ref"; }; done <"$refs"
-          rm -f "$refs"; test -n "$matched"; echo "::add-mask::$matched"
-          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched"
-          actual="$(git rev-parse FETCH_HEAD)"; echo "::add-mask::$actual"
-          test "$(printf '%s' "$actual" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
-          git checkout -q --detach "$actual"; tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
-          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
-          test "$(git hash-object tools/verify_codespaces_all.sh)" = "$EXPECTED_CANONICAL_VERIFIER_BLOB"
-          test "$(git hash-object tools/verification/run_candidate_assurance_profile39_compositional.sh)" = "$EXPECTED_PROFILE39_RUNNER_BLOB"
-          test "$(git hash-object .github/workflows/candidate-assurance-evidence-case-tlc.yml)" = "$EXPECTED_CANONICAL_CI_BLOB"
-          test "$(git hash-object tools/verification/verify_candidate_assurance_frontier_quotient.py)" = "$EXPECTED_QUOTIENT_CHECKER_BLOB"
-          test "$(git hash-object tools/verification/verify_candidate_assurance_frontier_contract.py)" = "$EXPECTED_CONTRACT_CHECKER_BLOB"
-          test "$(git hash-object tools/verification/verify_candidate_assurance_frontier_dependencies.py)" = "$EXPECTED_DEPENDENCY_CHECKER_BLOB"
-          test "$(git hash-object tools/verification/verify_candidate_assurance_profile39_contract.py)" = "$EXPECTED_PROFILE_CHECKER_BLOB"
-          test "$(git hash-object tools/verification/verify_candidate_assurance_safety_prefix_closure.py)" = "$EXPECTED_PREFIX_CHECKER_BLOB"
-          test "$(git hash-object tools/verification/verify_candidate_assurance_terminal_suffix_closure.py)" = "$EXPECTED_SUFFIX_CHECKER_BLOB"
-          test "$(git hash-object spec/defence_evolution/CandidateAssuranceEvidenceCaseSafetyPrefix.tla)" = "$EXPECTED_PREFIX_MODULE_BLOB"
-          test "$(git hash-object spec/defence_evolution/CandidateAssuranceEvidenceCaseSafetyPrefixModel.tla)" = "$EXPECTED_PREFIX_MODEL_BLOB"
-          test "$(git hash-object spec/defence_evolution/CandidateAssuranceEvidenceCaseSafetyPrefix.cfg)" = "$EXPECTED_PREFIX_CFG_BLOB"
-          test -z "$(git status --porcelain --untracked-files=no)"
-          echo "LAS_PROFILE39_CANONICAL_RECOVERY=PASS"
-          unset PRIVATE_TOKEN auth matched actual tree
-
-      - name: Verify canonical CI wiring and shell syntax
+      - name: Reject obsolete historical profile39 closure
         shell: bash
         run: |
           set -euo pipefail
-          cd target
-          bash -n tools/verify_codespaces_all.sh
-          bash -n tools/verification/run_candidate_assurance_profile39_compositional.sh
-          ci=.github/workflows/candidate-assurance-evidence-case-tlc.yml
-          grep -Fq 'releases/download/v1.7.4/tla2tools.jar' "$ci"
-          ! grep -Fq 'releases/download/v1.7.2/tla2tools.jar' "$ci"
-          grep -Fq 'run_candidate_assurance_profile39_compositional.sh' "$ci"
-          ! grep -Fq -- '-config CandidateAssuranceEvidenceCase.cfg' "$ci"
-          echo "LAS_PROFILE39_CANONICAL_CI_WIRING=PASS"
-
-      - name: Fetch pinned TLA tools
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
-            --output "$RUNNER_TEMP/tla2tools.jar" \
-            "https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar" >/dev/null 2>&1
-          echo "$TLA_SHA1  $RUNNER_TEMP/tla2tools.jar" | sha1sum --check --strict >/dev/null
-
-      - name: Execute canonical profile-39 compositional runner
-        shell: bash
-        env:
-          JAVA_TOOL_OPTIONS: -Xmx5g
-        run: |
-          set -euo pipefail
-          cd target
-          bash tools/verification/run_candidate_assurance_profile39_compositional.sh \
-            "$RUNNER_TEMP/tla2tools.jar" "$RUNNER_TEMP/profile39"
-          test -z "$(git status --porcelain --untracked-files=no)"
-          echo "LAS_CANONICAL_PROFILE39_RUNNER=PASS"
+          echo "LAS_ASSURANCE_PROFILE39_SAFETY_PREFIX_CLOSURE=RETIRED"
+          echo "Canonical profile39 evidence is bound to the repaired-202 TLC39 v3 continuation, exact terminal attestation, and repaired 202-profile aggregate closure."
+          exit 1
