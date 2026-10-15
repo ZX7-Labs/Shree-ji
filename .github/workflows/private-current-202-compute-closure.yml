@@ -5,30 +5,72 @@ on:
     branches: [main]
     paths:
       - "RUN_CURRENT_202_COMPUTE_CLOSURE"
+  workflow_dispatch:
 
 permissions:
-  contents: write
   actions: read
+  contents: read
+
+concurrency:
+  group: current-202-combined-compute-closure
+  cancel-in-progress: false
 
 env:
   SOURCE_RUN_ID: "38623465219"
   EXPECTED_SOURCE_HEAD: b065678bfd50d8ff1ecb5b0eb4e101a579bccbf1
   EXPECTED_SOURCE_WORKFLOW_BLOB: 2cd4b0f173aecd8de5e70fc4df999ec3c0a35d9f
+  EXPECTED_SOURCE_WORKFLOW_PATH: .github/workflows/private-current-sharded-verify.yml
   TARGET_REF_HASH: 28a52175bfc55f4f8b2b0f4312cd2616a65a7082555149f4382746e2254e1b26
   EXPECTED_PRIVATE_SNAPSHOT_PROOF: 1b139dc7920e82d5f9bdd2a68c072ad88bc0049d5ef1377380899164da5f93f9
+  EXPECTED_PRIVATE_TREE_PROOF: 7fb364587ed7c9f76d8fd9f69cb4a4d58e576a44a1e653d019c8114ccb65353f
   EXPECTED_VERIFIER_BLOB: 62e3e6dc0fad5dddc7fb0a453a3cd681d911e590
   EXPECTED_TLC_PROFILE_COUNT: "202"
+  EXPECTED_TLC_MAP_SHA256: da7bb51d531d0e5e5e6994c80be8f254a110cb8181e6121e3a557fdff9428cee
+  GENERIC_RUNNER_SHA: 3d37edb1debc9a4dd32da51ec3164840dbc4b252
+  GENERIC_RUNNER_REF: current-202-tlc-continuation-v4-runner
+  GENERIC_WRAPPER_WORKFLOW_BLOB: 70b8c18144f55625460e86337e8c5999a699facf
+  GENERIC_WRAPPER_WORKFLOW_PATH: .github/workflows/private-assurance-slow-tlc-continuation.yml
+  GENERIC_SLICE_WORKFLOW_BLOB: 30f44487a8d433045bfc5c3310aa7356a5b8d2ea
+  GENERIC_SLICE_WORKFLOW_PATH: .github/workflows/_private-assurance-tlc-continuation-slice.yml
+  GENERIC_CHECKPOINT_SCHEMA: current-202-periodic-barrier-v4
+  TLC39_RUNNER_SHA: d806afec7b4eb903febea33c595365322cd9652b
+  TLC39_RUNNER_REF: repaired-202-tlc39-v3-runner
+  TLC39_WORKFLOW_BLOB: 44986289bf12aec99e8359b7348401bc061b015d
+  TLC39_WORKFLOW_PATH: .github/workflows/private-repaired-202-tlc39-continuation.yml
+  TLC39_CHECKPOINT_SCHEMA: periodic-barrier-v3
+  EXPECTED_TLC_WORKERS: "4"
+  EXPECTED_INDEX39_CFG_SHA256: 186ddf4cbea68ae055b349ed7bb808aad5ed0146b3618b99754efa46c735e092
+  EXPECTED_INDEX39_TLA_SHA256: 391c62071a571370904c26fdb39c647e1a17e7869a71072cd8e59a8f4967f0c1
 
 jobs:
-  close:
+  verify:
     runs-on: ubuntu-24.04
+    outputs:
+      direct_success_count: ${{ steps.coverage.outputs.direct_success_count }}
+      replacement_count: ${{ steps.coverage.outputs.replacement_count }}
+      replacement_evidence_b64: ${{ steps.coverage.outputs.replacement_evidence_b64 }}
+      coverage_sha256: ${{ steps.coverage.outputs.coverage_sha256 }}
+      closure_public_head: ${{ steps.coverage.outputs.closure_public_head }}
+      closure_workflow_blob: ${{ steps.coverage.outputs.closure_workflow_blob }}
     steps:
-      - name: Checkout latest public control shell
+      - name: Checkout public control shell
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
-      - name: Revalidate frozen private candidate
+      - name: Validate closure request
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "main"
+          if [[ "$GITHUB_EVENT_NAME" = "push" ]]; then
+            test -f RUN_CURRENT_202_COMPUTE_CLOSURE
+          else
+            test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          fi
+          echo "LAS_CURRENT_202_CLOSURE_REQUEST=PASS"
+
+      - name: Revalidate exact frozen private candidate and canonical map
         shell: bash
         env:
           PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
@@ -39,34 +81,74 @@ jobs:
           test -n "$PRIVATE_TOKEN"
           echo "::add-mask::$PRIVATE_REPOSITORY"
           echo "::add-mask::$PRIVATE_TOKEN"
-          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
-          echo "::add-mask::$auth"
 
-          private_probe="$RUNNER_TEMP/private-head-probe"
-          mkdir "$private_probe"
-          cd "$private_probe"
+          ROOT="$GITHUB_WORKSPACE/private-target"
+          mkdir "$ROOT"
+          cd "$ROOT"
           git init -q
           git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
 
           refs="$RUNNER_TEMP/private-heads"
           git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
           matched_ref=""
-          matched_sha=""
           while read -r sha ref; do
             if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
               test -z "$matched_ref"
               matched_ref="$ref"
-              matched_sha="$sha"
             fi
           done <"$refs"
           rm -f "$refs"
           test -n "$matched_ref"
-          test -n "$matched_sha"
           echo "::add-mask::$matched_ref"
-          echo "::add-mask::$matched_sha"
-          test "$(printf '%s' "$matched_sha" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
-          echo "LAS_CURRENT_202_CLOSURE_PRIVATE_HEAD=PASS"
-          unset PRIVATE_TOKEN PRIVATE_REPOSITORY auth matched_ref matched_sha
+
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          actual="$(git rev-parse FETCH_HEAD)"
+          echo "::add-mask::$actual"
+          test "$(printf '%s' "$actual" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git checkout -q --detach "$actual"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test "$(git hash-object tools/verify_codespaces_all.sh)" = "$EXPECTED_VERIFIER_BLOB"
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+          map_py="$RUNNER_TEMP/closure-tlc-map.py"
+          python3 - tools/verify_codespaces_all.sh "$map_py" <<'PY'
+          from pathlib import Path
+          import sys
+          src = Path(sys.argv[1]).read_text(encoding="utf-8")
+          mh = 'python3 - "$ROOT" > "$TLC_MAP" <<\'PY\'\n'
+          me = '\nPY\n\nrun_tlc_profile() {'
+          if src.count(mh) != 1 or src.count(me) != 1:
+              raise SystemExit("canonical TLC map anchors are not unique")
+          start = src.index(mh) + len(mh)
+          end = src.index(me, start)
+          Path(sys.argv[2]).write_text(src[start:end] + "\n", encoding="utf-8")
+          PY
+          map="$RUNNER_TEMP/closure-tlc-map.tsv"
+          map_err="$RUNNER_TEMP/closure-tlc-map.private.err"
+          if ! python3 "$map_py" "$ROOT" >"$map" 2>"$map_err"; then
+            echo "LAS_CURRENT_202_CLOSURE_MAP_ERROR_SHA256=$(sha256sum "$map_err" | awk '{print $1}')"
+            rm -f "$map_err"
+            exit 1
+          fi
+          rm -f "$map_err" "$map_py"
+          test "$(wc -l <"$map" | tr -d ' ')" = "$EXPECTED_TLC_PROFILE_COUNT"
+          test "$(sha256sum "$map" | awk '{print $1}')" = "$EXPECTED_TLC_MAP_SHA256"
+
+          line39="$(sed -n '40p' "$map")"
+          IFS=$'\t' read -r cfg39 tla39 deadlock39 expectation39 <<<"$line39"
+          test "$cfg39" = "spec/defence_evolution/CandidateAssuranceEvidenceCase.cfg"
+          test -n "$tla39"
+          test -z "$expectation39"
+          test "$(sha256sum "$cfg39" | awk '{print $1}')" = "$EXPECTED_INDEX39_CFG_SHA256"
+          test "$(sha256sum "$tla39" | awk '{print $1}')" = "$EXPECTED_INDEX39_TLA_SHA256"
+
+          echo "LAS_CURRENT_202_CLOSURE_PRIVATE_BINDING=PASS"
+          echo "LAS_CURRENT_202_CLOSURE_MAP_BINDING=PASS"
+          unset PRIVATE_TOKEN auth matched_ref actual tree line39 cfg39 tla39 deadlock39 expectation39
 
       - name: Bind exact source workflow revision
         shell: bash
@@ -74,149 +156,784 @@ jobs:
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
           git cat-file -e "$EXPECTED_SOURCE_HEAD^{commit}"
-          blob="$(git rev-parse "$EXPECTED_SOURCE_HEAD:.github/workflows/private-current-sharded-verify.yml")"
-          test "$blob" = "$EXPECTED_SOURCE_WORKFLOW_BLOB"
+          test "$(git rev-parse "$EXPECTED_SOURCE_HEAD:$EXPECTED_SOURCE_WORKFLOW_PATH")" = "$EXPECTED_SOURCE_WORKFLOW_BLOB"
           echo "LAS_CURRENT_202_CLOSURE_SOURCE_WORKFLOW=PASS"
 
-      - name: Prove exact 202 canonical compute jobs
+      - name: Prove exact direct and resumable coverage
+        id: coverage
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
-          hdr=(-H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          import json
+          import os
+          import re
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
 
-          run_json="$RUNNER_TEMP/source-run.json"
-          curl --proto '=https' --tlsv1.2 --fail-with-body -sS "${hdr[@]}" \
-            "$api/actions/runs/$SOURCE_RUN_ID" >"$run_json"
+          repo = os.environ["GITHUB_REPOSITORY"]
+          api = f"https://api.github.com/repos/{repo}"
+          token = os.environ["GH_TOKEN"]
+          workspace = Path(os.environ["GITHUB_WORKSPACE"])
+          temp = Path(os.environ["RUNNER_TEMP"])
+          out_path = Path(os.environ["GITHUB_OUTPUT"])
 
-          jobs_json="$RUNNER_TEMP/source-jobs.json"
-          python3 - "$api" "$SOURCE_RUN_ID" "$jobs_json" "$GH_TOKEN" <<'PY'
-          import json, sys, urllib.request
-          api, run_id, out, token = sys.argv[1:]
-          jobs = []
-          page = 1
-          while True:
+          expected_count = int(os.environ["EXPECTED_TLC_PROFILE_COUNT"])
+          source_run_id = int(os.environ["SOURCE_RUN_ID"])
+          source_head = os.environ["EXPECTED_SOURCE_HEAD"]
+          source_path = os.environ["EXPECTED_SOURCE_WORKFLOW_PATH"]
+
+          generic_runner_sha = os.environ["GENERIC_RUNNER_SHA"]
+          generic_runner_ref = os.environ["GENERIC_RUNNER_REF"]
+          generic_wrapper_path = os.environ["GENERIC_WRAPPER_WORKFLOW_PATH"]
+          generic_slice_path = os.environ["GENERIC_SLICE_WORKFLOW_PATH"]
+          generic_schema = os.environ["GENERIC_CHECKPOINT_SCHEMA"]
+
+          tlc39_runner_sha = os.environ["TLC39_RUNNER_SHA"]
+          tlc39_runner_ref = os.environ["TLC39_RUNNER_REF"]
+          tlc39_workflow_path = os.environ["TLC39_WORKFLOW_PATH"]
+          tlc39_schema = os.environ["TLC39_CHECKPOINT_SCHEMA"]
+          workers = os.environ["EXPECTED_TLC_WORKERS"]
+
+          def request_json(url):
               req = urllib.request.Request(
-                  f"{api}/actions/runs/{run_id}/jobs?filter=latest&per_page=100&page={page}",
+                  url,
                   headers={
                       "Authorization": f"Bearer {token}",
                       "Accept": "application/vnd.github+json",
                       "X-GitHub-Api-Version": "2022-11-28",
+                      "User-Agent": "living-assurance-closure",
                   },
               )
-              with urllib.request.urlopen(req) as r:
-                  payload = json.load(r)
-              batch = payload.get("jobs", [])
-              jobs.extend(batch)
-              if len(batch) < 100:
-                  break
-              page += 1
-              if page > 10:
-                  raise SystemExit("unexpected job pagination")
-          with open(out, "w", encoding="utf-8") as f:
-              json.dump(jobs, f, separators=(",", ":"))
-          PY
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  return json.load(response)
 
-          python3 - "$run_json" "$jobs_json" "$EXPECTED_SOURCE_HEAD" "$EXPECTED_TLC_PROFILE_COUNT" <<'PY'
-          import json, re, sys
-          run_path, jobs_path, expected_head, expected_count = sys.argv[1:]
-          expected_count = int(expected_count)
-          run = json.load(open(run_path, encoding="utf-8"))
-          jobs = json.load(open(jobs_path, encoding="utf-8"))
+          def verify_workflow_blob(path, ref, expected_blob):
+              encoded = urllib.parse.quote(path, safe="/")
+              payload = request_json(f"{api}/contents/{encoded}?ref={ref}")
+              if payload.get("sha") != expected_blob:
+                  raise SystemExit(f"workflow blob mismatch for {path}@{ref}")
 
-          if str(run.get("id")) != "38623465219":
-              raise SystemExit("source run id mismatch")
-          if run.get("head_sha") != expected_head:
-              raise SystemExit("source run head mismatch")
-          if run.get("run_attempt") != 1:
-              raise SystemExit("unexpected source run attempt")
-          if run.get("status") != "completed":
-              raise SystemExit("source run is not complete")
+          verify_workflow_blob(
+              os.environ["EXPECTED_SOURCE_WORKFLOW_PATH"],
+              source_head,
+              os.environ["EXPECTED_SOURCE_WORKFLOW_BLOB"],
+          )
+          verify_workflow_blob(
+              generic_wrapper_path,
+              generic_runner_sha,
+              os.environ["GENERIC_WRAPPER_WORKFLOW_BLOB"],
+          )
+          verify_workflow_blob(
+              generic_slice_path,
+              generic_runner_sha,
+              os.environ["GENERIC_SLICE_WORKFLOW_BLOB"],
+          )
+          verify_workflow_blob(
+              tlc39_workflow_path,
+              tlc39_runner_sha,
+              os.environ["TLC39_WORKFLOW_BLOB"],
+          )
+          print("LAS_CURRENT_202_CLOSURE_WORKFLOW_BINDINGS=PASS")
 
-          pre = [j for j in jobs if j.get("name") == "pre_tlc"]
-          if len(pre) != 1 or pre[0].get("conclusion") != "success" or pre[0].get("head_sha") != expected_head:
-              raise SystemExit("pre_tlc evidence incomplete")
-          pre_steps = {s.get("name"): s.get("conclusion") for s in pre[0].get("steps", [])}
-          if pre_steps.get("Checkout exact hidden private revision") != "success":
-              raise SystemExit("pre_tlc private binding missing")
-          if pre_steps.get("Run exact canonical pre-TLC stage") != "success":
-              raise SystemExit("pre_tlc canonical stage missing")
+          def get_run(run_id):
+              return request_json(f"{api}/actions/runs/{run_id}")
 
-          seen = {}
-          pat = re.compile(r"^tlc \((\d+)\)$")
-          for job in jobs:
-              m = pat.match(job.get("name", ""))
-              if not m:
+          def get_jobs(run_id):
+              jobs = []
+              page = 1
+              while True:
+                  payload = request_json(
+                      f"{api}/actions/runs/{run_id}/jobs?filter=latest&per_page=100&page={page}"
+                  )
+                  batch = payload.get("jobs", [])
+                  jobs.extend(batch)
+                  if len(batch) < 100:
+                      break
+                  page += 1
+                  if page > 10:
+                      raise SystemExit("unexpected job pagination")
+              return jobs
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+
+          no_redirect = urllib.request.build_opener(NoRedirect)
+
+          def get_job_log(job_id):
+              req = urllib.request.Request(
+                  f"{api}/actions/jobs/{job_id}/logs",
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "User-Agent": "living-assurance-closure",
+                  },
+              )
+              try:
+                  response = no_redirect.open(req, timeout=60)
+                  try:
+                      return response.read()
+                  finally:
+                      response.close()
+              except urllib.error.HTTPError as exc:
+                  if exc.code not in (301, 302, 303, 307, 308):
+                      raise
+                  location = exc.headers.get("Location")
+                  if not location:
+                      raise SystemExit("job log redirect omitted location")
+                  parsed = urllib.parse.urlparse(location)
+                  if parsed.scheme != "https":
+                      raise SystemExit("job log redirect is not HTTPS")
+                  second = urllib.request.Request(
+                      location,
+                      headers={"User-Agent": "living-assurance-closure"},
+                  )
+                  with urllib.request.urlopen(second, timeout=120) as response:
+                      return response.read()
+
+          stamp = re.compile(r"^\d{4}-\d{2}-\d{2}T\S+Z (.*)$")
+
+          def emitted(raw):
+              text = raw.decode("utf-8", errors="replace")
+              values = []
+              for line in text.splitlines():
+                  match = stamp.match(line)
+                  if match:
+                      values.append(match.group(1))
+              return values
+
+          def exactly_one(lines, pattern, label):
+              regex = re.compile(pattern)
+              values = [m.group(1) for line in lines if (m := regex.fullmatch(line))]
+              if len(values) != 1:
+                  raise SystemExit(f"missing or ambiguous {label}")
+              return values[0]
+
+          def require_step(steps, name, conclusion):
+              if steps.get(name) != ("completed", conclusion):
+                  raise SystemExit(f"unexpected step state for {name}")
+
+          def parse_map(path):
+              rows = []
+              for raw in path.read_text(encoding="utf-8").splitlines():
+                  if not raw:
+                      continue
+                  fields = raw.split("\t")
+                  while len(fields) < 4:
+                      fields.append("")
+                  cfg, tla, deadlock, expectation = fields[:4]
+                  rows.append((cfg, tla, deadlock, expectation))
+              if len(rows) != expected_count:
+                  raise SystemExit("canonical map row count changed")
+              return rows
+
+          map_rows = parse_map(temp / "closure-tlc-map.tsv")
+          private_root = workspace / "private-target"
+
+          source_run = get_run(source_run_id)
+          expected_source = {
+              "id": source_run_id,
+              "head_sha": source_head,
+              "head_branch": "main",
+              "path": source_path,
+              "event": "push",
+              "run_attempt": 1,
+              "status": "completed",
+          }
+          for key, value in expected_source.items():
+              if source_run.get(key) != value:
+                  raise SystemExit(f"source run binding mismatch: {key}")
+
+          source_jobs = get_jobs(source_run_id)
+          pre = [job for job in source_jobs if job.get("name") == "pre_tlc"]
+          if len(pre) != 1:
+              raise SystemExit("pre_tlc job count is not exact")
+          pre_job = pre[0]
+          if pre_job.get("status") != "completed" or pre_job.get("conclusion") != "success":
+              raise SystemExit("pre_tlc is not successful")
+          if pre_job.get("head_sha") != source_head:
+              raise SystemExit("pre_tlc head mismatch")
+          pre_steps = {
+              step.get("name"): (step.get("status"), step.get("conclusion"))
+              for step in pre_job.get("steps", [])
+          }
+          require_step(pre_steps, "Checkout exact hidden private revision", "success")
+          require_step(pre_steps, "Run exact canonical pre-TLC stage", "success")
+
+          shard_pattern = re.compile(r"^tlc \((\d+)\)$")
+          shards = {}
+          for job in source_jobs:
+              match = shard_pattern.fullmatch(job.get("name", ""))
+              if not match:
                   continue
-              idx = int(m.group(1))
-              if idx in seen:
-                  raise SystemExit(f"duplicate TLC shard {idx}")
-              seen[idx] = job
+              index = int(match.group(1))
+              if index in shards:
+                  raise SystemExit(f"duplicate direct TLC profile {index}")
+              shards[index] = job
+          if set(shards) != set(range(expected_count)):
+              missing = sorted(set(range(expected_count)) - set(shards))
+              extra = sorted(set(shards) - set(range(expected_count)))
+              raise SystemExit(f"direct TLC profile set mismatch missing={missing} extra={extra}")
 
-          expected = set(range(expected_count))
-          if set(seen) != expected:
-              missing = sorted(expected - set(seen))
-              extra = sorted(set(seen) - expected)
-              raise SystemExit(f"TLC shard set mismatch missing={missing} extra={extra}")
+          direct = {}
+          needed_generic = set()
+          for index in range(expected_count):
+              job = shards[index]
+              if job.get("head_sha") != source_head:
+                  raise SystemExit(f"direct TLC profile {index} head mismatch")
+              if job.get("status") != "completed":
+                  raise SystemExit(f"direct TLC profile {index} is not complete")
+              conclusion = job.get("conclusion")
+              steps = {
+                  step.get("name"): (step.get("status"), step.get("conclusion"))
+                  for step in job.get("steps", [])
+              }
+              if conclusion == "success":
+                  require_step(steps, "Checkout exact hidden private revision", "success")
+                  require_step(steps, "Run canonical TLC shard", "success")
+                  direct[index] = {
+                      "index": index,
+                      "source": "direct",
+                      "job_id": int(job["id"]),
+                  }
+                  continue
+              if index == 39:
+                  if conclusion != "failure":
+                      raise SystemExit("direct TLC39 did not fail in the exact audited way")
+                  if steps.get("Run canonical TLC shard") != ("completed", "failure"):
+                      raise SystemExit("direct TLC39 failure step is not exact")
+                  continue
+              if conclusion == "cancelled":
+                  needed_generic.add(index)
+                  continue
+              raise SystemExit(
+                  f"direct TLC profile {index} has non-replaceable conclusion {conclusion!r}"
+              )
 
-          for idx in sorted(seen):
-              job = seen[idx]
-              if job.get("head_sha") != expected_head:
-                  raise SystemExit(f"TLC shard {idx} head mismatch")
-              if job.get("conclusion") != "success":
-                  raise SystemExit(f"TLC shard {idx} not successful")
-              steps = {s.get("name"): s.get("conclusion") for s in job.get("steps", [])}
-              if steps.get("Checkout exact hidden private revision") != "success":
-                  raise SystemExit(f"TLC shard {idx} private binding missing")
-              if steps.get("Run canonical TLC shard") != "success":
-                  raise SystemExit(f"TLC shard {idx} canonical execution missing")
+          generic_registry_path = workspace / "LAS_CURRENT_202_TERMINAL_ATTESTATIONS.json"
+          if needed_generic and not generic_registry_path.is_file():
+              raise SystemExit("generic terminal registry is missing")
+          if generic_registry_path.is_file():
+              generic_registry = json.loads(generic_registry_path.read_text(encoding="utf-8"))
+          else:
+              generic_registry = {
+                  "schema": "las-current-202-non39-terminal-registry-v1",
+                  "private_snapshot_proof": os.environ["EXPECTED_PRIVATE_SNAPSHOT_PROOF"],
+                  "private_tree_proof": os.environ["EXPECTED_PRIVATE_TREE_PROOF"],
+                  "canonical_verifier_blob": os.environ["EXPECTED_VERIFIER_BLOB"],
+                  "tlc_map_sha256": os.environ["EXPECTED_TLC_MAP_SHA256"],
+                  "runner_sha": generic_runner_sha,
+                  "wrapper_workflow_blob": os.environ["GENERIC_WRAPPER_WORKFLOW_BLOB"],
+                  "slice_workflow_blob": os.environ["GENERIC_SLICE_WORKFLOW_BLOB"],
+                  "profiles": {},
+              }
+          expected_generic_header = {
+              "schema": "las-current-202-non39-terminal-registry-v1",
+              "private_snapshot_proof": os.environ["EXPECTED_PRIVATE_SNAPSHOT_PROOF"],
+              "private_tree_proof": os.environ["EXPECTED_PRIVATE_TREE_PROOF"],
+              "canonical_verifier_blob": os.environ["EXPECTED_VERIFIER_BLOB"],
+              "tlc_map_sha256": os.environ["EXPECTED_TLC_MAP_SHA256"],
+              "runner_sha": generic_runner_sha,
+              "wrapper_workflow_blob": os.environ["GENERIC_WRAPPER_WORKFLOW_BLOB"],
+              "slice_workflow_blob": os.environ["GENERIC_SLICE_WORKFLOW_BLOB"],
+          }
+          for key, value in expected_generic_header.items():
+              if generic_registry.get(key) != value:
+                  raise SystemExit(f"generic terminal registry binding mismatch: {key}")
+          generic_profiles = generic_registry.get("profiles")
+          if not isinstance(generic_profiles, dict):
+              raise SystemExit("generic terminal registry profile map is invalid")
+          try:
+              generic_indices = {int(key) for key in generic_profiles}
+          except Exception as exc:
+              raise SystemExit("generic terminal registry contains non-numeric profile key") from exc
+          if {str(index) for index in generic_indices} != set(generic_profiles):
+              raise SystemExit("generic terminal registry profile keys are not canonical decimal indices")
+          if generic_indices != needed_generic:
+              missing = sorted(needed_generic - generic_indices)
+              extra = sorted(generic_indices - needed_generic)
+              raise SystemExit(
+                  f"generic replacement set mismatch missing={missing} extra={extra}"
+              )
+          if 39 in generic_indices:
+              raise SystemExit("generic replacement registry must never cover profile 39")
+
+          replacement = {}
+
+          def validate_generic(index, entry):
+              if not isinstance(entry, dict) or entry.get("result") != "PASS":
+                  raise SystemExit(f"generic terminal entry {index} is not PASS")
+              cfg, tla, deadlock, expectation = map_rows[index]
+              if not cfg or not tla or expectation:
+                  raise SystemExit(f"generic terminal profile {index} is not a normal canonical profile")
+              if cfg == "spec/defence_evolution/CandidateAssuranceEvidenceCase.cfg":
+                  raise SystemExit("generic terminal path attempted to cover profile 39")
+              profile_binding = hashlib.sha256(
+                  (cfg + "\0" + tla + "\0" + deadlock + "\0" + expectation).encode()
+              ).hexdigest()
+              if entry.get("profile_binding_sha256") != profile_binding:
+                  raise SystemExit(f"generic terminal profile {index} binding mismatch")
+
+              run_id = entry.get("terminal_run_id")
+              validate_job_id = entry.get("validation_job_id")
+              terminal_job_id = entry.get("terminal_job_id")
+              if not all(isinstance(value, int) and value > 0 for value in (run_id, validate_job_id, terminal_job_id)):
+                  raise SystemExit(f"generic terminal profile {index} has invalid run/job ids")
+
+              run = get_run(run_id)
+              expected = {
+                  "status": "completed",
+                  "conclusion": "success",
+                  "run_attempt": 1,
+                  "event": "workflow_dispatch",
+                  "head_branch": generic_runner_ref,
+                  "head_sha": generic_runner_sha,
+                  "path": generic_wrapper_path,
+              }
+              for key, value in expected.items():
+                  if run.get(key) != value:
+                      raise SystemExit(f"generic terminal profile {index} run mismatch: {key}")
+              refs = run.get("referenced_workflows") or []
+              if len(refs) != 1:
+                  raise SystemExit(f"generic terminal profile {index} reusable workflow count mismatch")
+              ref = refs[0]
+              if ref.get("sha") != generic_runner_sha or ref.get("ref") != f"refs/heads/{generic_runner_ref}":
+                  raise SystemExit(f"generic terminal profile {index} reusable workflow revision mismatch")
+              if ref.get("path") != f"{repo}/{generic_slice_path}@{generic_runner_sha}":
+                  raise SystemExit(f"generic terminal profile {index} reusable workflow path mismatch")
+
+              jobs = get_jobs(run_id)
+              if len(jobs) != 2:
+                  raise SystemExit(f"generic terminal profile {index} job count mismatch")
+              by_name = {job.get("name"): job for job in jobs}
+              if set(by_name) != {"validate", "continuation / slice"}:
+                  raise SystemExit(f"generic terminal profile {index} job set mismatch")
+              validate_job = by_name["validate"]
+              terminal_job = by_name["continuation / slice"]
+              if int(validate_job.get("id", 0)) != validate_job_id or int(terminal_job.get("id", 0)) != terminal_job_id:
+                  raise SystemExit(f"generic terminal profile {index} recorded job id mismatch")
+              for job in (validate_job, terminal_job):
+                  if job.get("status") != "completed" or job.get("conclusion") != "success":
+                      raise SystemExit(f"generic terminal profile {index} contains non-successful required job")
+
+              validate_steps = {
+                  step.get("name"): (step.get("status"), step.get("conclusion"))
+                  for step in validate_job.get("steps", [])
+              }
+              require_step(validate_steps, "Validate immutable runner request", "success")
+              steps = {
+                  step.get("name"): (step.get("status"), step.get("conclusion"))
+                  for step in terminal_job.get("steps", [])
+              }
+              for name in (
+                  "Validate exact continuation request",
+                  "Reclaim runner storage for exhaustive TLC",
+                  "Recover exact frozen private candidate",
+                  "Bind exact canonical map and selected profile",
+                  "Run exact canonical TLC slice",
+              ):
+                  require_step(steps, name, "success")
+              for name in (
+                  "Seal authenticated encrypted checkpoint",
+                  "Upload authenticated encrypted checkpoint",
+                  "Dispatch next exact slice",
+              ):
+                  require_step(steps, name, "skipped")
+              download = steps.get("Download prior authenticated encrypted checkpoint")
+              restore = steps.get("Authenticate and restore prior checkpoint")
+              if download == ("completed", "skipped") and restore == ("completed", "skipped"):
+                  mode = "initial"
+              elif download == ("completed", "success") and restore == ("completed", "success"):
+                  mode = "resumed"
+              else:
+                  raise SystemExit(f"generic terminal profile {index} checkpoint restore state mismatch")
+
+              validate_raw = get_job_log(validate_job_id)
+              terminal_raw = get_job_log(terminal_job_id)
+              validate_lines = emitted(validate_raw)
+              terminal_lines = emitted(terminal_raw)
+              for marker in (
+                  "LAS_CURRENT_202_ORCHESTRATOR_REQUEST=PASS",
+                  "LAS_CURRENT_202_ORCHESTRATOR_REF_BINDING=PASS",
+              ):
+                  if marker not in validate_lines:
+                      raise SystemExit(f"generic terminal profile {index} missing orchestrator marker")
+
+              required_markers = {
+                  "LAS_CURRENT_202_RESUME_REQUEST=PASS",
+                  f"LAS_CURRENT_202_RESUME_SCHEMA={generic_schema}",
+                  f"LAS_CURRENT_202_RESUME_WORKERS={workers}",
+                  "LAS_CURRENT_202_RESUME_RECOVERY=PASS",
+                  "LAS_CURRENT_202_RESUME_BINDING=PASS",
+                  "LAS_CURRENT_202_RESUME_RC=0",
+                  "LAS_CURRENT_202_RESUME_RESULT=PASS",
+              }
+              if required_markers.difference(terminal_lines):
+                  raise SystemExit(f"generic terminal profile {index} missing PASS markers")
+              forbidden = (
+                  "LAS_CURRENT_202_RESUME_RESULT=FAIL",
+                  "LAS_CURRENT_202_RESUME_RESULT=FAIL_CLOSED",
+                  "LAS_CURRENT_202_RESUME_RESULT=FAIL_BARRIER",
+                  "LAS_CURRENT_202_RESUME_RESULT=SLICE_CHECKPOINT",
+                  "LAS_CURRENT_202_RESUME_BARRIER_TIMEOUT=1",
+              )
+              if any(line.startswith(forbidden) for line in terminal_lines):
+                  raise SystemExit(f"generic terminal profile {index} contains non-PASS marker")
+
+              parsed_index = int(exactly_one(terminal_lines, r"LAS_CURRENT_202_RESUME_INDEX=([0-9]+)", "generic profile index"))
+              segment = int(exactly_one(terminal_lines, r"LAS_CURRENT_202_RESUME_SEGMENT=([1-9][0-9]*)", "generic segment"))
+              tlc_log_sha = exactly_one(terminal_lines, r"LAS_CURRENT_202_RESUME_LOG_SHA256=([0-9a-f]{64})", "generic TLC log digest")
+              generated = int(exactly_one(terminal_lines, r"LAS_CURRENT_202_RESUME_GENERATED=([0-9]+)", "generic generated count"))
+              distinct = int(exactly_one(terminal_lines, r"LAS_CURRENT_202_RESUME_DISTINCT=([0-9]+)", "generic distinct count"))
+              queued = int(exactly_one(terminal_lines, r"LAS_CURRENT_202_RESUME_QUEUE=([0-9]+)", "generic queue count"))
+              cut_reason = exactly_one(terminal_lines, r"LAS_CURRENT_202_RESUME_CUT_REASON=([a-z]+)", "generic cut reason")
+              if parsed_index != index:
+                  raise SystemExit(f"generic terminal profile {index} log index mismatch")
+              if mode == "initial":
+                  if segment != 1:
+                      raise SystemExit(f"generic terminal profile {index} initial segment mismatch")
+              else:
+                  if segment <= 1:
+                      raise SystemExit(f"generic terminal profile {index} resumed segment mismatch")
+                  for marker in (
+                      "LAS_CURRENT_202_RESUME_CHECKPOINT_AUTH=PASS",
+                      "LAS_CURRENT_202_RESUME_RECOVER_DIR=PASS",
+                  ):
+                      if marker not in terminal_lines:
+                          raise SystemExit(f"generic terminal profile {index} lacks authenticated recovery marker")
+
+              comparisons = {
+                  "terminal_segment": segment,
+                  "terminal_job_log_sha256": hashlib.sha256(terminal_raw).hexdigest(),
+                  "tlc_log_sha256": tlc_log_sha,
+                  "states_generated": generated,
+                  "distinct_states": distinct,
+                  "states_left_on_queue": queued,
+                  "cut_reason": cut_reason,
+              }
+              for key, value in comparisons.items():
+                  if entry.get(key) != value:
+                      raise SystemExit(f"generic terminal profile {index} registry mismatch: {key}")
+              return {
+                  "index": index,
+                  "source": "current-202-v4",
+                  "terminal_run_id": run_id,
+                  "terminal_segment": segment,
+              }
+
+          for index in sorted(needed_generic):
+              replacement[index] = validate_generic(index, generic_profiles[str(index)])
+
+          tlc39_registry_path = workspace / "LAS_REPAIRED_202_TLC39_TERMINAL.json"
+          if not tlc39_registry_path.is_file():
+              raise SystemExit("TLC39 terminal attestation is missing")
+          tlc39 = json.loads(tlc39_registry_path.read_text(encoding="utf-8"))
+          expected_tlc39 = {
+              "schema": "las-repaired-202-tlc39-terminal-v2",
+              "private_snapshot_proof": os.environ["EXPECTED_PRIVATE_SNAPSHOT_PROOF"],
+              "private_tree_proof": os.environ["EXPECTED_PRIVATE_TREE_PROOF"],
+              "canonical_verifier_blob": os.environ["EXPECTED_VERIFIER_BLOB"],
+              "tlc_map_sha256": os.environ["EXPECTED_TLC_MAP_SHA256"],
+              "profile_index": 39,
+              "cfg_sha256": os.environ["EXPECTED_INDEX39_CFG_SHA256"],
+              "tla_sha256": os.environ["EXPECTED_INDEX39_TLA_SHA256"],
+              "runner_sha": tlc39_runner_sha,
+              "continuation_workflow_blob": os.environ["TLC39_WORKFLOW_BLOB"],
+              "result": "PASS",
+          }
+          for key, value in expected_tlc39.items():
+              if tlc39.get(key) != value:
+                  raise SystemExit(f"TLC39 terminal registry binding mismatch: {key}")
+
+          cfg39, tla39, deadlock39, expectation39 = map_rows[39]
+          if cfg39 != "spec/defence_evolution/CandidateAssuranceEvidenceCase.cfg" or expectation39:
+              raise SystemExit("canonical TLC39 map identity changed")
+          if hashlib.sha256((private_root / cfg39).read_bytes()).hexdigest() != os.environ["EXPECTED_INDEX39_CFG_SHA256"]:
+              raise SystemExit("canonical TLC39 cfg digest mismatch")
+          if hashlib.sha256((private_root / tla39).read_bytes()).hexdigest() != os.environ["EXPECTED_INDEX39_TLA_SHA256"]:
+              raise SystemExit("canonical TLC39 tla digest mismatch")
+
+          tlc39_run_id = tlc39.get("terminal_run_id")
+          tlc39_job_id = tlc39.get("terminal_job_id")
+          if not all(isinstance(value, int) and value > 0 for value in (tlc39_run_id, tlc39_job_id)):
+              raise SystemExit("TLC39 terminal registry contains invalid run/job id")
+          tlc39_run = get_run(tlc39_run_id)
+          if tlc39_run.get("status") != "completed" or tlc39_run.get("conclusion") != "success":
+              raise SystemExit("TLC39 terminal run is not successful")
+          if tlc39_run.get("run_attempt") != 1 or tlc39_run.get("head_sha") != tlc39_runner_sha:
+              raise SystemExit("TLC39 terminal run revision mismatch")
+          if tlc39_run.get("path") != tlc39_workflow_path:
+              raise SystemExit("TLC39 terminal workflow path mismatch")
+          event = tlc39_run.get("event")
+          branch = tlc39_run.get("head_branch")
+          if event == "push":
+              if branch != "main":
+                  raise SystemExit("TLC39 terminal push run is not bound to main")
+          elif event == "workflow_dispatch":
+              if branch != tlc39_runner_ref:
+                  raise SystemExit("TLC39 terminal continuation is not bound to stable runner ref")
+          else:
+              raise SystemExit("TLC39 terminal run event is unexpected")
+
+          jobs = get_jobs(tlc39_run_id)
+          if len(jobs) != 1 or jobs[0].get("name") != "slice":
+              raise SystemExit("TLC39 terminal run job set is not exact")
+          job = jobs[0]
+          if int(job.get("id", 0)) != tlc39_job_id:
+              raise SystemExit("TLC39 terminal recorded job id mismatch")
+          if job.get("status") != "completed" or job.get("conclusion") != "success":
+              raise SystemExit("TLC39 terminal slice job is not successful")
+          steps = {
+              step.get("name"): (step.get("status"), step.get("conclusion"))
+              for step in job.get("steps", [])
+          }
+          for name in (
+              "Validate exact continuation request",
+              "Reclaim runner storage for exhaustive TLC",
+              "Recover exact frozen repaired candidate",
+              "Bind exact canonical map and profile 39",
+              "Run exact canonical TLC39 slice",
+          ):
+              require_step(steps, name, "success")
+          for name in (
+              "Seal authenticated encrypted checkpoint",
+              "Upload authenticated encrypted checkpoint",
+              "Dispatch next exact slice",
+          ):
+              require_step(steps, name, "skipped")
+          download = steps.get("Download prior authenticated encrypted checkpoint")
+          restore = steps.get("Authenticate and restore prior checkpoint")
+          if download == ("completed", "skipped") and restore == ("completed", "skipped"):
+              tlc39_mode = "initial"
+          elif download == ("completed", "success") and restore == ("completed", "success"):
+              tlc39_mode = "resumed"
+          else:
+              raise SystemExit("TLC39 terminal checkpoint restore state mismatch")
+
+          tlc39_raw = get_job_log(tlc39_job_id)
+          tlc39_lines = emitted(tlc39_raw)
+          required_tlc39_markers = {
+              "LAS_REPAIRED_202_TLC39_REQUEST=PASS",
+              f"LAS_REPAIRED_202_TLC39_CHECKPOINT_SCHEMA={tlc39_schema}",
+              f"LAS_REPAIRED_202_TLC39_WORKERS={workers}",
+              "LAS_REPAIRED_202_TLC39_RECOVERY=PASS",
+              "LAS_REPAIRED_202_TLC39_BINDING=PASS",
+              "LAS_REPAIRED_202_TLC39_RC=0",
+              "LAS_REPAIRED_202_TLC39_RESULT=PASS",
+          }
+          if required_tlc39_markers.difference(tlc39_lines):
+              raise SystemExit("TLC39 terminal run is missing PASS markers")
+          forbidden_tlc39 = (
+              "LAS_REPAIRED_202_TLC39_RESULT=FAIL",
+              "LAS_REPAIRED_202_TLC39_RESULT=FAIL_CLOSED",
+              "LAS_REPAIRED_202_TLC39_RESULT=FAIL_BARRIER",
+              "LAS_REPAIRED_202_TLC39_RESULT=SLICE_CHECKPOINT",
+              "LAS_REPAIRED_202_TLC39_BARRIER_TIMEOUT=1",
+          )
+          if any(line.startswith(forbidden_tlc39) for line in tlc39_lines):
+              raise SystemExit("TLC39 terminal log contains non-PASS marker")
+          tlc39_segment = int(exactly_one(tlc39_lines, r"LAS_REPAIRED_202_TLC39_SEGMENT=([1-9][0-9]*)", "TLC39 segment"))
+          tlc39_log_sha = exactly_one(tlc39_lines, r"LAS_REPAIRED_202_TLC39_LOG_SHA256=([0-9a-f]{64})", "TLC39 log digest")
+          tlc39_generated = int(exactly_one(tlc39_lines, r"LAS_REPAIRED_202_TLC39_GENERATED=([0-9]+)", "TLC39 generated count"))
+          tlc39_distinct = int(exactly_one(tlc39_lines, r"LAS_REPAIRED_202_TLC39_DISTINCT=([0-9]+)", "TLC39 distinct count"))
+          tlc39_queued = int(exactly_one(tlc39_lines, r"LAS_REPAIRED_202_TLC39_QUEUE=([0-9]+)", "TLC39 queue count"))
+          tlc39_cut_reason = exactly_one(tlc39_lines, r"LAS_REPAIRED_202_TLC39_CUT_REASON=([a-z]+)", "TLC39 cut reason")
+          if tlc39_mode == "initial":
+              if tlc39_segment != 1:
+                  raise SystemExit("TLC39 initial terminal segment mismatch")
+          else:
+              if tlc39_segment <= 1:
+                  raise SystemExit("TLC39 resumed terminal segment mismatch")
+              for marker in (
+                  "LAS_REPAIRED_202_TLC39_CHECKPOINT_AUTH=PASS",
+                  "LAS_REPAIRED_202_TLC39_RECOVER_DIR=PASS",
+              ):
+                  if marker not in tlc39_lines:
+                      raise SystemExit("TLC39 resumed terminal run lacks authenticated recovery marker")
+
+          tlc39_comparisons = {
+              "terminal_segment": tlc39_segment,
+              "terminal_job_log_sha256": hashlib.sha256(tlc39_raw).hexdigest(),
+              "tlc_log_sha256": tlc39_log_sha,
+              "states_generated": tlc39_generated,
+              "distinct_states": tlc39_distinct,
+              "states_left_on_queue": tlc39_queued,
+              "cut_reason": tlc39_cut_reason,
+          }
+          for key, value in tlc39_comparisons.items():
+              if tlc39.get(key) != value:
+                  raise SystemExit(f"TLC39 terminal registry mismatch: {key}")
+          replacement[39] = {
+              "index": 39,
+              "source": "tlc39-v3",
+              "terminal_run_id": tlc39_run_id,
+              "terminal_segment": tlc39_segment,
+          }
+
+          coverage = []
+          for index in range(expected_count):
+              if index in direct:
+                  coverage.append(direct[index])
+              elif index in replacement:
+                  coverage.append(replacement[index])
+              else:
+                  raise SystemExit(f"profile {index} has no accepted evidence")
+          if len(coverage) != expected_count:
+              raise SystemExit("coverage cardinality mismatch")
+          if len({row["index"] for row in coverage}) != expected_count:
+              raise SystemExit("coverage contains duplicate profile index")
+
+          canonical_coverage = json.dumps(
+              coverage, sort_keys=True, separators=(",", ":")
+          ).encode("utf-8")
+          coverage_sha = hashlib.sha256(canonical_coverage).hexdigest()
+          replacement_public = {
+              str(index): {
+                  "source": replacement[index]["source"],
+                  "terminal_run_id": replacement[index]["terminal_run_id"],
+                  "terminal_segment": replacement[index]["terminal_segment"],
+              }
+              for index in sorted(replacement)
+          }
+          replacement_raw = json.dumps(
+              replacement_public, sort_keys=True, separators=(",", ":")
+          ).encode("utf-8")
+          replacement_b64 = base64.b64encode(replacement_raw).decode("ascii")
+          closure_workflow = workspace / ".github/workflows/private-current-202-compute-closure.yml"
+          closure_blob = hashlib.sha1(
+              b"blob " + str(len(closure_workflow.read_bytes())).encode() + b"\0" + closure_workflow.read_bytes()
+          ).hexdigest()
+
+          with out_path.open("a", encoding="utf-8") as output:
+              output.write(f"direct_success_count={len(direct)}\n")
+              output.write(f"replacement_count={len(replacement)}\n")
+              output.write(f"replacement_evidence_b64={replacement_b64}\n")
+              output.write(f"coverage_sha256={coverage_sha}\n")
+              output.write(f"closure_public_head={os.environ['GITHUB_SHA']}\n")
+              output.write(f"closure_workflow_blob={closure_blob}\n")
 
           print("LAS_CURRENT_202_CLOSURE_PRE_TLC=PASS")
-          print(f"LAS_CURRENT_202_CLOSURE_TLC_PROFILE_COUNT={len(seen)}")
-          print("LAS_CURRENT_202_CLOSURE_TLC_MATRIX=PASS")
+          print(f"LAS_CURRENT_202_CLOSURE_DIRECT_SUCCESS_COUNT={len(direct)}")
+          print(f"LAS_CURRENT_202_CLOSURE_REPLACEMENT_COUNT={len(replacement)}")
+          print(f"LAS_CURRENT_202_CLOSURE_TLC_PROFILE_COUNT={len(coverage)}")
+          print(f"LAS_CURRENT_202_CLOSURE_COVERAGE_SHA256={coverage_sha}")
+          print("LAS_CURRENT_202_CLOSURE_TLC_COVERAGE=PASS")
           PY
 
-          rm -f "$run_json" "$jobs_json"
+  record:
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      DIRECT_SUCCESS_COUNT: ${{ needs.verify.outputs.direct_success_count }}
+      REPLACEMENT_COUNT: ${{ needs.verify.outputs.replacement_count }}
+      REPLACEMENT_EVIDENCE_B64: ${{ needs.verify.outputs.replacement_evidence_b64 }}
+      COVERAGE_SHA256: ${{ needs.verify.outputs.coverage_sha256 }}
+      CLOSURE_PUBLIC_HEAD: ${{ needs.verify.outputs.closure_public_head }}
+      CLOSURE_WORKFLOW_BLOB: ${{ needs.verify.outputs.closure_workflow_blob }}
+    steps:
+      - name: Checkout latest public control shell
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
 
       - name: Record exact aggregate result on latest public main
         shell: bash
         run: |
           set -euo pipefail
-          cd "$GITHUB_WORKSPACE"
-          git config user.name "LAS Verification Integrator"
-          git config user.email "las-verification@users.noreply.github.com"
+          [[ "$DIRECT_SUCCESS_COUNT" =~ ^[0-9]+$ ]]
+          [[ "$REPLACEMENT_COUNT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$COVERAGE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$CLOSURE_PUBLIC_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CLOSURE_WORKFLOW_BLOB" =~ ^[0-9a-f]{40}$ ]]
 
-          for attempt in 1 2 3; do
-            git fetch -q origin main
-            git checkout -q -B closure-write origin/main
-            cat > LAS_SHARDED_VERIFY_RESULT.json <<EOF
-          {
-            "schema": "las-public-sharded-verification-v2",
-            "source_run_id": $SOURCE_RUN_ID,
-            "source_public_head": "$EXPECTED_SOURCE_HEAD",
-            "private_snapshot_proof": "$EXPECTED_PRIVATE_SNAPSHOT_PROOF",
-            "canonical_verifier_blob": "$EXPECTED_VERIFIER_BLOB",
-            "pre_tlc_job": "success",
-            "tlc_matrix_job": "success",
-            "tlc_profile_count": $EXPECTED_TLC_PROFILE_COUNT,
-            "result": "PASS",
-            "promotion_marker": "LAS_VERIFY_ALL_RESULT=PASS"
+          replacement_json="$RUNNER_TEMP/replacement-evidence.json"
+          printf '%s' "$REPLACEMENT_EVIDENCE_B64" | base64 -d >"$replacement_json"
+          python3 - "$replacement_json" "$REPLACEMENT_COUNT" <<'PY'
+          import json, sys
+          path, expected_count = sys.argv[1:]
+          data = json.load(open(path, encoding="utf-8"))
+          if not isinstance(data, dict) or len(data) != int(expected_count):
+              raise SystemExit("replacement evidence output is malformed")
+          for key, value in data.items():
+              if not key.isdigit() or not isinstance(value, dict):
+                  raise SystemExit("replacement evidence output is malformed")
+              if value.get("source") not in {"current-202-v4", "tlc39-v3"}:
+                  raise SystemExit("replacement evidence source is invalid")
+              if not isinstance(value.get("terminal_run_id"), int) or value["terminal_run_id"] <= 0:
+                  raise SystemExit("replacement terminal run id is invalid")
+              if not isinstance(value.get("terminal_segment"), int) or value["terminal_segment"] <= 0:
+                  raise SystemExit("replacement terminal segment is invalid")
+          PY
+
+          git fetch -q origin main
+          git checkout -q -B closure-write origin/main
+          python3 - "$replacement_json" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          replacements = json.load(open(sys.argv[1], encoding="utf-8"))
+          result = {
+              "schema": "las-public-sharded-verification-v3",
+              "source_run_id": int(os.environ["SOURCE_RUN_ID"]),
+              "source_public_head": os.environ["EXPECTED_SOURCE_HEAD"],
+              "source_workflow_blob": os.environ["EXPECTED_SOURCE_WORKFLOW_BLOB"],
+              "private_snapshot_proof": os.environ["EXPECTED_PRIVATE_SNAPSHOT_PROOF"],
+              "private_tree_proof": os.environ["EXPECTED_PRIVATE_TREE_PROOF"],
+              "canonical_verifier_blob": os.environ["EXPECTED_VERIFIER_BLOB"],
+              "tlc_map_sha256": os.environ["EXPECTED_TLC_MAP_SHA256"],
+              "pre_tlc_job": "success",
+              "direct_success_count": int(os.environ["DIRECT_SUCCESS_COUNT"]),
+              "replacement_count": int(os.environ["REPLACEMENT_COUNT"]),
+              "replacement_evidence": replacements,
+              "tlc_profile_count": int(os.environ["EXPECTED_TLC_PROFILE_COUNT"]),
+              "coverage_sha256": os.environ["COVERAGE_SHA256"],
+              "closure_public_head": os.environ["CLOSURE_PUBLIC_HEAD"],
+              "closure_workflow_blob": os.environ["CLOSURE_WORKFLOW_BLOB"],
+              "result": "PASS",
+              "promotion_marker": "LAS_VERIFY_ALL_RESULT=PASS",
           }
-          EOF
-            git add LAS_SHARDED_VERIFY_RESULT.json
-            if git diff --cached --quiet; then
-              echo "LAS_CURRENT_202_CLOSURE_RESULT_ALREADY_RECORDED=PASS"
-              echo "LAS_VERIFY_ALL_RESULT=PASS"
-              exit 0
-            fi
-            git commit -q -m "Record exact repaired 202 canonical result"
+          if result["direct_success_count"] + result["replacement_count"] != result["tlc_profile_count"]:
+              raise SystemExit("aggregate profile accounting mismatch")
+          Path("LAS_SHARDED_VERIFY_RESULT.json").write_text(
+              json.dumps(result, indent=2, sort_keys=False) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          rm -f "$replacement_json"
+
+          git add LAS_SHARDED_VERIFY_RESULT.json
+          if git diff --cached --quiet; then
+            echo "LAS_CURRENT_202_CLOSURE_RESULT_ALREADY_RECORDED=PASS"
+            echo "LAS_VERIFY_ALL_RESULT=PASS"
+            exit 0
+          fi
+
+          git -c user.name="LAS Verification Integrator" \
+              -c user.email="las-verification@users.noreply.github.com" \
+              commit -q -m "Record exact repaired 202 combined canonical result"
+
+          pushed=0
+          for attempt in 1 2 3; do
             if git push -q origin HEAD:main; then
-              echo "LAS_CURRENT_202_CLOSURE_RESULT=PASS"
-              echo "LAS_VERIFY_ALL_RESULT=PASS"
-              exit 0
+              pushed=1
+              break
             fi
+            git fetch -q origin main
+            git rebase -q origin/main
           done
-          echo "LAS_CURRENT_202_CLOSURE_RESULT=FAIL_CONCURRENT_PUBLIC_UPDATE"
-          exit 1
+          test "$pushed" -eq 1
+          closure_commit="$(git rev-parse HEAD)"
+          git fetch -q origin main
+          git merge-base --is-ancestor "$closure_commit" origin/main
+          echo "LAS_CURRENT_202_CLOSURE_RESULT=PASS"
+          echo "LAS_VERIFY_ALL_RESULT=PASS"
