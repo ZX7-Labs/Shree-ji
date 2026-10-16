@@ -36,16 +36,14 @@ env:
   EXPECTED_ORIGINAL_WORKFLOW_BLOB: e019bd29322d7cbac67df7e0b4366000018311a3
 
   RESUME_REF: verify/candidate3-resumable-tlc-20261016
-  EXPECTED_RESUME_ENGINE_PARENT: 9b91881c03f76896d6f366420f152cbf0c3c72ee
+  EXPECTED_RESUME_ENGINE_PARENT: 7d9c6fad3453960caec4baa3b5bfa7c2ac209e18
   RESUME_MARKER_PATH: RUN_CANDIDATE3_RESUMABLE_TLC_20261016
   RESUME_CORE_PATH: .github/workflows/_private-candidate3-resumable-tlc-slice-20261016.yml
-  EXPECTED_RESUME_CORE_BLOB: 3493feaff5785fce07d17c9493b69b97ce883562
+  EXPECTED_RESUME_CORE_BLOB: c0791de7c8981078e17d913d2ea2c00de037b0d8
   RESUME_GENERIC_PATH: .github/workflows/private-assurance-slow-tlc-continuation.yml
-  EXPECTED_RESUME_GENERIC_BLOB: 27308c297f13d94b3678da8d9b33de5561d5a1a6
-  RESUME_TLC39_PATH: .github/workflows/private-repaired-202-tlc39-continuation.yml
-  EXPECTED_RESUME_TLC39_BLOB: 888db379292d6c5415b7f6a856c157ca07b9b7a0
+  EXPECTED_RESUME_GENERIC_BLOB: 3dc98da64be77f6e9e93bfb98ffda30c90f75894
   RESUME_LAUNCHER_PATH: .github/workflows/private-candidate3-resumable-launcher-20261016.yml
-  EXPECTED_RESUME_LAUNCHER_BLOB: e8f18b04ae7fd566c219584b416cabc1b095a59b
+  EXPECTED_RESUME_LAUNCHER_BLOB: dd13bf1c91b2e573c2ea0493b93687321ef3813d
 
   CLOSURE_REF: verify/candidate3-formal-closure-20261016
   JAVA_TOOL_OPTIONS: -Xmx5g
@@ -223,7 +221,6 @@ jobs:
           for spec in \
             "$RESUME_CORE_PATH:$EXPECTED_RESUME_CORE_BLOB:core" \
             "$RESUME_GENERIC_PATH:$EXPECTED_RESUME_GENERIC_BLOB:generic" \
-            "$RESUME_TLC39_PATH:$EXPECTED_RESUME_TLC39_BLOB:tlc39" \
             "$RESUME_LAUNCHER_PATH:$EXPECTED_RESUME_LAUNCHER_BLOB:launcher"; do
             IFS=: read -r path expected label <<<"$spec"
             api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/$path?ref=$resume_sha" >"$RUNNER_TEMP/resume-$label.json"
@@ -252,7 +249,7 @@ jobs:
           )
           assert text==expected
           PY
-          rm -f "$RUNNER_TEMP"/resume-commit.json "$RUNNER_TEMP"/resume-marker.json "$RUNNER_TEMP"/resume-core.json "$RUNNER_TEMP"/resume-generic.json "$RUNNER_TEMP"/resume-tlc39.json "$RUNNER_TEMP"/resume-launcher.json
+          rm -f "$RUNNER_TEMP"/resume-commit.json "$RUNNER_TEMP"/resume-marker.json "$RUNNER_TEMP"/resume-core.json "$RUNNER_TEMP"/resume-generic.json "$RUNNER_TEMP"/resume-launcher.json
           echo "LAS_CANDIDATE3_CLOSURE_RESUME_RUNNER=$resume_sha"
           echo "LAS_CANDIDATE3_CLOSURE_RESUME_BINDING=PASS"
 
@@ -302,7 +299,7 @@ jobs:
           assert lr['event']=='push' and lr['run_attempt']==1 and lr['status']=='completed' and lr['conclusion']=='success'
           allowed=[]
           for r in runs:
-              if r['path'] in {os.environ['RESUME_GENERIC_PATH'],os.environ['RESUME_TLC39_PATH']}:
+              if r['path']==os.environ['RESUME_GENERIC_PATH']:
                   assert r['event']=='workflow_dispatch' and r['run_attempt']==1
                   assert r['status']=='completed' and r['conclusion']=='success'
                   allowed.append((r['id'],r['path']))
@@ -319,6 +316,7 @@ jobs:
             python3 - "$artifacts" "$run_id" "$run_path" <<'PY' >"$RUNNER_TEMP/terminal-artifacts-$run_id.tsv"
           import json,re,sys
           d=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert d['total_count'] <= 100, 'artifact pagination unexpectedly exceeded'
           for a in d['artifacts']:
               m=re.fullmatch(r'candidate3-resume-terminal-(\d+)-(\d+)',a['name'])
               if m:
@@ -355,7 +353,7 @@ jobs:
           assert kv['verifier']==os.environ['EXPECTED_VERIFIER_BLOB'] and kv['map']==os.environ['EXPECTED_TLC_MAP_SHA256']
           assert int(kv['index'])==index and int(kv['segment'])==segment and segment>=1 and kv['result']=='PASS'
           expected_mode='profile39' if index==39 else 'generic'; assert kv['mode']==expected_mode
-          expected_path=os.environ['RESUME_TLC39_PATH'] if index==39 else os.environ['RESUME_GENERIC_PATH']; assert run_path==expected_path
+          assert run_path==os.environ['RESUME_GENERIC_PATH']
           lines=open(map_path,encoding='utf-8').read().splitlines(); assert len(lines)==202
           cfg,tla,deadlock,expectation=lines[index].split('\t',3)
           assert cfg and tla and deadlock in {'0','1'} and expectation==''
