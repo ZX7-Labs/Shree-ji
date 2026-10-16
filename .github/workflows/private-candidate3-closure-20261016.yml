@@ -32,7 +32,7 @@ env:
   EXPECTED_VERIFIER_BLOB: 62e3e6dc0fad5dddc7fb0a453a3cd681d911e590
   EXPECTED_TLC_MAP_SHA256: da7bb51d531d0e5e5e6994c80be8f254a110cb8181e6121e3a557fdff9428cee
   EXPECTED_REPLACEMENTS: "28 29 36 39 109 114 155 156 167 171"
-  EXPECTED_ATTEST_BLOB: eb0de239c1cf3e2d84643b507254a01dab321795
+  EXPECTED_ATTEST_BLOB: 21d41c8100bdc5f66c241208d51d8420e735563e
   REGISTRY_PATH: LAS_CANDIDATE3_TERMINAL_ATTESTATIONS_20261016.json
   REGISTRY_SCHEMA: las-candidate3-terminal-registry-v1
   RESULT_PATH: LAS_CANDIDATE3_202_TLC_RESULT_20261016.json
@@ -101,6 +101,7 @@ jobs:
               m,_=contents(path,ref)
               if m.get('sha')!=blob: raise SystemExit(f'blob drift: {path}@{ref}')
 
+          # Freeze every public workflow identity used by this proof.
           assert_blob(os.environ['ORIGINAL_WORKFLOW_PATH'],os.environ['EXPECTED_ORIGINAL_PUBLIC_HEAD'],os.environ['EXPECTED_ORIGINAL_WORKFLOW_BLOB'])
           assert_blob(os.environ['PRE_TLC_WORKFLOW_PATH'],os.environ['EXPECTED_PRE_TLC_PUBLIC_HEAD'],os.environ['EXPECTED_PRE_TLC_WORKFLOW_BLOB'])
           ref=get(f"{api}/git/ref/heads/{urllib.parse.quote(runner_ref,safe='')}")
