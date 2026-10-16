@@ -1,0 +1,186 @@
+name: Exact private retired archive joint repair 20261017-06
+
+on:
+  push:
+    branches:
+      - "verify/retired-archive-binding-20261017-01"
+    paths:
+      - ".github/workflows/exact-private-retired-archive-joint-repair-20261017-06.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exact-private-retired-archive-joint-repair-20261017-06
+  cancel-in-progress: false
+
+env:
+  TARGET_REF_HASH: fc212d088706eabc346c277d5503339ce642f9b61b22136967617d8bfbf676f5
+  EXPECTED_PRIVATE_HEAD_PROOF: 7148c29d97ca11b7092d3984becf0af7fdef21fd532a1da63bdf40e64f245508
+  EXPECTED_PRIVATE_TREE_PROOF: 099c5516e7e05949ea31470246b9d4e9293adc2876b01a09e5f3c3a030315981
+
+  TARGET_A_PATH_HASH: e3a15f3174872892d24e22007520e0d3a2257ba73b191adc51d0e7c4040ebf33
+  TARGET_A_BLOB: 73da2ab0ca5b9f627a8b904d2cf7f932fbd2c51f
+  TARGET_B_PATH_HASH: 275f64d1f44fa8e2b0919b6ec6950684f9fb939b8a530f8868102ea15591badb
+  TARGET_B_BLOB: 52777df93674376ac60c5b1efa6e7c389fea52d1
+  TARGET_C_PATH_HASH: 807fbe32b875421c7aa0ee00c4b0a94801f4e5eaeec85bab0b0943d76003ae07
+  TARGET_C_BLOB: 45d91cb45f09dffc7ec73d6b79dab97a71346945
+
+jobs:
+  repair-exact-child:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Install exact toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt >/dev/null
+          ALR_ZIP="$RUNNER_TEMP/alr.zip"; ALR_PREFIX="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --output "$ALR_ZIP" \
+            "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip" >/dev/null 2>&1
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $ALR_ZIP" | sha256sum --check --strict >/dev/null
+          mkdir -p "$ALR_PREFIX"; unzip -q "$ALR_ZIP" -d "$ALR_PREFIX"; export PATH="$ALR_PREFIX/bin:$PATH"
+          alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
+          ALR_WS="$RUNNER_TEMP/alire-workspace"; mkdir -p "$ALR_WS"
+          (cd "$ALR_WS" && alr -n init --in-place --no-skel --lib las_archive_joint_repair >/dev/null)
+          GPRBUILD_WRAPPER="$RUNNER_TEMP/gprbuild-wrapper"
+          cat > "$GPRBUILD_WRAPPER" <<EOF_GPR
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$ALR_WS"
+          exec "$ALR_PREFIX/bin/alr" exec -- gprbuild "\$@"
+          EOF_GPR
+          chmod 0755 "$GPRBUILD_WRAPPER"
+          printf 'GPRBUILD=%s\n' "$GPRBUILD_WRAPPER" >> "$GITHUB_ENV"
+
+      - name: Checkout exact hidden private child with write lease
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_WRITE_TOKEN: ${{ secrets.LAS_PRIVATE_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_WRITE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_WRITE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_WRITE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          ref=""; head=""
+          while read -r sha name; do
+            if [[ "$(printf '%s' "$name" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$ref"; ref="$name"; head="$sha"; fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$ref"; test -n "$head"
+          echo "::add-mask::$ref"; echo "::add-mask::$head"
+          test "$(printf '%s' "$head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_HEAD_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$head"; git checkout -q -B repair-target "$head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          printf '%s' "$ref" >"$RUNNER_TEMP/private-ref"
+          printf '%s' "$head" >"$RUNNER_TEMP/private-start-sha"
+          printf '%s' "$auth" >"$RUNNER_TEMP/private-auth"
+          chmod 600 "$RUNNER_TEMP/private-ref" "$RUNNER_TEMP/private-start-sha" "$RUNNER_TEMP/private-auth"
+          echo "LAS_JOINT_REPAIR_EXACT_START=PASS"
+
+      - name: Apply exact source-opaque guarded repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          python3 - <<'PY'
+          import hashlib, os, pathlib
+
+          root = pathlib.Path('.')
+          targets = {
+              os.environ['TARGET_A_PATH_HASH']: (os.environ['TARGET_A_BLOB'], 'A'),
+              os.environ['TARGET_B_PATH_HASH']: (os.environ['TARGET_B_BLOB'], 'B'),
+              os.environ['TARGET_C_PATH_HASH']: (os.environ['TARGET_C_BLOB'], 'C'),
+          }
+          found = {}
+          for raw in os.popen("git ls-files '*.rs'").read().splitlines():
+              h = hashlib.sha256(raw.encode()).hexdigest()
+              if h in targets:
+                  found[targets[h][1]] = pathlib.Path(raw)
+          if set(found) != {'A','B','C'}:
+              raise SystemExit(20)
+
+          for key, path in found.items():
+              expected_blob = targets[hashlib.sha256(str(path).encode()).hexdigest()][0]
+              import subprocess
+              blob = subprocess.check_output(['git','rev-parse',f'HEAD:{path}'], text=True).strip()
+              if blob != expected_blob:
+                  raise SystemExit(21)
+
+          def line_hash(line):
+              return hashlib.sha256(line.rstrip('\n').encode()).hexdigest()
+
+          a = found['A']; lines = a.read_text().splitlines(keepends=True)
+          if line_hash(lines[317]) != '02f016bee927f10daa1661d50607736b044446357347fe7e345740c41c767879':
+              raise SystemExit(31)
+          del lines[317]
+          a.write_text(''.join(lines))
+
+          b = found['B']; lines = b.read_text().splitlines(keepends=True)
+          if line_hash(lines[124]) != 'e1af248d16270e1671fe5a4304f5ce0a145fcac336dcd2295a76c85c47eed9f4':
+              raise SystemExit(32)
+          del lines[124]
+          b.write_text(''.join(lines))
+
+          c = found['C']; lines = c.read_text().splitlines(keepends=True)
+          ops = [
+              (352, 7, '7823cc6372c19802985cf0e7eeab2187ea4051b7bd07c7f388644de4afdeb5ec'),
+              (410, 27, 'a0ac7cf6d99d6c1842439b97bef685332a11d1e19107eb4dd67b31f88e696aac'),
+              (420, 30, '393eb6cc08be213ecab3c5776e7bb6652428660f2f03cf78ec196513bdbf76da'),
+              (425, 32, '66ed3115eb1bbe4dfa65ef383a83e7d8c4fc33537a872091de090a93d75c68d3'),
+              (430, 31, '4a34770a84ce8528314230c0bf7a1faea181a0ff953e883450be8592f536fc70'),
+          ]
+          for line_no, index, expected in ops:
+              if line_hash(lines[line_no-1]) != expected:
+                  raise SystemExit(33)
+              line = lines[line_no-1]
+              lines[line_no-1] = line[:index] + 'test_' + line[index:]
+          c.write_text(''.join(lines))
+          PY
+
+          cargo +1.98.1 fmt --all
+          cargo +1.98.1 fmt --all -- --check
+          mapfile -d '' changed < <(git diff --name-only -z)
+          test "${#changed[@]}" = "3"
+          for path in "${changed[@]}"; do
+            h="$(printf '%s' "$path" | sha256sum | awk '{print $1}')"
+            case "$h" in
+              "$TARGET_A_PATH_HASH"|"$TARGET_B_PATH_HASH"|"$TARGET_C_PATH_HASH") ;;
+              *) exit 34 ;;
+            esac
+          done
+          git diff --check
+          RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --all-targets >/dev/null
+          RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 check --locked --all-targets --features root-ffi,linux-peer-credentials >/dev/null
+          echo "LAS_JOINT_REPAIR_SCOPE=PASS"
+          echo "LAS_JOINT_REPAIR_COMPILE=PASS"
+
+      - name: Commit and fast-forward exact private repair child
+        shell: bash
+        env:
+          PRIVATE_WRITE_TOKEN: ${{ secrets.LAS_PRIVATE_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          ref="$(cat "$RUNNER_TEMP/private-ref")"; start="$(cat "$RUNNER_TEMP/private-start-sha")"; auth="$(cat "$RUNNER_TEMP/private-auth")"
+          echo "::add-mask::$PRIVATE_WRITE_TOKEN"; echo "::add-mask::$auth"; echo "::add-mask::$start"
+          remote="$(git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote origin "$ref" | awk '{print $1}')"
+          echo "::add-mask::$remote"; test "$remote" = "$start"
+          git config user.name "LAS Verification Repair"
+          git config user.email "las-verification@users.noreply.github.com"
+          git add -u
+          git commit -q -m "Repair retired archive joint feature compilation"
+          new_sha="$(git rev-parse HEAD)"; echo "::add-mask::$new_sha"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" push -q origin HEAD:"$ref"
+          echo "LAS_JOINT_REPAIR_RESULT=PASS"
+          echo "LAS_JOINT_REPAIR_COMMIT_PROOF=$(printf '%s' "$new_sha" | sha256sum | awk '{print $1}')"
