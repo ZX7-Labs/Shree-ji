@@ -144,8 +144,10 @@ jobs:
           required_wrapper = [
               'current-202-tlc28-v5-storage-repair-experiment',
               'test "$continuation_sha" = "$GITHUB_SHA"',
-              'RESUME_GENERATION: ${{ github.event_name == \'push\' && \'v4\' || \'v5\' }}',
-              'resume_generation: ${{ github.event_name == \'push\' && \'v4\' || \'v5\' }}',
+              '38889300529',
+              'current-202-v4-state-28-13',
+              'LAS_CURRENT_202_V5_ORCHESTRATOR_GENERATION=$RESUME_GENERATION',
+              'resume_generation:',
           ]
           for needle in required_wrapper:
               if needle not in v5w:
