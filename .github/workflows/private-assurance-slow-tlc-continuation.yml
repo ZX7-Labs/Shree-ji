@@ -1,26 +1,28 @@
-name: Private current-202 TLC continuation
+name: Private current-202 TLC28 v5 storage repair experiment
 
 on:
+  push:
+    branches: [current-202-tlc28-v5-storage-repair-experiment]
+    paths:
+      - "RUN_CURRENT_202_TLC28_V5_STORAGE_REPAIR"
   workflow_dispatch:
     inputs:
       index:
-        description: Exact canonical TLC profile index; profile 39 uses its dedicated continuation path
+        description: Exact canonical TLC profile index; this experiment is bound to profile 28
         required: true
+        default: "28"
         type: string
       segment:
-        description: Continuation segment number
+        description: V5 continuation segment number; manual dispatch is only for native v5 continuation
         required: true
-        default: "1"
         type: string
       resume_run_id:
-        description: Prior workflow run containing the authenticated encrypted checkpoint
-        required: false
-        default: ""
+        description: Prior v5 workflow run containing the authenticated encrypted checkpoint
+        required: true
         type: string
       resume_artifact:
-        description: Prior authenticated encrypted checkpoint artifact name
-        required: false
-        default: ""
+        description: Prior v5 authenticated encrypted checkpoint artifact name
+        required: true
         type: string
 
 permissions:
@@ -28,38 +30,47 @@ permissions:
   actions: write
 
 concurrency:
-  group: current-202-v4-tlc-${{ inputs.index }}
+  group: current-202-tlc28-v5-storage-repair-exp1
   cancel-in-progress: false
+
+env:
+  CONTINUATION_REF: current-202-tlc28-v5-storage-repair-experiment
+  GH_TOKEN: ${{ github.token }}
 
 jobs:
   validate:
     runs-on: ubuntu-24.04
     env:
-      TARGET_INDEX: ${{ inputs.index }}
-      SEGMENT: ${{ inputs.segment }}
-      RESUME_RUN_ID: ${{ inputs.resume_run_id }}
-      RESUME_ARTIFACT: ${{ inputs.resume_artifact }}
-      CONTINUATION_REF: current-202-tlc-continuation-v4-runner
-      GH_TOKEN: ${{ github.token }}
+      TARGET_INDEX: ${{ github.event_name == 'push' && '28' || inputs.index }}
+      SEGMENT: ${{ github.event_name == 'push' && '14' || inputs.segment }}
+      RESUME_RUN_ID: ${{ github.event_name == 'push' && '38889300529' || inputs.resume_run_id }}
+      RESUME_ARTIFACT: ${{ github.event_name == 'push' && 'current-202-v4-state-28-13' || inputs.resume_artifact }}
+      RESUME_GENERATION: ${{ github.event_name == 'push' && 'v4' || 'v5' }}
     steps:
-      - name: Validate immutable runner request
+      - name: Validate immutable v5 experiment request
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_REF_NAME" = "$CONTINUATION_REF"
-          [[ "$TARGET_INDEX" =~ ^[0-9]+$ ]]
+          test "$TARGET_INDEX" = "28"
           [[ "$SEGMENT" =~ ^[0-9]+$ ]]
-          test "$TARGET_INDEX" -ge 0
-          test "$TARGET_INDEX" -lt 202
-          test "$TARGET_INDEX" -ne 39
-          test "$SEGMENT" -ge 1
-          if [[ "$SEGMENT" -eq 1 ]]; then
-            test -z "$RESUME_RUN_ID"
-            test -z "$RESUME_ARTIFACT"
-          else
-            [[ "$RESUME_RUN_ID" =~ ^[0-9]+$ ]]
-            test "$RESUME_ARTIFACT" = "current-202-v4-state-${TARGET_INDEX}-$((SEGMENT - 1))"
-          fi
+          [[ "$RESUME_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          case "$RESUME_GENERATION" in
+            v4)
+              test "$GITHUB_EVENT_NAME" = "push"
+              test "$SEGMENT" = "14"
+              test "$RESUME_RUN_ID" = "38889300529"
+              test "$RESUME_ARTIFACT" = "current-202-v4-state-28-13"
+              ;;
+            v5)
+              test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+              test "$SEGMENT" -ge 15
+              test "$RESUME_ARTIFACT" = "current-202-v5-exp1-state-28-$((SEGMENT - 1))"
+              ;;
+            *)
+              exit 1
+              ;;
+          esac
 
           ref_json="$RUNNER_TEMP/continuation-ref.json"
           curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
@@ -75,15 +86,17 @@ jobs:
           )"
           rm -f "$ref_json"
           test "$continuation_sha" = "$GITHUB_SHA"
-          echo "LAS_CURRENT_202_ORCHESTRATOR_REQUEST=PASS"
-          echo "LAS_CURRENT_202_ORCHESTRATOR_REF_BINDING=PASS"
+          echo "LAS_CURRENT_202_V5_ORCHESTRATOR_REQUEST=PASS"
+          echo "LAS_CURRENT_202_V5_ORCHESTRATOR_REF_BINDING=PASS"
+          echo "LAS_CURRENT_202_V5_ORCHESTRATOR_GENERATION=$RESUME_GENERATION"
 
   continuation:
     needs: validate
     uses: ./.github/workflows/_private-assurance-tlc-continuation-slice.yml
     with:
-      index: ${{ fromJSON(inputs.index) }}
-      segment: ${{ fromJSON(inputs.segment) }}
-      resume_run_id: ${{ inputs.resume_run_id }}
-      resume_artifact: ${{ inputs.resume_artifact }}
+      index: ${{ fromJSON(github.event_name == 'push' && '28' || inputs.index) }}
+      segment: ${{ fromJSON(github.event_name == 'push' && '14' || inputs.segment) }}
+      resume_run_id: ${{ github.event_name == 'push' && '38889300529' || inputs.resume_run_id }}
+      resume_artifact: ${{ github.event_name == 'push' && 'current-202-v4-state-28-13' || inputs.resume_artifact }}
+      resume_generation: ${{ github.event_name == 'push' && 'v4' || 'v5' }}
     secrets: inherit
