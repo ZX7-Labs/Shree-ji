@@ -1,0 +1,38 @@
+name: Current-202 profile 28 storage-reclaim continuation v5
+
+# Registration-only default-branch shell. workflow_dispatch requires the workflow
+# path to exist on the default branch; actual proof execution is dispatched against
+# the immutable current-202-tlc-continuation-v5-runner ref, whose exact workflow
+# bytes and SHA are independently attested.
+on:
+  workflow_dispatch:
+    inputs:
+      segment:
+        description: Continuation segment number
+        required: true
+        type: string
+      resume_run_id:
+        description: Prior workflow run containing the authenticated checkpoint
+        required: true
+        type: string
+      resume_artifact:
+        description: Prior authenticated checkpoint artifact name
+        required: true
+        type: string
+      resume_kind:
+        description: Checkpoint provenance generation
+        required: true
+        type: choice
+        options:
+          - v5
+          - v4
+
+permissions:
+  contents: read
+
+jobs:
+  registration-only:
+    if: ${{ false }}
+    runs-on: ubuntu-24.04
+    steps:
+      - run: exit 1
