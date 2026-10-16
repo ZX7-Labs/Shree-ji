@@ -1,0 +1,34 @@
+name: Stop obsolete current-202 profile 28 v4 loop
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/stop-obsolete-current-202-profile28-v4.yml"
+  workflow_dispatch:
+
+# The frozen v4 wrapper uses exactly current-202-v4-tlc-${index}. GitHub
+# concurrency groups are repository-wide across workflows, so this one-shot
+# fence cancels only the obsolete profile-28 v4 chain without mutating its
+# frozen runner or any authenticated checkpoint artifact.
+concurrency:
+  group: current-202-v4-tlc-28
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Record exact supersession boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "LAS_CURRENT_202_PROFILE28_V4_SUPERSEDED=PASS"
+          echo "LAS_CURRENT_202_PROFILE28_V4_FROZEN_RUNNER=3d37edb1debc9a4dd32da51ec3164840dbc4b252"
+          echo "LAS_CURRENT_202_PROFILE28_V5_FROZEN_RUNNER=7bc9fd0563e6d589ed6428127021c514e384c3f1"
+          echo "LAS_CURRENT_202_PROFILE28_V5_SOURCE_RUN=38884360037"
+          echo "LAS_CURRENT_202_PROFILE28_V5_SOURCE_SEGMENT=12"
