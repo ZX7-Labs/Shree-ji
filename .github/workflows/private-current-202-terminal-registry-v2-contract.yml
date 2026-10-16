@@ -1,0 +1,122 @@
+name: Current-202 terminal registry v2 contract
+
+on:
+  push:
+    branches: [current-202-terminal-registry-v2-prep]
+    paths:
+      - ".github/workflows/private-current-202-terminal-registry-v2-contract.yml"
+      - "tools/current_202_terminal_registry_v2.py"
+      - "RUN_CURRENT_202_TERMINAL_REGISTRY_V2_CONTRACT"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: current-202-terminal-registry-v2-contract
+  cancel-in-progress: false
+
+env:
+  BASE_MAIN_SHA: 64974f9da2b579decbd0b4f6c121bab004bb0511
+  V1_REGISTRY_BLOB: d178455061f78d2dc97905ec846060d36dcc0135
+  EXPECTED_EVIDENCE_SHA256: 31e16ec4644dff23291edc13341548ac3629ef3a229966ab4017f2856eda4567
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact prep revision
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Bind migration source and compile tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cat-file -e "$BASE_MAIN_SHA^{commit}"
+          test "$(git rev-parse "$BASE_MAIN_SHA:LAS_CURRENT_202_TERMINAL_ATTESTATIONS.json")" = "$V1_REGISTRY_BLOB"
+          git merge-base --is-ancestor "$BASE_MAIN_SHA" "$GITHUB_SHA"
+          python3 -m py_compile tools/current_202_terminal_registry_v2.py
+          echo "LAS_CURRENT_202_REGISTRY_V2_SOURCE_BINDING=PASS"
+          echo "LAS_CURRENT_202_REGISTRY_V2_COMPILE=PASS"
+
+      - name: Prove lossless v1 to v2 migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/registry-v2.json"
+          log="$RUNNER_TEMP/migrate.log"
+          python3 tools/current_202_terminal_registry_v2.py migrate-v1 \
+            LAS_CURRENT_202_TERMINAL_ATTESTATIONS.json "$out" \
+            --print-evidence-digest | tee "$log"
+          grep -qx "LAS_CURRENT_202_REGISTRY_V2_EVIDENCE_SHA256=$EXPECTED_EVIDENCE_SHA256" "$log"
+          grep -qx "LAS_CURRENT_202_REGISTRY_V1_TO_V2=PASS" "$log"
+          python3 tools/current_202_terminal_registry_v2.py validate-v2 "$out" | \
+            grep -qx "LAS_CURRENT_202_REGISTRY_V2_VALIDATE=PASS"
+          python3 - "$out" <<'PY'
+          import json, sys
+          data=json.load(open(sys.argv[1], encoding="utf-8"))
+          if set(data["profiles"]) != {"2"}:
+              raise SystemExit("migration profile set is not exact")
+          entry=data["profiles"]["2"]
+          if entry["executor_id"] != "current-202-v4" or entry["migration_lineage"] is not None:
+              raise SystemExit("existing v4 evidence was not bound to the v4 executor exactly")
+          if entry["terminal_run_id"] != 38727897541 or entry["terminal_job_id"] != 116398226197:
+              raise SystemExit("profile 2 terminal identity changed during migration")
+          if entry["states_left_on_queue"] != 0 or entry["result"] != "PASS":
+              raise SystemExit("profile 2 terminal result changed during migration")
+          print("LAS_CURRENT_202_REGISTRY_V2_PROFILE2_LOSSLESS=PASS")
+          PY
+
+      - name: Prove mixed executor schema without inventing evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/registry-v2.json" <<'PY'
+          import copy, json, sys
+          sys.path.insert(0, "tools")
+          import current_202_terminal_registry_v2 as registry
+          data=json.load(open(sys.argv[1], encoding="utf-8"))
+          before=copy.deepcopy(data["profiles"])
+          data["executors"][registry.V5_EXECUTOR_ID]=copy.deepcopy(registry.V5_EXECUTOR)
+          registry.validate_v2(data)
+          if data["profiles"] != before:
+              raise SystemExit("declaring the v5 executor mutated existing terminal evidence")
+          if set(data["executors"]) != {registry.V4_EXECUTOR_ID, registry.V5_EXECUTOR_ID}:
+              raise SystemExit("mixed executor set is not exact")
+          print("LAS_CURRENT_202_REGISTRY_V2_MIXED_EXECUTORS=PASS")
+          PY
+
+      - name: Attack registry invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/registry-v2.json" <<'PY'
+          import copy, json, sys
+          sys.path.insert(0, "tools")
+          import current_202_terminal_registry_v2 as registry
+          base=json.load(open(sys.argv[1], encoding="utf-8"))
+          cases=[]
+          def case(name, fn):
+              value=copy.deepcopy(base); fn(value); cases.append((name,value))
+          case("unknown-executor", lambda d: d["profiles"]["2"].__setitem__("executor_id","untrusted"))
+          case("nonzero-terminal-queue", lambda d: d["profiles"]["2"].__setitem__("states_left_on_queue",1))
+          case("runner-drift", lambda d: d["executors"][registry.V4_EXECUTOR_ID].__setitem__("runner_sha","0"*40))
+          case("lineage-on-v4", lambda d: d["profiles"]["2"].__setitem__("migration_lineage",{}))
+          case("worker-weakening", lambda d: d["executors"][registry.V4_EXECUTOR_ID].__setitem__("tlc_workers",2))
+          case("profile39-in-generic-registry", lambda d: d["profiles"].__setitem__("39", copy.deepcopy(d["profiles"]["2"])))
+          passed=[]
+          for name, value in cases:
+              try:
+                  registry.validate_v2(value)
+              except registry.RegistryError:
+                  passed.append(name)
+              else:
+                  raise SystemExit(f"adversarial mutation unexpectedly accepted: {name}")
+          if len(passed) != len(cases):
+              raise SystemExit("not every adversarial mutation failed closed")
+          print(f"LAS_CURRENT_202_REGISTRY_V2_NEGATIVE_CASES={len(passed)}")
+          print("LAS_CURRENT_202_REGISTRY_V2_FAIL_CLOSED=PASS")
+          PY
