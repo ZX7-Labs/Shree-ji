@@ -20,9 +20,6 @@ on:
       mode:
         required: true
         type: string
-      orchestrator_workflow:
-        required: true
-        type: string
     secrets:
       LAS_PRIVATE_REPOSITORY:
         required: true
@@ -65,7 +62,6 @@ jobs:
       RESUME_RUN_ID: ${{ inputs.resume_run_id }}
       RESUME_ARTIFACT: ${{ inputs.resume_artifact }}
       MODE: ${{ inputs.mode }}
-      ORCHESTRATOR_WORKFLOW: ${{ inputs.orchestrator_workflow }}
     steps:
       - name: Validate immutable continuation request
         shell: bash
@@ -84,29 +80,23 @@ jobs:
           case "$MODE" in
             generic)
               test "$TARGET_INDEX" -ne 39
-              test "$ORCHESTRATOR_WORKFLOW" = "private-candidate3-resumable-tlc-20261016.yml"
-              echo "SLICE_SECONDS=14400" >>"$GITHUB_ENV"
-              echo "CHECKPOINT_GRACE_SECONDS=1200" >>"$GITHUB_ENV"
-              echo "INITIAL_MIN_FREE_KB=67108864" >>"$GITHUB_ENV"
-              echo "MIN_FREE_KB=50331648" >>"$GITHUB_ENV"
+              dispatch_workflow=private-assurance-slow-tlc-continuation.yml
+              slice_seconds=14400
+              min_free_kb=50331648
               ;;
             profile39)
               test "$TARGET_INDEX" -eq 39
-              test "$ORCHESTRATOR_WORKFLOW" = "private-candidate3-resumable-tlc39-20261016.yml"
-              echo "SLICE_SECONDS=7200" >>"$GITHUB_ENV"
-              echo "CHECKPOINT_GRACE_SECONDS=1200" >>"$GITHUB_ENV"
-              echo "INITIAL_MIN_FREE_KB=67108864" >>"$GITHUB_ENV"
-              echo "MIN_FREE_KB=54525952" >>"$GITHUB_ENV"
+              dispatch_workflow=private-repaired-202-tlc39-continuation.yml
+              slice_seconds=7200
+              min_free_kb=54525952
               ;;
-            *)
-              echo "unsupported continuation mode" >&2
-              exit 1
-              ;;
+            *) echo "unsupported continuation mode" >&2; exit 1 ;;
           esac
+          printf 'DISPATCH_WORKFLOW=%s\nSLICE_SECONDS=%s\nCHECKPOINT_GRACE_SECONDS=1200\nINITIAL_MIN_FREE_KB=67108864\nMIN_FREE_KB=%s\n' \
+            "$dispatch_workflow" "$slice_seconds" "$min_free_kb" >>"$GITHUB_ENV"
 
           if [[ "$SEGMENT" -eq 1 ]]; then
-            test -z "$RESUME_RUN_ID"
-            test -z "$RESUME_ARTIFACT"
+            test -z "$RESUME_RUN_ID"; test -z "$RESUME_ARTIFACT"
           else
             [[ "$RESUME_RUN_ID" =~ ^[0-9]+$ ]]
             test "$RESUME_ARTIFACT" = "candidate3-resume-state-${TARGET_INDEX}-$((SEGMENT - 1))"
@@ -114,13 +104,12 @@ jobs:
 
           ref_json="$RUNNER_TEMP/continuation-ref.json"
           curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/git/ref/heads/$CONTINUATION_REF" >"$ref_json"
           continuation_sha="$(python3 - "$ref_json" <<'PY'
-          import json, sys
-          print(json.load(open(sys.argv[1], encoding='utf-8'))['object']['sha'])
+          import json,sys
+          print(json.load(open(sys.argv[1],encoding='utf-8'))['object']['sha'])
           PY
           )"
           rm -f "$ref_json"
@@ -131,96 +120,65 @@ jobs:
           echo "LAS_CANDIDATE3_RESUME_INDEX=$TARGET_INDEX"
           echo "LAS_CANDIDATE3_RESUME_SEGMENT=$SEGMENT"
 
-      - name: Bind original matrix cancellation and pre-TLC evidence
+      - name: Bind original cancelled matrix job and pre-TLC evidence
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          run_json="$RUNNER_TEMP/original-run.json"
-          curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$ORIGINAL_RUN_ID" >"$run_json"
-          python3 - "$run_json" "$EXPECTED_ORIGINAL_PUBLIC_HEAD" "$EXPECTED_ORIGINAL_BRANCH" "$ORIGINAL_WORKFLOW_PATH" <<'PY'
-          import json, sys
-          data=json.load(open(sys.argv[1], encoding='utf-8'))
-          assert data['head_sha'] == sys.argv[2]
-          assert data['head_branch'] == sys.argv[3]
-          assert data['path'] == sys.argv[4]
-          assert data['event'] == 'push'
-          assert data['run_attempt'] == 1
-          assert data['status'] in {'in_progress','completed'}
-          PY
-          rm -f "$run_json"
+          api_get() {
+            curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" "$1"
+          }
 
-          wf_json="$RUNNER_TEMP/original-workflow.json"
-          curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/$ORIGINAL_WORKFLOW_PATH?ref=$EXPECTED_ORIGINAL_PUBLIC_HEAD" >"$wf_json"
-          test "$(python3 - "$wf_json" <<'PY'
-          import json, sys
-          print(json.load(open(sys.argv[1], encoding='utf-8'))['sha'])
+          api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$ORIGINAL_RUN_ID" >"$RUNNER_TEMP/original-run.json"
+          python3 - "$RUNNER_TEMP/original-run.json" "$EXPECTED_ORIGINAL_PUBLIC_HEAD" "$EXPECTED_ORIGINAL_BRANCH" "$ORIGINAL_WORKFLOW_PATH" <<'PY'
+          import json,sys
+          d=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert d['head_sha']==sys.argv[2] and d['head_branch']==sys.argv[3] and d['path']==sys.argv[4]
+          assert d['event']=='push' and d['run_attempt']==1 and d['status'] in {'in_progress','completed'}
+          PY
+
+          api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/$ORIGINAL_WORKFLOW_PATH?ref=$EXPECTED_ORIGINAL_PUBLIC_HEAD" >"$RUNNER_TEMP/original-workflow.json"
+          test "$(python3 - "$RUNNER_TEMP/original-workflow.json" <<'PY'
+          import json,sys
+          print(json.load(open(sys.argv[1],encoding='utf-8'))['sha'])
           PY
           )" = "$EXPECTED_ORIGINAL_WORKFLOW_BLOB"
-          rm -f "$wf_json"
 
           for page in 1 2 3; do
-            curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$ORIGINAL_RUN_ID/jobs?per_page=100&page=$page" \
-              >"$RUNNER_TEMP/original-jobs-$page.json"
+            api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$ORIGINAL_RUN_ID/jobs?per_page=100&page=$page" >"$RUNNER_TEMP/original-jobs-$page.json"
           done
           python3 - "$TARGET_INDEX" "$RUNNER_TEMP/original-jobs-1.json" "$RUNNER_TEMP/original-jobs-2.json" "$RUNNER_TEMP/original-jobs-3.json" <<'PY'
-          import json, sys
+          import json,sys
           idx=int(sys.argv[1]); jobs=[]
-          for path in sys.argv[2:]:
-              jobs.extend(json.load(open(path, encoding='utf-8'))['jobs'])
+          for p in sys.argv[2:]: jobs.extend(json.load(open(p,encoding='utf-8'))['jobs'])
           bind=[j for j in jobs if j['name']=='bind-pre-tlc']
           assert len(bind)==1 and bind[0]['conclusion']=='success'
           target=[j for j in jobs if j['name']==f'tlc ({idx})']
           assert len(target)==1
-          job=target[0]
-          assert job['status']=='completed' and job['conclusion']=='cancelled'
-          steps={s['name']:s for s in job.get('steps', [])}
-          assert steps['Recover exact frozen private candidate']['conclusion']=='success'
-          assert steps['Run exact canonical TLC profile']['conclusion']=='cancelled'
+          j=target[0]
+          assert j['status']=='completed' and j['conclusion']=='cancelled'
+          s={x['name']:x for x in j.get('steps',[])}
+          assert s['Recover exact frozen private candidate']['conclusion']=='success'
+          assert s['Run exact canonical TLC profile']['conclusion']=='cancelled'
           PY
-          rm -f "$RUNNER_TEMP"/original-jobs-*.json
 
-          pre_json="$RUNNER_TEMP/pre-tlc-run.json"
-          curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$PRE_TLC_RUN_ID" >"$pre_json"
-          python3 - "$pre_json" "$EXPECTED_PRE_TLC_PUBLIC_HEAD" "$PRE_TLC_WORKFLOW_PATH" <<'PY'
-          import json, sys
-          data=json.load(open(sys.argv[1], encoding='utf-8'))
-          assert data['head_sha']==sys.argv[2]
-          assert data['path']==sys.argv[3]
-          assert data['event']=='push' and data['run_attempt']==1
-          assert data['status']=='completed' and data['conclusion']=='success'
+          api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$PRE_TLC_RUN_ID" >"$RUNNER_TEMP/pre-tlc-run.json"
+          python3 - "$RUNNER_TEMP/pre-tlc-run.json" "$EXPECTED_PRE_TLC_PUBLIC_HEAD" "$PRE_TLC_WORKFLOW_PATH" <<'PY'
+          import json,sys
+          d=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert d['head_sha']==sys.argv[2] and d['path']==sys.argv[3]
+          assert d['event']=='push' and d['run_attempt']==1 and d['status']=='completed' and d['conclusion']=='success'
           PY
-          rm -f "$pre_json"
-
-          pre_wf_json="$RUNNER_TEMP/pre-tlc-workflow.json"
-          curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/$PRE_TLC_WORKFLOW_PATH?ref=$EXPECTED_PRE_TLC_PUBLIC_HEAD" >"$pre_wf_json"
-          test "$(python3 - "$pre_wf_json" <<'PY'
-          import json, sys
-          print(json.load(open(sys.argv[1], encoding='utf-8'))['sha'])
+          api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/$PRE_TLC_WORKFLOW_PATH?ref=$EXPECTED_PRE_TLC_PUBLIC_HEAD" >"$RUNNER_TEMP/pre-tlc-workflow.json"
+          test "$(python3 - "$RUNNER_TEMP/pre-tlc-workflow.json" <<'PY'
+          import json,sys
+          print(json.load(open(sys.argv[1],encoding='utf-8'))['sha'])
           PY
           )" = "$EXPECTED_PRE_TLC_WORKFLOW_BLOB"
-          rm -f "$pre_wf_json"
+          rm -f "$RUNNER_TEMP"/original-run.json "$RUNNER_TEMP"/original-workflow.json "$RUNNER_TEMP"/original-jobs-*.json "$RUNNER_TEMP"/pre-tlc-run.json "$RUNNER_TEMP"/pre-tlc-workflow.json
           echo "LAS_CANDIDATE3_RESUME_ORIGINAL_CANCELLATION=PASS"
           echo "LAS_CANDIDATE3_RESUME_PRE_TLC_BINDING=PASS"
 
@@ -273,26 +231,20 @@ jobs:
           echo "LAS_CANDIDATE3_RESUME_RECOVERY=PASS"
           unset PRIVATE_TOKEN auth matched_ref matched_sha actual tree
 
-      - name: Bind exact canonical map and selected profile
+      - name: Bind exact canonical map and selected positive profile
         shell: bash
         run: |
           set -euo pipefail
-          ROOT="$GITHUB_WORKSPACE/target"; cd "$ROOT"
-          map_py="$RUNNER_TEMP/tlc-map.py"
+          ROOT="$GITHUB_WORKSPACE/target"; cd "$ROOT"; map_py="$RUNNER_TEMP/tlc-map.py"
           python3 - tools/verify_codespaces_all.sh "$map_py" <<'PY'
           from pathlib import Path
           import sys
           src=Path(sys.argv[1]).read_text(encoding='utf-8')
-          mh='python3 - "$ROOT" > "$TLC_MAP" <<\'PY\'\n'
-          me='\nPY\n\nrun_tlc_profile() {'
-          if src.count(mh)!=1 or src.count(me)!=1:
-              raise SystemExit('canonical map anchors are not unique')
-          if src.count('local args=(-workers auto -lncheck final -fp 0)') != 1:
-              raise SystemExit('canonical TLC argument contract changed')
-          if src.count('java -XX:+UseParallelGC -jar "$TLA_JAR" "${args[@]}"') != 1:
-              raise SystemExit('canonical TLC JVM contract changed')
-          start=src.index(mh)+len(mh); end=src.index(me,start)
-          Path(sys.argv[2]).write_text(src[start:end]+'\n', encoding='utf-8')
+          mh='python3 - "$ROOT" > "$TLC_MAP" <<\'PY\'\n'; me='\nPY\n\nrun_tlc_profile() {'
+          if src.count(mh)!=1 or src.count(me)!=1: raise SystemExit('canonical map anchors are not unique')
+          if src.count('local args=(-workers auto -lncheck final -fp 0)')!=1: raise SystemExit('canonical TLC argument contract changed')
+          if src.count('java -XX:+UseParallelGC -jar "$TLA_JAR" "${args[@]}"')!=1: raise SystemExit('canonical TLC JVM contract changed')
+          Path(sys.argv[2]).write_text(src[src.index(mh)+len(mh):src.index(me,src.index(mh)+len(mh))]+'\n',encoding='utf-8')
           PY
           map="$RUNNER_TEMP/tlc-map.tsv"; map_err="$RUNNER_TEMP/tlc-map.private.err"
           if ! python3 "$map_py" "$ROOT" >"$map" 2>"$map_err"; then
@@ -303,13 +255,12 @@ jobs:
           test "$(sha256sum "$map" | awk '{print $1}')" = "$EXPECTED_TLC_MAP_SHA256"
           line="$(sed -n "$((TARGET_INDEX + 1))p" "$map")"; test -n "$line"
           IFS=$'\t' read -r cfg tla deadlock expectation <<<"$line"
-          test -n "$cfg"; test -n "$tla"; [[ "$deadlock" = 0 || "$deadlock" = 1 ]]
-          test -z "$expectation"
+          test -n "$cfg"; test -n "$tla"; [[ "$deadlock" = 0 || "$deadlock" = 1 ]]; test -z "$expectation"
           profile_binding="$(printf '%s\0%s\0%s\0%s' "$cfg" "$tla" "$deadlock" "$expectation" | sha256sum | awk '{print $1}')"
           echo "PROFILE_BINDING_SHA256=$profile_binding" >>"$GITHUB_ENV"
           echo "LAS_CANDIDATE3_RESUME_PROFILE_BINDING=$profile_binding"
+          echo "LAS_CANDIDATE3_RESUME_CANONICAL_ARGS=PASS"
           test -z "$(git status --porcelain --untracked-files=no)"
-          unset line cfg tla deadlock expectation profile_binding
 
       - name: Download prior authenticated encrypted checkpoint
         if: inputs.resume_run_id != ''
@@ -341,40 +292,30 @@ jobs:
           expected_mac="$(tr -d '[:space:]' <"$mac_file")"
           actual_mac="$(openssl dgst -sha256 -mac HMAC -macopt "hexkey:$LAS_CHECKPOINT_MAC_KEY" "$enc" | awk '{print $NF}')"
           test -n "$expected_mac"; test "$actual_mac" = "$expected_mac"
-          echo "LAS_CANDIDATE3_RESUME_CHECKPOINT_AUTH=PASS"
           list="$RUNNER_TEMP/checkpoint-paths"
           openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -pass env:LAS_CHECKPOINT_SECRET -in "$enc" | tar -tzf - >"$list"
           python3 - "$list" <<'PY'
           from pathlib import PurePosixPath
           import sys
-          for raw in open(sys.argv[1], encoding='utf-8', errors='strict'):
+          for raw in open(sys.argv[1],encoding='utf-8',errors='strict'):
               raw=raw.rstrip('\n')
-              if not raw or raw.startswith('/') or '\\' in raw:
-                  raise SystemExit('unsafe archive path')
-              path=PurePosixPath(raw.rstrip('/'))
-              if not path.parts or path.parts[0] != 'tlc-meta' or '..' in path.parts:
-                  raise SystemExit('unsafe archive path')
+              if not raw or raw.startswith('/') or '\\' in raw: raise SystemExit('unsafe archive path')
+              p=PurePosixPath(raw.rstrip('/'))
+              if not p.parts or p.parts[0]!='tlc-meta' or '..' in p.parts: raise SystemExit('unsafe archive path')
           PY
           rm -f "$list"
           openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -pass env:LAS_CHECKPOINT_SECRET -in "$enc" | \
             tar --no-same-owner --no-same-permissions -xzf - -C "$RUNNER_TEMP"
           manifest="$RUNNER_TEMP/tlc-meta/las-resume-manifest.txt"; test -s "$manifest"
-          grep -qx "schema=$CHECKPOINT_SCHEMA" "$manifest"
-          grep -qx "runner=$GITHUB_SHA" "$manifest"
-          grep -qx "worker_mode=$WORKER_MODE" "$manifest"
-          grep -qx "nproc=$nproc_fp" "$manifest"
-          grep -qx "java=$java_fp" "$manifest"
-          grep -qx "mode=$MODE" "$manifest"
-          grep -qx "producer_run=$RESUME_RUN_ID" "$manifest"
-          grep -qx "original_run=$ORIGINAL_RUN_ID" "$manifest"
-          grep -qx "snapshot=$EXPECTED_PRIVATE_SNAPSHOT_PROOF" "$manifest"
-          grep -qx "tree=$EXPECTED_PRIVATE_TREE_PROOF" "$manifest"
-          grep -qx "verifier=$EXPECTED_VERIFIER_BLOB" "$manifest"
-          grep -qx "map=$EXPECTED_TLC_MAP_SHA256" "$manifest"
-          grep -qx "index=$TARGET_INDEX" "$manifest"
-          grep -qx "profile=$PROFILE_BINDING_SHA256" "$manifest"
-          grep -qx "segment=$((SEGMENT - 1))" "$manifest"
+          for kv in \
+            "schema=$CHECKPOINT_SCHEMA" "runner=$GITHUB_SHA" "worker_mode=$WORKER_MODE" "nproc=$nproc_fp" "java=$java_fp" \
+            "mode=$MODE" "producer_run=$RESUME_RUN_ID" "original_run=$ORIGINAL_RUN_ID" \
+            "snapshot=$EXPECTED_PRIVATE_SNAPSHOT_PROOF" "tree=$EXPECTED_PRIVATE_TREE_PROOF" "verifier=$EXPECTED_VERIFIER_BLOB" \
+            "map=$EXPECTED_TLC_MAP_SHA256" "index=$TARGET_INDEX" "profile=$PROFILE_BINDING_SHA256" "segment=$((SEGMENT - 1))"; do
+            grep -Fqx "$kv" "$manifest"
+          done
           rm -f "$manifest"
+          echo "LAS_CANDIDATE3_RESUME_CHECKPOINT_AUTH=PASS"
           unset PRIVATE_TOKEN LAS_CHECKPOINT_SECRET LAS_CHECKPOINT_MAC_KEY context expected_mac actual_mac java_fp nproc_fp
 
       - name: Run exact canonical TLC slice with resumable checkpoint barrier
@@ -390,19 +331,16 @@ jobs:
           map="$RUNNER_TEMP/tlc-map.tsv"; test -s "$map"
           test "$(wc -l <"$map" | tr -d ' ')" = "$EXPECTED_TLC_PROFILE_COUNT"
           test "$(sha256sum "$map" | awk '{print $1}')" = "$EXPECTED_TLC_MAP_SHA256"
-          line="$(sed -n "$((TARGET_INDEX + 1))p" "$map")"
-          IFS=$'\t' read -r cfg tla deadlock expectation <<<"$line"
+          line="$(sed -n "$((TARGET_INDEX + 1))p" "$map")"; IFS=$'\t' read -r cfg tla deadlock expectation <<<"$line"
           test -n "$cfg"; test -n "$tla"; test -z "$expectation"
           test "$(printf '%s\0%s\0%s\0%s' "$cfg" "$tla" "$deadlock" "$expectation" | sha256sum | awk '{print $1}')" = "$PROFILE_BINDING_SHA256"
           cfg_dir="$(dirname "$cfg")"; cfg_base="$(basename "$cfg")"; tla_base="$(basename "$tla")"
           log="$RUNNER_TEMP/private-tlc.log"; meta="$RUNNER_TEMP/tlc-meta"; mkdir -p "$meta"
           args=(-workers auto -lncheck final -fp 0 -checkpoint 5 -metadir "$meta")
           if [[ -n "$RESUME_RUN_ID" ]]; then
-            mapfile -t recover_dirs < <(find "$meta" -type f -name 'vars.chkpt' -printf '%h\n' | sort -u)
-            test "${#recover_dirs[@]}" -eq 1
-            recover_dir="${recover_dirs[0]}"; test -f "$recover_dir/queue.chkpt"
-            args+=(-recover "$recover_dir")
-            echo "LAS_CANDIDATE3_RESUME_RECOVER_DIR=PASS"
+            mapfile -t recover_dirs < <(find "$meta" -type f -name vars.chkpt -printf '%h\n' | sort -u)
+            test "${#recover_dirs[@]}" -eq 1; recover_dir="${recover_dirs[0]}"; test -f "$recover_dir/queue.chkpt"
+            args+=(-recover "$recover_dir"); echo "LAS_CANDIDATE3_RESUME_RECOVER_DIR=PASS"
           fi
           [[ "$deadlock" != 1 ]] || args+=(-deadlock)
           args+=(-config "$cfg_base" "$tla_base")
@@ -411,36 +349,25 @@ jobs:
           (cd "$cfg_dir"; exec java -XX:+UseParallelGC -jar "$TLA_JAR" "${args[@]}") >"$log" 2>&1 &
           tlc_pid=$!
           set -e
-          tlc_running() {
-            local stat
-            stat="$(ps -o stat= -p "$tlc_pid" 2>/dev/null | awk 'NR==1 {print $1}')"
-            [[ -n "$stat" && "$stat" != Z* ]]
-          }
-          started="$(date +%s)"; deadline="$((started + SLICE_SECONDS))"
-          slice_cut=0; barrier_failed=0; cut_reason=none
+          tlc_running() { local s; s="$(ps -o stat= -p "$tlc_pid" 2>/dev/null | awk 'NR==1{print $1}')"; [[ -n "$s" && "$s" != Z* ]]; }
+          started="$(date +%s)"; deadline="$((started + SLICE_SECONDS))"; slice_cut=0; barrier_failed=0; cut_reason=none
           while tlc_running; do
-            now="$(date +%s)"; free_kb="$(df -Pk "$RUNNER_TEMP" | awk 'NR==2 {print $4}')"
+            now="$(date +%s)"; free_kb="$(df -Pk "$RUNNER_TEMP" | awk 'NR==2{print $4}')"
             if (( now >= deadline || free_kb <= MIN_FREE_KB )); then
               if (( free_kb <= MIN_FREE_KB )); then cut_reason=storage; else cut_reason=time; fi
               ends_before="$(grep -cF 'Checkpointing completed at (' "$log" 2>/dev/null || true)"
               target_ends="$((ends_before + 1))"; grace_deadline="$((now + CHECKPOINT_GRACE_SECONDS))"
-              echo "LAS_CANDIDATE3_RESUME_BARRIER_REQUESTED=1"
-              echo "LAS_CANDIDATE3_RESUME_BARRIER_REASON=$cut_reason"
+              echo "LAS_CANDIDATE3_RESUME_BARRIER_REQUESTED=1"; echo "LAS_CANDIDATE3_RESUME_BARRIER_REASON=$cut_reason"
               while tlc_running; do
                 ends_now="$(grep -cF 'Checkpointing completed at (' "$log" 2>/dev/null || true)"
                 if (( ends_now >= target_ends )); then
-                  slice_cut=1; echo "LAS_CANDIDATE3_RESUME_BARRIER_COMPLETE=1"
-                  kill -TERM "$tlc_pid" 2>/dev/null || true
+                  slice_cut=1; echo "LAS_CANDIDATE3_RESUME_BARRIER_COMPLETE=1"; kill -TERM "$tlc_pid" 2>/dev/null || true
                   for _ in $(seq 1 10); do tlc_running || break; sleep 2; done
                   tlc_running && kill -KILL "$tlc_pid" 2>/dev/null || true
                   break
                 fi
                 now="$(date +%s)"
-                if (( now >= grace_deadline )); then
-                  barrier_failed=1; echo "LAS_CANDIDATE3_RESUME_BARRIER_TIMEOUT=1"
-                  kill -KILL "$tlc_pid" 2>/dev/null || true
-                  break
-                fi
+                if (( now >= grace_deadline )); then barrier_failed=1; echo "LAS_CANDIDATE3_RESUME_BARRIER_TIMEOUT=1"; kill -KILL "$tlc_pid" 2>/dev/null || true; break; fi
                 sleep 5
               done
               break
@@ -448,23 +375,15 @@ jobs:
             sleep 15
           done
           set +e; wait "$tlc_pid"; rc=$?; set -e
-          echo "LAS_CANDIDATE3_RESUME_RC=$rc"
-          echo "LAS_CANDIDATE3_RESUME_CUT_REASON=$cut_reason"
+          echo "LAS_CANDIDATE3_RESUME_RC=$rc"; echo "LAS_CANDIDATE3_RESUME_CUT_REASON=$cut_reason"
           echo "LAS_CANDIDATE3_RESUME_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')"
           test -z "$(git status --porcelain --untracked-files=no)"
-
           severe='Invariant .* is violated|Property .* is violated|Temporal propert(y|ies).*violat|liveness.*violat|Deadlock reached|Parsing or semantic analysis failed|parse error|semantic error|(checkpoint|recover).*(error|fail|exception)|(error|fail|exception).*(checkpoint|recover)|fingerprint.*collision|collision.*fingerprint|OutOfMemoryError|Cannot allocate memory|No space left on device|Disk quota exceeded|Exception in thread|java\.lang\.|java\.io\.|java\.nio\.|TLC threw an unexpected exception|TLC Bug|AssertionError|An error occurred while running TLC'
-          if grep -Eiq "$severe" "$log"; then
-            rm -f "$log"; echo "status=fail" >>"$GITHUB_OUTPUT"; echo "LAS_CANDIDATE3_RESUME_RESULT=FAIL_CLOSED"; exit 1
-          fi
-          if (( barrier_failed )); then
-            rm -f "$log"; echo "status=fail" >>"$GITHUB_OUTPUT"; echo "LAS_CANDIDATE3_RESUME_RESULT=FAIL_BARRIER"; exit 1
-          fi
-          if [[ "$rc" -eq 0 ]]; then
-            rm -f "$log"; echo "status=pass" >>"$GITHUB_OUTPUT"; echo "LAS_CANDIDATE3_RESUME_RESULT=PASS"; exit 0
-          fi
+          if grep -Eiq "$severe" "$log"; then rm -f "$log"; echo "status=fail" >>"$GITHUB_OUTPUT"; echo "LAS_CANDIDATE3_RESUME_RESULT=FAIL_CLOSED"; exit 1; fi
+          if (( barrier_failed )); then rm -f "$log"; echo "status=fail" >>"$GITHUB_OUTPUT"; echo "LAS_CANDIDATE3_RESUME_RESULT=FAIL_BARRIER"; exit 1; fi
+          if [[ "$rc" -eq 0 ]]; then rm -f "$log"; echo "status=pass" >>"$GITHUB_OUTPUT"; echo "LAS_CANDIDATE3_RESUME_RESULT=PASS"; exit 0; fi
           if (( slice_cut )) && [[ "$rc" -eq 137 || "$rc" -eq 143 ]]; then
-            mapfile -t checkpoint_dirs < <(find "$meta" -type f -name 'vars.chkpt' -printf '%h\n' | sort -u)
+            mapfile -t checkpoint_dirs < <(find "$meta" -type f -name vars.chkpt -printf '%h\n' | sort -u)
             test "${#checkpoint_dirs[@]}" -eq 1; test -f "${checkpoint_dirs[0]}/queue.chkpt"
             rm -f "$log"; echo "status=slice" >>"$GITHUB_OUTPUT"; echo "LAS_CANDIDATE3_RESUME_RESULT=SLICE_CHECKPOINT"; exit 0
           fi
@@ -477,9 +396,8 @@ jobs:
           PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
         run: |
           set -euo pipefail
-          test -n "$PRIVATE_TOKEN"; echo "::add-mask::$PRIVATE_TOKEN"
-          meta="$RUNNER_TEMP/tlc-meta"
-          mapfile -t checkpoint_dirs < <(find "$meta" -type f -name 'vars.chkpt' -printf '%h\n' | sort -u)
+          test -n "$PRIVATE_TOKEN"; echo "::add-mask::$PRIVATE_TOKEN"; meta="$RUNNER_TEMP/tlc-meta"
+          mapfile -t checkpoint_dirs < <(find "$meta" -type f -name vars.chkpt -printf '%h\n' | sort -u)
           test "${#checkpoint_dirs[@]}" -eq 1; test -f "${checkpoint_dirs[0]}/queue.chkpt"
           test -z "$(find "$meta" ! -type f ! -type d -print -quit)"
           java_fp="$(java -version 2>&1 | sha256sum | awk '{print $1}')"; nproc_fp="$(nproc)"
@@ -494,10 +412,8 @@ jobs:
             "$EXPECTED_TLC_MAP_SHA256" "$TARGET_INDEX" "$PROFILE_BINDING_SHA256" | sha256sum | awk '{print $1}')"
           LAS_CHECKPOINT_SECRET="$(printf '%s\0%s\0enc' "$PRIVATE_TOKEN" "$context" | sha256sum | awk '{print $1}')"
           LAS_CHECKPOINT_MAC_KEY="$(printf '%s\0%s\0mac' "$PRIVATE_TOKEN" "$context" | sha256sum | awk '{print $1}')"
-          tar -C "$RUNNER_TEMP" -cf - tlc-meta | gzip -1 | \
-            openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt -pass env:LAS_CHECKPOINT_SECRET -out "$RUNNER_TEMP/checkpoint.tar.gz.enc"
-          openssl dgst -sha256 -mac HMAC -macopt "hexkey:$LAS_CHECKPOINT_MAC_KEY" "$RUNNER_TEMP/checkpoint.tar.gz.enc" | \
-            awk '{print $NF}' >"$RUNNER_TEMP/checkpoint.tar.gz.enc.hmac"
+          tar -C "$RUNNER_TEMP" -cf - tlc-meta | gzip -1 | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt -pass env:LAS_CHECKPOINT_SECRET -out "$RUNNER_TEMP/checkpoint.tar.gz.enc"
+          openssl dgst -sha256 -mac HMAC -macopt "hexkey:$LAS_CHECKPOINT_MAC_KEY" "$RUNNER_TEMP/checkpoint.tar.gz.enc" | awk '{print $NF}' >"$RUNNER_TEMP/checkpoint.tar.gz.enc.hmac"
           test -s "$RUNNER_TEMP/checkpoint.tar.gz.enc"; test -s "$RUNNER_TEMP/checkpoint.tar.gz.enc.hmac"
           echo "LAS_CANDIDATE3_RESUME_CHECKPOINT_BYTES=$(stat -c '%s' "$RUNNER_TEMP/checkpoint.tar.gz.enc")"
           unset PRIVATE_TOKEN LAS_CHECKPOINT_SECRET LAS_CHECKPOINT_MAC_KEY context java_fp nproc_fp
@@ -523,26 +439,23 @@ jobs:
           set -euo pipefail
           next="$((SEGMENT + 1))"; artifact="candidate3-resume-state-${TARGET_INDEX}-${SEGMENT}"
           ref_json="$RUNNER_TEMP/continuation-ref.json"
-          curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
-            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
+          curl --proto '=https' --tlsv1.2 --fail-with-body -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/git/ref/heads/$CONTINUATION_REF" >"$ref_json"
           test "$(python3 - "$ref_json" <<'PY'
-          import json, sys
-          print(json.load(open(sys.argv[1], encoding='utf-8'))['object']['sha'])
+          import json,sys
+          print(json.load(open(sys.argv[1],encoding='utf-8'))['object']['sha'])
           PY
           )" = "$GITHUB_SHA"
           rm -f "$ref_json"
           payload="$(python3 - "$CONTINUATION_REF" "$TARGET_INDEX" "$next" "$GITHUB_RUN_ID" "$artifact" <<'PY'
-          import json, sys
-          print(json.dumps({'ref':sys.argv[1], 'inputs':{'index':sys.argv[2], 'segment':sys.argv[3], 'resume_run_id':sys.argv[4], 'resume_artifact':sys.argv[5]}}))
+          import json,sys
+          print(json.dumps({'ref':sys.argv[1],'inputs':{'index':sys.argv[2],'segment':sys.argv[3],'resume_run_id':sys.argv[4],'resume_artifact':sys.argv[5]}}))
           PY
           )"
           curl --proto '=https' --tlsv1.2 --fail-with-body -sS -X POST \
             -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/$ORCHESTRATOR_WORKFLOW/dispatches" \
-            -d "$payload"
-          echo "LAS_CANDIDATE3_RESUME_NEXT_SEGMENT=$next"
-          echo "LAS_CANDIDATE3_RESUME_DISPATCH=PASS"
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/$DISPATCH_WORKFLOW/dispatches" -d "$payload"
+          echo "LAS_CANDIDATE3_RESUME_NEXT_SEGMENT=$next"; echo "LAS_CANDIDATE3_RESUME_DISPATCH=PASS"
 
       - name: Write terminal public-safe attestation
         if: steps.tlc.outputs.status == 'pass'
@@ -550,8 +463,8 @@ jobs:
         run: |
           set -euo pipefail
           out="$RUNNER_TEMP/candidate3-terminal-attestation.txt"
-          printf 'schema=candidate3-resumable-terminal-v1\nrunner=%s\noriginal_run=%s\nsnapshot=%s\ntree=%s\nverifier=%s\nmap=%s\nindex=%s\nprofile=%s\nsegment=%s\nmode=%s\nresult=PASS\n' \
-            "$GITHUB_SHA" "$ORIGINAL_RUN_ID" "$EXPECTED_PRIVATE_SNAPSHOT_PROOF" "$EXPECTED_PRIVATE_TREE_PROOF" "$EXPECTED_VERIFIER_BLOB" \
+          printf 'schema=candidate3-resumable-terminal-v1\nrunner=%s\nproducer_run=%s\noriginal_run=%s\nsnapshot=%s\ntree=%s\nverifier=%s\nmap=%s\nindex=%s\nprofile=%s\nsegment=%s\nmode=%s\nresult=PASS\n' \
+            "$GITHUB_SHA" "$GITHUB_RUN_ID" "$ORIGINAL_RUN_ID" "$EXPECTED_PRIVATE_SNAPSHOT_PROOF" "$EXPECTED_PRIVATE_TREE_PROOF" "$EXPECTED_VERIFIER_BLOB" \
             "$EXPECTED_TLC_MAP_SHA256" "$TARGET_INDEX" "$PROFILE_BINDING_SHA256" "$SEGMENT" "$MODE" >"$out"
           test -s "$out"
           echo "LAS_CANDIDATE3_RESUME_TERMINAL_SHA256=$(sha256sum "$out" | awk '{print $1}')"
