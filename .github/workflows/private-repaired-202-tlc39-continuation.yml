@@ -47,7 +47,7 @@ env:
   TLC_WORKERS: "4"
   CHECKPOINT_SCHEMA: candidate3-tlc39-periodic-barrier-v2
   CONTINUATION_REF: verify/candidate3-tlc39-continuation-20261016
-  CONTINUATION_WORKFLOW_PATH: .github/workflows/private-repaired-202-tlc39-continuation.yml
+  CONTINUATION_WORKFLOW_PATH: private-repaired-202-tlc39-continuation.yml
   SLICE_SECONDS: "12600"
   CHECKPOINT_GRACE_SECONDS: "900"
   INITIAL_MIN_FREE_KB: "67108864"
