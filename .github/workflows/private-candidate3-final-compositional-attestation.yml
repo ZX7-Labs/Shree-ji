@@ -1,0 +1,481 @@
+name: Candidate3 exact compositional formal attestation
+
+on:
+  push:
+    branches:
+      - "verify/candidate3-final-attestation-20261016"
+    paths:
+      - "RUN_CANDIDATE3_FINAL_ATTESTATION_20261016"
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  SOURCE_RUN_ID: "38829095332"
+  SOURCE_BRANCH: "verify/candidate3-tlc-20261016"
+  SOURCE_HEAD: "55471ace6dd056674830ea7764ed6d088faacaa1"
+  SOURCE_WORKFLOW_PATH: ".github/workflows/private-candidate3-tlc-20261016.yml"
+  SOURCE_WORKFLOW_BLOB: "e019bd29322d7cbac67df7e0b4366000018311a3"
+  PRE_TLC_RUN_ID: "38828110294"
+  PRE_TLC_BRANCH: "verify/candidate3-pre-tlc-20261016"
+  PRE_TLC_HEAD: "9c99ebb14e302ef8862f1117d765e7a4edafb198"
+  PRE_TLC_WORKFLOW_PATH: ".github/workflows/private-candidate3-pre-tlc-20261016.yml"
+  PRE_TLC_WORKFLOW_BLOB: "c124c1120e6e1b9bf49115db2d7f8fd149acb580"
+  WAVE1_INITIAL_RUN_ID: "38869658517"
+  WAVE1_WORKFLOW_ID: "386441264"
+  WAVE1_BRANCH: "verify/candidate3-resumable-20261016"
+  WAVE1_HEAD: "f0032762c8b83c874000ff14fb986ed6e4add338"
+  WAVE1_WORKFLOW_PATH: ".github/workflows/private-candidate3-resumable-tlc.yml"
+  WAVE1_WORKFLOW_BLOB: "dcdd008ae8993ff9a4861f4ca126f3cd3d73e1ba"
+  WAVE1_SLICE_PATH: ".github/workflows/_private-candidate3-resumable-tlc-slice.yml"
+  WAVE1_SLICE_BLOB: "95fe6fd11b9a24b0a97fdcf9ce66527734079926"
+  WAVE2_INITIAL_RUN_ID: "38871420457"
+  WAVE2_WORKFLOW_ID: "386453967"
+  WAVE2_BRANCH: "verify/candidate3-resumable-wave2-20261016"
+  WAVE2_HEAD: "b50b00f32f5a25f21880da9b4056b496b435f950"
+  WAVE2_WORKFLOW_PATH: ".github/workflows/private-candidate3-resumable-wave2-114.yml"
+  WAVE2_WORKFLOW_BLOB: "a4c590c5b6d69871a839d11bc6e28d8c60cfdf44"
+  EXPECTED_TIMEOUT_INDICES: "28,29,36,39,109,114"
+  EXPECTED_PROFILE_COUNT: "202"
+
+jobs:
+  attest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Verify exact 202-profile compositional closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import datetime as dt
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          import urllib.parse
+          import urllib.request
+
+          REPO = os.environ['GITHUB_REPOSITORY']
+          API = f'https://api.github.com/repos/{REPO}'
+          TOKEN = os.environ['GH_TOKEN']
+
+          def fail(msg):
+              raise SystemExit(msg)
+
+          def api_json(path):
+              req = urllib.request.Request(
+                  API + path,
+                  headers={
+                      'Authorization': f'Bearer {TOKEN}',
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'candidate3-final-attestation',
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  return json.load(response)
+
+          def jobs(run_id):
+              out = []
+              page = 1
+              while True:
+                  payload = api_json(f'/actions/runs/{run_id}/jobs?per_page=100&page={page}')
+                  batch = payload.get('jobs', [])
+                  out.extend(batch)
+                  if len(batch) < 100:
+                      break
+                  page += 1
+                  if page > 10:
+                      fail('job pagination exceeded bound')
+              by_id = {job['id']: job for job in out}
+              if len(by_id) != len(out):
+                  fail(f'run {run_id}: duplicate job IDs across pagination')
+              return out
+
+          def workflow_runs(workflow_id, branch):
+              out = []
+              page = 1
+              encoded_branch = urllib.parse.quote(branch, safe='')
+              while True:
+                  payload = api_json(f'/actions/workflows/{workflow_id}/runs?branch={encoded_branch}&per_page=100&page={page}')
+                  batch = payload.get('workflow_runs', [])
+                  out.extend(batch)
+                  if len(batch) < 100:
+                      break
+                  page += 1
+                  if page > 10:
+                      fail('run pagination exceeded bound')
+              return out
+
+          def step(job, name):
+              matches = [s for s in (job.get('steps') or []) if s.get('name') == name]
+              if len(matches) != 1:
+                  fail(f"{job.get('name')}: expected one step {name!r}, found {len(matches)}")
+              return matches[0]
+
+          def require_step(job, name, conclusion):
+              s = step(job, name)
+              if s.get('status') != 'completed' or s.get('conclusion') != conclusion:
+                  fail(f"{job.get('name')}: step {name!r} expected {conclusion}, got {s.get('status')}/{s.get('conclusion')}")
+              return s
+
+          def completed_success(job):
+              if job.get('status') != 'completed' or job.get('conclusion') != 'success':
+                  fail(f"job {job.get('name')} is not completed/success")
+
+          def job_log(job_id):
+              env = os.environ.copy()
+              env['GH_TOKEN'] = TOKEN
+              try:
+                  data = subprocess.check_output(
+                      ['gh', 'api', f'repos/{REPO}/actions/jobs/{job_id}/logs'],
+                      env=env,
+                      stderr=subprocess.STDOUT,
+                      timeout=120,
+                  )
+              except subprocess.CalledProcessError as exc:
+                  fail(f'job {job_id}: log fetch failed: {exc.output.decode(errors="replace")[-500:]}')
+              return data.decode('utf-8', errors='replace')
+
+          def require_marker(job, marker):
+              log = job_log(job['id'])
+              if marker not in log:
+                  fail(f"job {job['id']} {job.get('name')}: missing marker {marker}")
+              return log
+
+          def env_from_log(log, key):
+              # GitHub runner emits resolved job/step env as timestamped `  KEY: value` lines.
+              pattern = re.compile(rf'(?m)^\S+\s+  {re.escape(key)}: (.*)$')
+              values = [m.group(1).strip() for m in pattern.finditer(log)]
+              values = [v for v in values if v and '${{' not in v]
+              if not values:
+                  fail(f'missing resolved log env {key}')
+              if len(set(values)) != 1:
+                  fail(f'ambiguous log env {key}: {sorted(set(values))}')
+              return values[0]
+
+          def verify_ref(branch, expected_sha):
+              encoded = urllib.parse.quote(f'heads/{branch}', safe='/')
+              payload = api_json(f'/git/ref/{encoded}')
+              actual = payload.get('object', {}).get('sha')
+              if actual != expected_sha:
+                  fail(f'ref drift: {branch}: {actual} != {expected_sha}')
+
+          def verify_blob(path, ref, expected_blob):
+              encoded_path = urllib.parse.quote(path, safe='/')
+              encoded_ref = urllib.parse.quote(ref, safe='')
+              payload = api_json(f'/contents/{encoded_path}?ref={encoded_ref}')
+              if payload.get('type') != 'file' or payload.get('sha') != expected_blob:
+                  fail(f'workflow blob drift: {path}@{ref}')
+
+          def verify_run_identity(run, *, run_id, event, branch, head, path):
+              expected = {
+                  'id': int(run_id),
+                  'event': event,
+                  'run_attempt': 1,
+                  'head_branch': branch,
+                  'head_sha': head,
+                  'path': path,
+              }
+              for key, value in expected.items():
+                  if run.get(key) != value:
+                      fail(f'run {run_id}: identity mismatch {key}: {run.get(key)!r} != {value!r}')
+
+          def elapsed_seconds(job):
+              start = dt.datetime.fromisoformat(job['started_at'].replace('Z', '+00:00'))
+              end = dt.datetime.fromisoformat(job['completed_at'].replace('Z', '+00:00'))
+              return (end - start).total_seconds()
+
+          # Freeze every evidence ref and workflow implementation before composing evidence.
+          verify_ref(os.environ['SOURCE_BRANCH'], os.environ['SOURCE_HEAD'])
+          verify_ref(os.environ['PRE_TLC_BRANCH'], os.environ['PRE_TLC_HEAD'])
+          verify_ref(os.environ['WAVE1_BRANCH'], os.environ['WAVE1_HEAD'])
+          verify_ref(os.environ['WAVE2_BRANCH'], os.environ['WAVE2_HEAD'])
+          verify_blob(os.environ['SOURCE_WORKFLOW_PATH'], os.environ['SOURCE_HEAD'], os.environ['SOURCE_WORKFLOW_BLOB'])
+          verify_blob(os.environ['PRE_TLC_WORKFLOW_PATH'], os.environ['PRE_TLC_HEAD'], os.environ['PRE_TLC_WORKFLOW_BLOB'])
+          verify_blob(os.environ['WAVE1_WORKFLOW_PATH'], os.environ['WAVE1_HEAD'], os.environ['WAVE1_WORKFLOW_BLOB'])
+          verify_blob(os.environ['WAVE1_SLICE_PATH'], os.environ['WAVE1_HEAD'], os.environ['WAVE1_SLICE_BLOB'])
+          verify_blob(os.environ['WAVE2_WORKFLOW_PATH'], os.environ['WAVE2_HEAD'], os.environ['WAVE2_WORKFLOW_BLOB'])
+          print('LAS_FINAL_ATTESTATION_IMMUTABLE_RUNNERS=PASS')
+
+          # Rebind completed pre-TLC evidence independently.
+          pre = api_json(f"/actions/runs/{os.environ['PRE_TLC_RUN_ID']}")
+          verify_run_identity(
+              pre,
+              run_id=os.environ['PRE_TLC_RUN_ID'], event='push', branch=os.environ['PRE_TLC_BRANCH'],
+              head=os.environ['PRE_TLC_HEAD'], path=os.environ['PRE_TLC_WORKFLOW_PATH'],
+          )
+          if pre.get('status') != 'completed' or pre.get('conclusion') != 'success':
+              fail('pre-TLC run not completed/success')
+          pre_jobs = jobs(pre['id'])
+          named_pre = [j for j in pre_jobs if j.get('name') == 'pre_tlc']
+          if len(named_pre) != 1:
+              fail('pre-TLC run does not have exactly one pre_tlc job')
+          completed_success(named_pre[0])
+          print('LAS_FINAL_ATTESTATION_PRE_TLC=PASS')
+
+          # Source 202-profile run: direct successes plus timeout-only cancellations.
+          source = api_json(f"/actions/runs/{os.environ['SOURCE_RUN_ID']}")
+          verify_run_identity(
+              source,
+              run_id=os.environ['SOURCE_RUN_ID'], event='push', branch=os.environ['SOURCE_BRANCH'],
+              head=os.environ['SOURCE_HEAD'], path=os.environ['SOURCE_WORKFLOW_PATH'],
+          )
+          if source.get('status') != 'completed':
+              fail('source 202-profile run is not terminal')
+          source_jobs = jobs(source['id'])
+          bind = [j for j in source_jobs if j.get('name') == 'bind-pre-tlc']
+          if len(bind) != 1:
+              fail('source run missing unique bind-pre-tlc job')
+          completed_success(bind[0])
+          tlc = {}
+          for job in source_jobs:
+              m = re.fullmatch(r'tlc \(([0-9]+)\)', job.get('name', ''))
+              if m:
+                  idx = int(m.group(1))
+                  if idx in tlc:
+                      fail(f'duplicate source TLC index {idx}')
+                  tlc[idx] = job
+          profile_count = int(os.environ['EXPECTED_PROFILE_COUNT'])
+          if set(tlc) != set(range(profile_count)):
+              fail(f'source run TLC inventory is not exactly 0..{profile_count - 1}')
+          timeouts = {int(x) for x in os.environ['EXPECTED_TIMEOUT_INDICES'].split(',')}
+          actual_timeouts = set()
+          for idx, job in tlc.items():
+              recovery = step(job, 'Recover exact frozen private candidate')
+              canonical = step(job, 'Run exact canonical TLC profile')
+              if recovery.get('status') != 'completed' or recovery.get('conclusion') != 'success':
+                  fail(f'profile {idx}: source exact recovery did not succeed')
+              if idx in timeouts:
+                  if job.get('status') != 'completed' or job.get('conclusion') != 'cancelled':
+                      fail(f'profile {idx}: expected timeout cancellation')
+                  if canonical.get('status') != 'completed' or canonical.get('conclusion') != 'cancelled':
+                      fail(f'profile {idx}: canonical TLC was not cancelled')
+                  if elapsed_seconds(job) < 350 * 60:
+                      fail(f'profile {idx}: cancellation before timeout boundary')
+                  actual_timeouts.add(idx)
+              else:
+                  if job.get('status') != 'completed' or job.get('conclusion') != 'success':
+                      fail(f'profile {idx}: direct lane not successful')
+                  if canonical.get('status') != 'completed' or canonical.get('conclusion') != 'success':
+                      fail(f'profile {idx}: canonical TLC not successful')
+          if actual_timeouts != timeouts:
+              fail(f'timeout set mismatch: {sorted(actual_timeouts)} != {sorted(timeouts)}')
+          aggregate = [j for j in source_jobs if j.get('name') == 'aggregate']
+          if len(aggregate) != 1:
+              fail('source aggregate job missing after terminal matrix')
+          completed_success(aggregate[0])
+          require_marker(aggregate[0], 'LAS_VERIFY_ALL_RESULT=NOT_PASS')
+          print(f'LAS_FINAL_ATTESTATION_SOURCE_DIRECT_PASS={profile_count - len(timeouts)}')
+          print(f'LAS_FINAL_ATTESTATION_SOURCE_TIMEOUTS={len(timeouts)}')
+
+          def classify_wave1_slice(job, *, resumed):
+              completed_success(job)
+              require_step(job, 'Validate immutable continuation request', 'success')
+              require_step(job, 'Reclaim runner storage for exhaustive TLC', 'success')
+              require_step(job, 'Recover exact frozen private candidate', 'success')
+              require_step(job, 'Bind exact canonical map and selected profile', 'success')
+              if resumed:
+                  require_step(job, 'Download prior authenticated encrypted checkpoint', 'success')
+                  require_step(job, 'Authenticate and restore prior checkpoint', 'success')
+              else:
+                  require_step(job, 'Download prior authenticated encrypted checkpoint', 'skipped')
+                  require_step(job, 'Authenticate and restore prior checkpoint', 'skipped')
+              require_step(job, 'Run exact canonical resumable TLC slice', 'success')
+              seal = step(job, 'Seal authenticated encrypted checkpoint')
+              upload = step(job, 'Upload authenticated encrypted checkpoint')
+              dispatch = step(job, 'Dispatch next exact slice')
+              log = job_log(job['id'])
+              if resumed:
+                  if 'LAS_CANDIDATE3_RESUME_CHECKPOINT_AUTH=PASS' not in log or 'LAS_CANDIDATE3_RESUME_RECOVER_DIR=PASS' not in log:
+                      fail(f"{job.get('name')}: resumed slice missing authentication/recover markers")
+              if all(s.get('status') == 'completed' and s.get('conclusion') == 'skipped' for s in (seal, upload, dispatch)):
+                  if 'LAS_CANDIDATE3_RESUME_RESULT=PASS' not in log:
+                      fail(f"{job.get('name')}: terminal slice missing PASS marker")
+                  return 'terminal'
+              if all(s.get('status') == 'completed' and s.get('conclusion') == 'success' for s in (seal, upload, dispatch)):
+                  if 'LAS_CANDIDATE3_RESUME_RESULT=SLICE_CHECKPOINT' not in log:
+                      fail(f"{job.get('name')}: checkpoint slice missing SLICE_CHECKPOINT marker")
+                  return 'slice'
+              fail(f"{job.get('name')}: invalid seal/upload/dispatch state")
+
+          # Wave1 initial exact five-profile recovery.
+          wave1_initial = api_json(f"/actions/runs/{os.environ['WAVE1_INITIAL_RUN_ID']}")
+          verify_run_identity(
+              wave1_initial,
+              run_id=os.environ['WAVE1_INITIAL_RUN_ID'], event='push', branch=os.environ['WAVE1_BRANCH'],
+              head=os.environ['WAVE1_HEAD'], path=os.environ['WAVE1_WORKFLOW_PATH'],
+          )
+          if wave1_initial.get('status') != 'completed' or wave1_initial.get('conclusion') != 'success':
+              fail('wave1 initial run not completed/success')
+          w1_jobs = jobs(wave1_initial['id'])
+          preflight = [j for j in w1_jobs if j.get('name') == 'bind-source-timeouts']
+          if len(preflight) != 1:
+              fail('wave1 missing unique source-timeout preflight')
+          completed_success(preflight[0])
+          wave1_indices = {28, 29, 36, 39, 109}
+          initial_w1 = {}
+          for idx in wave1_indices:
+              name = f'launch ({idx}) / slice'
+              found = [j for j in w1_jobs if j.get('name') == name]
+              if len(found) != 1:
+                  fail(f'wave1 initial missing unique {name}')
+              initial_w1[idx] = found[0]
+
+          w1_dispatch_runs = [
+              r for r in workflow_runs(int(os.environ['WAVE1_WORKFLOW_ID']), os.environ['WAVE1_BRANCH'])
+              if r.get('event') == 'workflow_dispatch'
+          ]
+          w1_segments = {}
+          for run in w1_dispatch_runs:
+              if run.get('head_sha') != os.environ['WAVE1_HEAD'] or run.get('path') != os.environ['WAVE1_WORKFLOW_PATH'] or run.get('run_attempt') != 1:
+                  fail(f"wave1 dispatch run {run.get('id')} identity drift")
+              if run.get('status') != 'completed' or run.get('conclusion') != 'success':
+                  fail(f"wave1 dispatch run {run.get('id')} not completed/success")
+              rjobs = jobs(run['id'])
+              validate = [j for j in rjobs if j.get('name') == 'validate-resume']
+              slice_jobs = [j for j in rjobs if j.get('name') == 'resume / slice']
+              if len(validate) != 1 or len(slice_jobs) != 1:
+                  fail(f"wave1 dispatch run {run['id']} missing validation/slice jobs")
+              completed_success(validate[0])
+              vlog = job_log(validate[0]['id'])
+              idx = int(env_from_log(vlog, 'TARGET_INDEX'))
+              segment = int(env_from_log(vlog, 'SEGMENT'))
+              prior = int(env_from_log(vlog, 'RESUME_RUN_ID'))
+              artifact = env_from_log(vlog, 'RESUME_ARTIFACT')
+              if idx not in wave1_indices or segment < 2:
+                  fail(f"wave1 run {run['id']}: invalid index/segment")
+              expected_artifact = f'candidate3-state-{idx}-{segment - 1}'
+              if artifact != expected_artifact:
+                  fail(f"wave1 run {run['id']}: artifact lineage mismatch")
+              key = (idx, segment)
+              if key in w1_segments:
+                  fail(f'duplicate wave1 continuation {key}')
+              w1_segments[key] = (run, slice_jobs[0], prior)
+
+          used_w1 = set()
+          for idx in sorted(wave1_indices):
+              kind = classify_wave1_slice(initial_w1[idx], resumed=False)
+              previous_run = int(os.environ['WAVE1_INITIAL_RUN_ID'])
+              segment = 2
+              while kind == 'slice':
+                  if segment > 64:
+                      fail(f'wave1 profile {idx}: continuation exceeded 64 segments')
+                  key = (idx, segment)
+                  if key not in w1_segments:
+                      fail(f'wave1 profile {idx}: missing continuation segment {segment}')
+                  run, slice_job, prior = w1_segments[key]
+                  if prior != previous_run:
+                      fail(f'wave1 profile {idx} segment {segment}: prior run lineage mismatch')
+                  used_w1.add(key)
+                  kind = classify_wave1_slice(slice_job, resumed=True)
+                  previous_run = run['id']
+                  segment += 1
+              print(f'LAS_FINAL_ATTESTATION_WAVE1_PROFILE_{idx}=PASS')
+          if used_w1 != set(w1_segments):
+              fail(f'unconsumed/extra wave1 continuation runs: {sorted(set(w1_segments) - used_w1)}')
+
+          def classify_wave2_slice(job, *, resumed):
+              completed_success(job)
+              require_step(job, 'Validate immutable wave2 request', 'success')
+              if not resumed:
+                  require_step(job, 'Bind exact source profile 114 timeout', 'success')
+              else:
+                  require_step(job, 'Bind exact source profile 114 timeout', 'skipped')
+              require_step(job, 'Reclaim runner storage for exhaustive TLC', 'success')
+              require_step(job, 'Recover exact frozen private candidate', 'success')
+              require_step(job, 'Bind exact canonical map and profile 114', 'success')
+              if resumed:
+                  require_step(job, 'Download prior authenticated encrypted checkpoint', 'success')
+                  require_step(job, 'Authenticate and restore prior checkpoint', 'success')
+              else:
+                  require_step(job, 'Download prior authenticated encrypted checkpoint', 'skipped')
+                  require_step(job, 'Authenticate and restore prior checkpoint', 'skipped')
+              require_step(job, 'Run exact canonical resumable TLC slice', 'success')
+              seal = step(job, 'Seal authenticated encrypted checkpoint')
+              upload = step(job, 'Upload authenticated encrypted checkpoint')
+              dispatch = step(job, 'Dispatch next exact slice')
+              log = job_log(job['id'])
+              if resumed:
+                  if 'LAS_CANDIDATE3_WAVE2_CHECKPOINT_AUTH=PASS' not in log or 'LAS_CANDIDATE3_WAVE2_RECOVER_DIR=PASS' not in log:
+                      fail('wave2 resumed slice missing authentication/recover markers')
+              if all(s.get('status') == 'completed' and s.get('conclusion') == 'skipped' for s in (seal, upload, dispatch)):
+                  if 'LAS_CANDIDATE3_WAVE2_RESULT=PASS' not in log:
+                      fail('wave2 terminal slice missing PASS marker')
+                  return 'terminal'
+              if all(s.get('status') == 'completed' and s.get('conclusion') == 'success' for s in (seal, upload, dispatch)):
+                  if 'LAS_CANDIDATE3_WAVE2_RESULT=SLICE_CHECKPOINT' not in log:
+                      fail('wave2 checkpoint slice missing SLICE_CHECKPOINT marker')
+                  return 'slice'
+              fail('wave2 invalid seal/upload/dispatch state')
+
+          wave2_initial = api_json(f"/actions/runs/{os.environ['WAVE2_INITIAL_RUN_ID']}")
+          verify_run_identity(
+              wave2_initial,
+              run_id=os.environ['WAVE2_INITIAL_RUN_ID'], event='push', branch=os.environ['WAVE2_BRANCH'],
+              head=os.environ['WAVE2_HEAD'], path=os.environ['WAVE2_WORKFLOW_PATH'],
+          )
+          if wave2_initial.get('status') != 'completed' or wave2_initial.get('conclusion') != 'success':
+              fail('wave2 initial run not completed/success')
+          w2_initial_jobs = jobs(wave2_initial['id'])
+          w2_slice = [j for j in w2_initial_jobs if j.get('name') == 'slice']
+          if len(w2_slice) != 1:
+              fail('wave2 initial run missing unique slice job')
+          kind = classify_wave2_slice(w2_slice[0], resumed=False)
+
+          w2_dispatch_runs = [
+              r for r in workflow_runs(int(os.environ['WAVE2_WORKFLOW_ID']), os.environ['WAVE2_BRANCH'])
+              if r.get('event') == 'workflow_dispatch'
+          ]
+          w2_segments = {}
+          for run in w2_dispatch_runs:
+              if run.get('head_sha') != os.environ['WAVE2_HEAD'] or run.get('path') != os.environ['WAVE2_WORKFLOW_PATH'] or run.get('run_attempt') != 1:
+                  fail(f"wave2 dispatch run {run.get('id')} identity drift")
+              if run.get('status') != 'completed' or run.get('conclusion') != 'success':
+                  fail(f"wave2 dispatch run {run.get('id')} not completed/success")
+              rjobs = jobs(run['id'])
+              found = [j for j in rjobs if j.get('name') == 'slice']
+              if len(found) != 1:
+                  fail(f"wave2 dispatch run {run['id']} missing unique slice job")
+              slog = job_log(found[0]['id'])
+              segment = int(env_from_log(slog, 'SEGMENT'))
+              prior = int(env_from_log(slog, 'RESUME_RUN_ID'))
+              artifact = env_from_log(slog, 'RESUME_ARTIFACT')
+              if segment < 2 or artifact != f'candidate3-wave2-state-114-{segment - 1}':
+                  fail(f"wave2 run {run['id']}: invalid continuation inputs")
+              if segment in w2_segments:
+                  fail(f'duplicate wave2 segment {segment}')
+              w2_segments[segment] = (run, found[0], prior)
+
+          used_w2 = set()
+          previous_run = int(os.environ['WAVE2_INITIAL_RUN_ID'])
+          segment = 2
+          while kind == 'slice':
+              if segment > 64:
+                  fail('wave2 continuation exceeded 64 segments')
+              if segment not in w2_segments:
+                  fail(f'wave2 missing continuation segment {segment}')
+              run, slice_job, prior = w2_segments[segment]
+              if prior != previous_run:
+                  fail(f'wave2 segment {segment}: prior run lineage mismatch')
+              used_w2.add(segment)
+              kind = classify_wave2_slice(slice_job, resumed=True)
+              previous_run = run['id']
+              segment += 1
+          if used_w2 != set(w2_segments):
+              fail(f'unconsumed/extra wave2 continuation runs: {sorted(set(w2_segments) - used_w2)}')
+          print('LAS_FINAL_ATTESTATION_WAVE2_PROFILE_114=PASS')
+
+          covered = (set(range(profile_count)) - timeouts) | wave1_indices | {114}
+          if covered != set(range(profile_count)):
+              fail('composed coverage is not exactly canonical indices 0..201')
+          if wave1_indices | {114} != timeouts:
+              fail('supplemental coverage does not exactly equal source timeout set')
+          print('LAS_FINAL_ATTESTATION_COMPOSED_PROFILE_COUNT=202')
+          print('LAS_VERIFY_ALL_RESULT=PASS')
+          PY
