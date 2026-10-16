@@ -1,0 +1,425 @@
+name: Candidate3 exact multi-gap TLC closure 20261016
+
+on:
+  push:
+    branches: [verify/candidate3-tlc-closure-20261016]
+    paths:
+      - RUN_CANDIDATE3_TLC_CLOSURE_20261016
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: candidate3-exact-tlc-closure-20261016
+  cancel-in-progress: false
+
+env:
+  SOURCE_RUN_ID: "38829095332"
+  EXPECTED_SOURCE_HEAD: 55471ace6dd056674830ea7764ed6d088faacaa1
+  EXPECTED_SOURCE_BRANCH: verify/candidate3-tlc-20261016
+  SOURCE_WORKFLOW_PATH: .github/workflows/private-candidate3-tlc-20261016.yml
+  EXPECTED_SOURCE_WORKFLOW_BLOB: e019bd29322d7cbac67df7e0b4366000018311a3
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 269a9a8c7afae986f8065e93745c9017f848292a118b2b9d006d007cbdb6b1f8
+  EXPECTED_PRIVATE_TREE_PROOF: 6998e8e80e6c8fb86fbac5e4c512af441f827b4536aa5448dfed6aa14568468e
+  EXPECTED_VERIFIER_BLOB: 62e3e6dc0fad5dddc7fb0a453a3cd681d911e590
+  EXPECTED_TLC_MAP_SHA256: da7bb51d531d0e5e5e6994c80be8f254a110cb8181e6121e3a557fdff9428cee
+  MARKER_PATH: RUN_CANDIDATE3_TLC_CLOSURE_20261016
+  CLOSURE_WORKFLOW_PATH: .github/workflows/private-candidate3-tlc-closure-20261016.yml
+
+  GENERIC_REF: verify/candidate3-tlc-resume-20261016
+  GENERIC_SHA: 19662fd988cbb1fbb854f8d568cff3193d66e3e4
+  GENERIC_WORKFLOW: private-assurance-slow-tlc-continuation.yml
+  GENERIC_WORKFLOW_PATH: .github/workflows/private-assurance-slow-tlc-continuation.yml
+  GENERIC_WORKFLOW_BLOB: 12468a5d5d7b7e6a7b7eade5b5902431f50a2ed2
+
+  TLC39_REF: verify/candidate3-tlc39-continuation-20261016
+  TLC39_SHA: e592543555a06eedf65c0b926a10801c972b6765
+  TLC39_WORKFLOW: private-repaired-202-tlc39-continuation.yml
+  TLC39_WORKFLOW_PATH: .github/workflows/private-repaired-202-tlc39-continuation.yml
+  TLC39_WORKFLOW_BLOB: abf8ea1d01e8a84a03281216074da1249e6a0592
+
+jobs:
+  close:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Verify exact direct and resumable TLC evidence composition
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import re
+          import urllib.parse
+          import urllib.request
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          api = f'https://api.github.com/repos/{repo}'
+
+          class StripAuthOnCrossHostRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+                  if redirected is None:
+                      return None
+                  if urllib.parse.urlsplit(req.full_url).netloc != urllib.parse.urlsplit(newurl).netloc:
+                      redirected.remove_header('Authorization')
+                      redirected.remove_header('X-GitHub-Api-Version')
+                      redirected.remove_header('Accept')
+                  return redirected
+
+          log_opener = urllib.request.build_opener(StripAuthOnCrossHostRedirect())
+
+          def request(url):
+              req = urllib.request.Request(
+                  url,
+                  headers={
+                      'Authorization': f'Bearer {token}',
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'candidate3-tlc-closure',
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  raw = response.read()
+                  return None if not raw else json.loads(raw)
+
+          def get(url):
+              value = request(url)
+              if not isinstance(value, dict):
+                  raise SystemExit(f'unexpected non-object response: {url}')
+              return value
+
+          def contents(path, ref):
+              encoded_path = urllib.parse.quote(path, safe='/')
+              encoded_ref = urllib.parse.quote(ref, safe='')
+              meta = get(f'{api}/contents/{encoded_path}?ref={encoded_ref}')
+              if meta.get('type') != 'file' or meta.get('encoding') != 'base64':
+                  raise SystemExit(f'unexpected contents response: {path}@{ref}')
+              raw = base64.b64decode(meta['content'].replace('\n', ''), validate=True)
+              return meta, raw.decode('utf-8')
+
+          def ref_sha(ref):
+              data = get(f'{api}/git/ref/heads/{ref}')
+              return data.get('object', {}).get('sha')
+
+          def jobs(run_id):
+              out = []
+              for page in range(1, 5):
+                  data = get(f'{api}/actions/runs/{run_id}/jobs?filter=latest&per_page=100&page={page}')
+                  batch = data.get('jobs')
+                  if not isinstance(batch, list):
+                      raise SystemExit(f'job list malformed for run {run_id}')
+                  out.extend(batch)
+                  if len(batch) < 100:
+                      break
+              return out
+
+          def runs(workflow, branch):
+              out = []
+              for page in range(1, 6):
+                  params = urllib.parse.urlencode({'branch': branch, 'per_page': '100', 'page': str(page)})
+                  data = get(f'{api}/actions/workflows/{urllib.parse.quote(workflow, safe="")}/runs?{params}')
+                  batch = data.get('workflow_runs')
+                  if not isinstance(batch, list):
+                      raise SystemExit(f'workflow run list malformed: {workflow}')
+                  out.extend(batch)
+                  if len(batch) < 100:
+                      break
+              return out
+
+          def job_log(job_id):
+              req = urllib.request.Request(
+                  f'{api}/actions/jobs/{job_id}/logs',
+                  headers={
+                      'Authorization': f'Bearer {token}',
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'candidate3-tlc-closure',
+                  },
+              )
+              with log_opener.open(req, timeout=60) as response:
+                  return response.read().decode('utf-8', errors='replace')
+
+          stamp = re.compile(r'^\d{4}-\d{2}-\d{2}T\S+Z (.*)$')
+          def emitted(log):
+              return [m.group(1) for line in log.splitlines() if (m := stamp.match(line))]
+
+          def one(lines, pattern, label):
+              rx = re.compile(pattern)
+              values = [m.group(1) for line in lines if (m := rx.fullmatch(line))]
+              if len(values) != 1:
+                  raise SystemExit(f'missing/ambiguous marker: {label}')
+              return values[0]
+
+          def step_map(job):
+              return {s.get('name'): (s.get('status'), s.get('conclusion')) for s in job.get('steps', [])}
+
+          # Closure trigger must be a marker-only commit over an unchanged reviewed workflow.
+          before = os.environ.get('GITHUB_EVENT_BEFORE', '')
+          after = os.environ['GITHUB_SHA']
+          if not re.fullmatch(r'[0-9a-f]{40}', before) or not re.fullmatch(r'[0-9a-f]{40}', after):
+              raise SystemExit('invalid closure trigger SHAs')
+          compare = get(f'{api}/compare/{before}...{after}')
+          files = compare.get('files')
+          commits = compare.get('commits')
+          if not isinstance(files, list) or len(files) != 1 or not isinstance(commits, list) or len(commits) != 1:
+              raise SystemExit('closure trigger must be one commit changing one file')
+          if files[0].get('filename') != os.environ['MARKER_PATH'] or files[0].get('status') != 'added':
+              raise SystemExit('closure trigger is not marker-only addition')
+          before_wf, _ = contents(os.environ['CLOSURE_WORKFLOW_PATH'], before)
+          after_wf, _ = contents(os.environ['CLOSURE_WORKFLOW_PATH'], after)
+          if before_wf.get('sha') != after_wf.get('sha'):
+              raise SystemExit('closure workflow changed in trigger commit')
+          if ref_sha(os.environ['GITHUB_REF_NAME']) != after:
+              raise SystemExit('closure branch moved after trigger')
+
+          _, marker_text = contents(os.environ['MARKER_PATH'], after)
+          lines = marker_text.splitlines()
+          if len(lines) != 3 or lines[0] != 'schema=candidate3-tlc-closure-v1' or lines[1] != f'source_run={os.environ["SOURCE_RUN_ID"]}':
+              raise SystemExit('closure marker header invalid')
+          match = re.fullmatch(r'gaps=([0-9]+(?:,[0-9]+)*)', lines[2])
+          if not match:
+              raise SystemExit('closure marker gap syntax invalid')
+          gaps = [int(x) for x in match.group(1).split(',')]
+          if gaps != sorted(set(gaps)) or any(i < 0 or i >= 202 for i in gaps) or 39 not in gaps:
+              raise SystemExit('closure marker gap set invalid')
+          gap_set = set(gaps)
+
+          # Frozen recovery identities must remain exactly the ones launched.
+          for ref, sha, path, blob in (
+              (os.environ['GENERIC_REF'], os.environ['GENERIC_SHA'], os.environ['GENERIC_WORKFLOW_PATH'], os.environ['GENERIC_WORKFLOW_BLOB']),
+              (os.environ['TLC39_REF'], os.environ['TLC39_SHA'], os.environ['TLC39_WORKFLOW_PATH'], os.environ['TLC39_WORKFLOW_BLOB']),
+          ):
+              if ref_sha(ref) != sha:
+                  raise SystemExit(f'recovery ref drift: {ref}')
+              meta, _ = contents(path, sha)
+              if meta.get('sha') != blob:
+                  raise SystemExit(f'recovery workflow blob drift: {path}')
+          print('LAS_CANDIDATE3_CLOSURE_RUNNER_BINDINGS=PASS')
+
+          # Re-prove the settled source evidence and exact gap set independently.
+          source = get(f'{api}/actions/runs/{os.environ["SOURCE_RUN_ID"]}')
+          expected_source = {
+              'id': int(os.environ['SOURCE_RUN_ID']),
+              'head_sha': os.environ['EXPECTED_SOURCE_HEAD'],
+              'head_branch': os.environ['EXPECTED_SOURCE_BRANCH'],
+              'path': os.environ['SOURCE_WORKFLOW_PATH'],
+              'event': 'push',
+              'run_attempt': 1,
+              'status': 'completed',
+              'conclusion': 'failure',
+          }
+          for key, value in expected_source.items():
+              if source.get(key) != value:
+                  raise SystemExit(f'source run mismatch: {key}')
+          source_wf, _ = contents(os.environ['SOURCE_WORKFLOW_PATH'], os.environ['EXPECTED_SOURCE_HEAD'])
+          if source_wf.get('sha') != os.environ['EXPECTED_SOURCE_WORKFLOW_BLOB']:
+              raise SystemExit('source workflow blob mismatch')
+          source_jobs = jobs(int(os.environ['SOURCE_RUN_ID']))
+          by_name = {}
+          for job in source_jobs:
+              name = job.get('name')
+              if name in by_name:
+                  raise SystemExit(f'duplicate source job: {name}')
+              by_name[name] = job
+          expected_names = {'bind-pre-tlc', 'aggregate'} | {f'tlc ({i})' for i in range(202)}
+          if set(by_name) != expected_names:
+              raise SystemExit('source settled job set mismatch')
+          if by_name['bind-pre-tlc'].get('status') != 'completed' or by_name['bind-pre-tlc'].get('conclusion') != 'success':
+              raise SystemExit('source pre-TLC binding not successful')
+          if by_name['aggregate'].get('status') != 'completed' or by_name['aggregate'].get('conclusion') != 'failure':
+              raise SystemExit('source aggregate failure evidence missing')
+          derived_gaps = []
+          direct_success = 0
+          for index in range(202):
+              job = by_name[f'tlc ({index})']
+              if job.get('status') != 'completed':
+                  raise SystemExit(f'source profile {index} not completed')
+              conclusion = job.get('conclusion')
+              steps = step_map(job)
+              if conclusion == 'success':
+                  if steps.get('Recover exact frozen private candidate') != ('completed', 'success') or steps.get('Run exact canonical TLC profile') != ('completed', 'success'):
+                      raise SystemExit(f'source direct profile {index} step evidence invalid')
+                  direct_success += 1
+              elif conclusion in {'failure', 'cancelled'}:
+                  raw_steps = job.get('steps') or []
+                  if not raw_steps:
+                      if conclusion != 'cancelled' or job.get('runner_id') is not None:
+                          raise SystemExit(f'source unstarted gap {index} invalid')
+                  else:
+                      if steps.get('Recover exact frozen private candidate') != ('completed', 'success'):
+                          raise SystemExit(f'source executed gap {index} recovery invalid')
+                      tlc = steps.get('Run exact canonical TLC profile')
+                      if tlc is None or tlc[0] != 'completed' or tlc[1] not in {'failure', 'cancelled'}:
+                          raise SystemExit(f'source executed gap {index} TLC shape invalid')
+                  derived_gaps.append(index)
+              else:
+                  raise SystemExit(f'source profile {index} unexpected conclusion: {conclusion}')
+          if derived_gaps != gaps or direct_success + len(gaps) != 202:
+              raise SystemExit(f'closure gap-set mismatch: marker={gaps} source={derived_gaps}')
+          print(f'LAS_CANDIDATE3_CLOSURE_DIRECT_SUCCESS={direct_success}')
+          print('LAS_CANDIDATE3_CLOSURE_SOURCE_SET=PASS')
+
+          def validate_run_metadata(run, ref, sha, path):
+              expected = {
+                  'status': 'completed',
+                  'conclusion': 'success',
+                  'run_attempt': 1,
+                  'event': 'workflow_dispatch',
+                  'head_branch': ref,
+                  'head_sha': sha,
+                  'path': path,
+              }
+              for key, value in expected.items():
+                  if run.get(key) != value:
+                      raise SystemExit(f'recovery run {run.get("id")} mismatch: {key}')
+
+          chains = {i: {} for i in gaps}
+
+          # Generic resumable runs: every observed run must belong to exactly one expected non-39 chain.
+          generic_runs = runs(os.environ['GENERIC_WORKFLOW'], os.environ['GENERIC_REF'])
+          if not generic_runs and any(i != 39 for i in gaps):
+              raise SystemExit('missing generic recovery runs')
+          for run in generic_runs:
+              validate_run_metadata(run, os.environ['GENERIC_REF'], os.environ['GENERIC_SHA'], os.environ['GENERIC_WORKFLOW_PATH'])
+              rjobs = jobs(run['id'])
+              if len(rjobs) != 1 or rjobs[0].get('name') != 'slice' or rjobs[0].get('status') != 'completed' or rjobs[0].get('conclusion') != 'success':
+                  raise SystemExit(f'generic recovery run {run["id"]} job shape invalid')
+              job = rjobs[0]
+              steps = step_map(job)
+              for name in ('Bind immutable runner and exact parent gap','Reclaim runner storage for exhaustive TLC','Recover exact frozen private candidate','Bind exact canonical map and selected profile','Run exact canonical TLC continuation slice'):
+                  if steps.get(name) != ('completed', 'success'):
+                      raise SystemExit(f'generic recovery run {run["id"]} required step failed: {name}')
+              log_lines = emitted(job_log(job['id']))
+              index = int(one(log_lines, r'LAS_CANDIDATE3_RESUME_INDEX=([0-9]+)', 'generic index'))
+              segment = int(one(log_lines, r'LAS_CANDIDATE3_RESUME_SEGMENT=([0-9]+)', 'generic segment'))
+              result = one(log_lines, r'LAS_CANDIDATE3_RESUME_RESULT=(PASS|PASS_NEGATIVE_CONTROL|SLICE_CHECKPOINT)', 'generic result')
+              if index == 39 or index not in gap_set or segment < 1:
+                  raise SystemExit(f'unexpected generic recovery identity: {index}/{segment}')
+              required_markers = {'LAS_CANDIDATE3_RESUME_REQUEST=PASS','LAS_CANDIDATE3_RESUME_RECOVERY=PASS','LAS_CANDIDATE3_RESUME_BINDING=PASS'}
+              if required_markers.difference(log_lines):
+                  raise SystemExit(f'generic recovery run {run["id"]} missing binding markers')
+              if any(line.startswith('LAS_CANDIDATE3_RESUME_RESULT=FAIL') for line in log_lines):
+                  raise SystemExit(f'generic recovery run {run["id"]} contains fail marker')
+              if segment == 1:
+                  for name in ('Download prior authenticated encrypted checkpoint','Authenticate and restore prior checkpoint'):
+                      if steps.get(name) != ('completed', 'skipped'):
+                          raise SystemExit(f'generic segment1 restore step not skipped: {run["id"]}')
+              else:
+                  for name in ('Download prior authenticated encrypted checkpoint','Authenticate and restore prior checkpoint'):
+                      if steps.get(name) != ('completed', 'success'):
+                          raise SystemExit(f'generic resumed restore step not successful: {run["id"]}')
+                  if 'LAS_CANDIDATE3_RESUME_CHECKPOINT_AUTH=PASS' not in log_lines or 'LAS_CANDIDATE3_RESUME_RECOVER_DIR=PASS' not in log_lines:
+                      raise SystemExit(f'generic resumed run {run["id"]} missing checkpoint authentication')
+              if segment in chains[index]:
+                  raise SystemExit(f'duplicate generic segment {index}/{segment}')
+              if result == 'SLICE_CHECKPOINT':
+                  for name in ('Seal authenticated encrypted checkpoint','Upload authenticated encrypted checkpoint','Dispatch next exact slice'):
+                      if steps.get(name) != ('completed', 'success'):
+                          raise SystemExit(f'generic nonterminal tail invalid: {run["id"]}/{name}')
+                  if steps.get('Mark terminal continuation result') != ('completed', 'skipped'):
+                      raise SystemExit(f'generic nonterminal terminal-marker step invalid: {run["id"]}')
+                  if 'LAS_CANDIDATE3_RESUME_BARRIER_COMPLETE=1' not in log_lines:
+                      raise SystemExit(f'generic nonterminal barrier evidence missing: {run["id"]}')
+              else:
+                  for name in ('Seal authenticated encrypted checkpoint','Upload authenticated encrypted checkpoint','Dispatch next exact slice'):
+                      if steps.get(name) != ('completed', 'skipped'):
+                          raise SystemExit(f'generic terminal tail not skipped: {run["id"]}/{name}')
+                  if steps.get('Mark terminal continuation result') != ('completed', 'success'):
+                      raise SystemExit(f'generic terminal marker step invalid: {run["id"]}')
+                  if f'LAS_CANDIDATE3_RESUME_TERMINAL_INDEX={index}' not in log_lines or 'LAS_CANDIDATE3_RESUME_TERMINAL=PASS' not in log_lines:
+                      raise SystemExit(f'generic terminal markers missing: {run["id"]}')
+                  if result == 'PASS':
+                      if one(log_lines, r'LAS_CANDIDATE3_RESUME_RC=([0-9]+)', 'generic rc') != '0' or one(log_lines, r'LAS_CANDIDATE3_RESUME_QUEUE=([0-9]+)', 'generic queue') != '0':
+                          raise SystemExit(f'generic positive terminal metrics invalid: {run["id"]}')
+              chains[index][segment] = (result, run['id'])
+
+          # Dedicated TLC39 chain.
+          tlc39_runs = runs(os.environ['TLC39_WORKFLOW'], os.environ['TLC39_REF'])
+          if not tlc39_runs:
+              raise SystemExit('missing TLC39 recovery runs')
+          for run in tlc39_runs:
+              validate_run_metadata(run, os.environ['TLC39_REF'], os.environ['TLC39_SHA'], os.environ['TLC39_WORKFLOW_PATH'])
+              rjobs = jobs(run['id'])
+              if len(rjobs) != 1 or rjobs[0].get('name') != 'slice' or rjobs[0].get('status') != 'completed' or rjobs[0].get('conclusion') != 'success':
+                  raise SystemExit(f'TLC39 run {run["id"]} job shape invalid')
+              job = rjobs[0]
+              steps = step_map(job)
+              for name in ('Bind immutable runner and exact parent TLC39 gap','Reclaim runner storage for exhaustive TLC','Recover exact frozen private candidate','Bind exact canonical map and profile 39','Run exact canonical TLC39 continuation slice'):
+                  if steps.get(name) != ('completed', 'success'):
+                      raise SystemExit(f'TLC39 run {run["id"]} required step failed: {name}')
+              log_lines = emitted(job_log(job['id']))
+              segment = int(one(log_lines, r'LAS_CANDIDATE3_TLC39_SEGMENT=([0-9]+)', 'TLC39 segment'))
+              result = one(log_lines, r'LAS_CANDIDATE3_TLC39_RESULT=(PASS|SLICE_CHECKPOINT)', 'TLC39 result')
+              for marker in ('LAS_CANDIDATE3_TLC39_REQUEST=PASS','LAS_CANDIDATE3_TLC39_RECOVERY=PASS','LAS_CANDIDATE3_TLC39_BINDING=PASS'):
+                  if marker not in log_lines:
+                      raise SystemExit(f'TLC39 run {run["id"]} missing marker {marker}')
+              if any(line.startswith('LAS_CANDIDATE3_TLC39_RESULT=FAIL') for line in log_lines):
+                  raise SystemExit(f'TLC39 run {run["id"]} contains fail marker')
+              if segment == 1:
+                  for name in ('Download prior authenticated encrypted checkpoint','Authenticate and restore prior checkpoint'):
+                      if steps.get(name) != ('completed', 'skipped'):
+                          raise SystemExit(f'TLC39 segment1 restore step not skipped: {run["id"]}')
+              else:
+                  for name in ('Download prior authenticated encrypted checkpoint','Authenticate and restore prior checkpoint'):
+                      if steps.get(name) != ('completed', 'success'):
+                          raise SystemExit(f'TLC39 resumed restore step not successful: {run["id"]}')
+                  if 'LAS_CANDIDATE3_TLC39_CHECKPOINT_AUTH=PASS' not in log_lines or 'LAS_CANDIDATE3_TLC39_RECOVER_DIR=PASS' not in log_lines:
+                      raise SystemExit(f'TLC39 resumed run {run["id"]} missing checkpoint authentication')
+              if segment in chains[39]:
+                  raise SystemExit(f'duplicate TLC39 segment {segment}')
+              if result == 'SLICE_CHECKPOINT':
+                  for name in ('Seal authenticated encrypted checkpoint','Upload authenticated encrypted checkpoint','Dispatch next exact slice'):
+                      if steps.get(name) != ('completed', 'success'):
+                          raise SystemExit(f'TLC39 nonterminal tail invalid: {run["id"]}/{name}')
+                  if steps.get('Mark terminal TLC39 result') != ('completed', 'skipped') or 'LAS_CANDIDATE3_TLC39_BARRIER_COMPLETE=1' not in log_lines:
+                      raise SystemExit(f'TLC39 nonterminal evidence invalid: {run["id"]}')
+              else:
+                  for name in ('Seal authenticated encrypted checkpoint','Upload authenticated encrypted checkpoint','Dispatch next exact slice'):
+                      if steps.get(name) != ('completed', 'skipped'):
+                          raise SystemExit(f'TLC39 terminal tail not skipped: {run["id"]}/{name}')
+                  if steps.get('Mark terminal TLC39 result') != ('completed', 'success'):
+                      raise SystemExit(f'TLC39 terminal marker step invalid: {run["id"]}')
+                  if 'LAS_CANDIDATE3_TLC39_TERMINAL=PASS' not in log_lines or 'LAS_CANDIDATE3_TLC39_TERMINAL_INDEX=39' not in log_lines:
+                      raise SystemExit(f'TLC39 terminal markers missing: {run["id"]}')
+                  if one(log_lines, r'LAS_CANDIDATE3_TLC39_RC=([0-9]+)', 'TLC39 rc') != '0' or one(log_lines, r'LAS_CANDIDATE3_TLC39_QUEUE=([0-9]+)', 'TLC39 queue') != '0':
+                      raise SystemExit(f'TLC39 terminal metrics invalid: {run["id"]}')
+              chains[39][segment] = (result, run['id'])
+
+          # Every source gap must have one contiguous authenticated segment chain ending in one terminal PASS.
+          terminal_runs = {}
+          for index in gaps:
+              chain = chains[index]
+              if not chain:
+                  raise SystemExit(f'missing recovery chain for profile {index}')
+              segments = sorted(chain)
+              if segments != list(range(1, segments[-1] + 1)):
+                  raise SystemExit(f'non-contiguous recovery chain for profile {index}: {segments}')
+              for segment in segments[:-1]:
+                  if chain[segment][0] != 'SLICE_CHECKPOINT':
+                      raise SystemExit(f'profile {index} segment {segment} is not a checkpoint slice')
+              terminal_result, terminal_run = chain[segments[-1]]
+              if terminal_result not in {'PASS', 'PASS_NEGATIVE_CONTROL'}:
+                  raise SystemExit(f'profile {index} terminal result invalid: {terminal_result}')
+              terminal_runs[index] = terminal_run
+              print(f'LAS_CANDIDATE3_CLOSURE_PROFILE={index}:PASS:segments={segments[-1]}:terminal_run={terminal_run}')
+
+          if set(terminal_runs) != gap_set:
+              raise SystemExit('terminal replacement coverage mismatch')
+          if direct_success + len(terminal_runs) != 202:
+              raise SystemExit('final 202-profile coverage arithmetic mismatch')
+          print(f'LAS_CANDIDATE3_TLC_DIRECT_SUCCESS={direct_success}')
+          print(f'LAS_CANDIDATE3_TLC_REPLACEMENT_COUNT={len(terminal_runs)}')
+          print('LAS_CANDIDATE3_TLC_PROFILES_CLOSED=202')
+          print('LAS_CANDIDATE3_TLC_MAP_SHA256=' + os.environ['EXPECTED_TLC_MAP_SHA256'])
+          print('LAS_CANDIDATE3_PRIVATE_SNAPSHOT_PROOF=' + os.environ['EXPECTED_PRIVATE_SNAPSHOT_PROOF'])
+          print('LAS_CANDIDATE3_PRIVATE_TREE_PROOF=' + os.environ['EXPECTED_PRIVATE_TREE_PROOF'])
+          print('LAS_CANDIDATE3_VERIFIER_BLOB=' + os.environ['EXPECTED_VERIFIER_BLOB'])
+          print('LAS_VERIFY_ALL_RESULT=PASS')
+          PY
