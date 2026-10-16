@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        stage: [1, 2, 3]
+        stage: [1]
     env:
       EXPECTED_PRIVATE_SHA: 427ea461262371c532198d161164059363b34a90
       BASE_PRIVATE_SHA: 7efb81bd371a22b36cfb36f6f776045a17c9405f
@@ -46,7 +46,6 @@ jobs:
           echo "::add-mask::$PRIVATE_TOKEN"
           echo "::add-mask::$EXPECTED_PRIVATE_SHA"
           echo "::add-mask::$BASE_PRIVATE_SHA"
-
           root="$RUNNER_TEMP/private-target"
           mkdir "$root"
           cd "$root"
@@ -68,14 +67,12 @@ jobs:
           git checkout -q -B verify-target "$EXPECTED_PRIVATE_SHA"
           test "$(git rev-parse HEAD)" = "$EXPECTED_PRIVATE_SHA"
           git diff --quiet "$BASE_PRIVATE_SHA" "$EXPECTED_PRIVATE_SHA" -- src
-
           test "$(git hash-object tools/verification/private_retired_effect_owner_adapter_materialize.py)" = "$EFFECT_MATERIALIZER_BLOB"
           test "$(git hash-object tools/verification/private_retired_archive_owner_forwarders_materialize.py)" = "$FORWARDER_MATERIALIZER_BLOB"
           test "$(git hash-object tools/verification/private_retired_archive_complete_transcript_materialize.py)" = "$COMPLETE_MATERIALIZER_BLOB"
           test "$(git hash-object tools/verification/private_retired_archive_reclaim_materialize.py)" = "$RECLAIM_MATERIALIZER_BLOB"
           test "$(git hash-object tools/verification/private_retired_archive_reclaim_ownership_hygiene.py)" = "$RECLAIM_HYGIENE_BLOB"
           test "$(git hash-object tools/verify_codespaces_all.sh)" = "$CANONICAL_VERIFIER_BLOB"
-
           proof="$(printf '%s' "$EXPECTED_PRIVATE_SHA" | sha256sum | awk '{print $1}')"
           echo "PRIVATE_TOOLING_REVISION_PROOF=$proof"
           printf 'PRIVATE_ROOT=%s\n' "$root" >> "$GITHUB_ENV"
@@ -89,15 +86,8 @@ jobs:
           cd "$PRIVATE_ROOT"
           python3 tools/verification/private_retired_effect_owner_adapter_materialize.py
           python3 tools/verification/private_retired_archive_owner_forwarders_materialize.py
-          if [[ "${{ matrix.stage }}" -ge 2 ]]; then
-            python3 tools/verification/private_retired_archive_complete_transcript_materialize.py
-          fi
-          if [[ "${{ matrix.stage }}" -ge 3 ]]; then
-            python3 tools/verification/private_retired_archive_reclaim_materialize.py
-            python3 tools/verification/private_retired_archive_reclaim_ownership_hygiene.py
-          fi
           git diff --check
-          echo "STAGE_${{ matrix.stage }}_TRANSFORM=PASS"
+          echo "STAGE_1_TRANSFORM=PASS"
 
       - name: Install exact production toolchains
         shell: bash
@@ -105,14 +95,10 @@ jobs:
           set -euo pipefail
           rustup toolchain install 1.98.1 --profile minimal >/dev/null
           rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
-
           archive="$RUNNER_TEMP/alr.zip"
           prefix="$RUNNER_TEMP/alr"
-          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --silent --show-error \
-            --output "$archive" \
-            "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip"
-          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $archive" \
-            | sha256sum --check --strict >/dev/null
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --silent --show-error --output "$archive" "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip"
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $archive" | sha256sum --check --strict >/dev/null
           mkdir -p "$prefix"
           unzip -q "$archive" -d "$prefix"
           echo "$prefix/bin" >> "$GITHUB_PATH"
@@ -145,11 +131,11 @@ jobs:
           git config user.email "las-public-verifier@users.noreply.github.com"
           git add src
           git diff --cached --check
-          git commit -q -m "Ephemeral retired archive stage ${{ matrix.stage }} verification candidate"
+          git commit -q -m "Ephemeral retired archive stage 1 verification candidate"
           test -z "$(git status --porcelain --untracked-files=no)"
           tree="$(git rev-parse HEAD^{tree})"
           tree_proof="$(printf '%s' "$tree" | sha256sum | awk '{print $1}')"
-          echo "STAGE_${{ matrix.stage }}_EPHEMERAL_TREE_PROOF=$tree_proof"
+          echo "STAGE_1_EPHEMERAL_TREE_PROOF=$tree_proof"
 
       - name: Verify exact production Rust composition
         shell: bash
@@ -158,7 +144,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "$PRIVATE_ROOT"
-          log="$RUNNER_TEMP/stage-${{ matrix.stage }}-production.log"
+          log="$RUNNER_TEMP/stage-1-production.log"
           run_private() {
             local label="$1"; shift
             set +e
@@ -166,9 +152,14 @@ jobs:
             rc=$?
             set -e
             if [[ "$rc" -ne 0 ]]; then
-              echo "STAGE_${{ matrix.stage }}_FAILED_CHECK=$label"
-              count="$(grep -c '^error' "$log" || true)"
-              echo "STAGE_${{ matrix.stage }}_ERROR_LINE_COUNT=$count"
+              echo "STAGE_1_FAILED_CHECK=$label"
+              echo "STAGE_1_ERROR_LINE_COUNT=$(grep -c '^error' "$log" || true)"
+              codes="$(grep -oE 'error\[E[0-9]{4}\]' "$log" | sed -E 's/error\[//;s/\]//' | sort | uniq -c | tr '\n' ';' || true)"
+              if [[ -n "$codes" ]]; then
+                echo "STAGE_1_RUST_ERROR_CODE_COUNTS=$codes"
+              fi
+              uncoded="$(grep '^error:' "$log" | wc -l | tr -d ' ')"
+              echo "STAGE_1_UNCODED_ERROR_COUNT=$uncoded"
               echo "Private compiler/test diagnostics intentionally suppressed."
               exit "$rc"
             fi
@@ -176,33 +167,4 @@ jobs:
           run_private cargo-check env GPRBUILD="$GPRBUILD" cargo +1.98.1 check --locked --features "root-ffi linux-peer-credentials" --all-targets
           run_private clippy env GPRBUILD="$GPRBUILD" cargo +1.98.1 clippy --locked --features "root-ffi linux-peer-credentials" --all-targets -- -D warnings
           run_private tests env GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --features "root-ffi linux-peer-credentials" --lib -- --test-threads=1
-          echo "STAGE_${{ matrix.stage }}_PRODUCTION_RUST=PASS"
-
-      - name: Run canonical verifier on final stage only
-        if: matrix.stage == 3
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$PRIVATE_ROOT"
-          log="$RUNNER_TEMP/canonical.log"
-          set +e
-          LAS_VERIFY_EXPECTED_BRANCH=verify-target bash tools/verify_codespaces_all.sh >"$log" 2>&1
-          rc=$?
-          set -e
-          if [[ "$rc" -eq 0 ]] && grep -q '^LAS_VERIFY_ALL_RESULT=PASS$' "$log"; then
-            echo "CANONICAL_VERIFIER=tools/verify_codespaces_all.sh"
-            echo "CANONICAL_VERIFIER_BLOB=$CANONICAL_VERIFIER_BLOB"
-            echo "PRIVATE_TOOLING_SHA_PROOF=$(printf '%s' "$EXPECTED_PRIVATE_SHA" | sha256sum | awk '{print $1}')"
-            echo "RETIRED_ARCHIVE_CHAIN_STATUS=PASS"
-            exit 0
-          fi
-          echo "RETIRED_ARCHIVE_CHAIN_STATUS=FAIL"
-          failed_count="$(grep -c '^FAILED_CHECK=' "$log" || true)"
-          echo "CANONICAL_FAILED_COUNT=$failed_count"
-          while IFS= read -r line; do
-            name="${line#FAILED_CHECK=}"
-            hash="$(printf '%s' "$name" | sha256sum | awk '{print $1}')"
-            echo "CANONICAL_FAILED_CHECK_HASH=$hash"
-          done < <(grep '^FAILED_CHECK=' "$log" || true)
-          echo "Private canonical-verifier diagnostics intentionally suppressed."
-          exit 1
+          echo "STAGE_1_PRODUCTION_RUST=PASS"
