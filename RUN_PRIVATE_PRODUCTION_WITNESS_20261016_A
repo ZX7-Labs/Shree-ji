@@ -1,0 +1,4 @@
+purpose=exact-read-only-production-witness
+semantics=verification-only
+source=opaque-bound-private-candidate
+privacy=raw-logs-encrypted-on-failure
