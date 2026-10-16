@@ -71,5 +71,4 @@ jobs:
       resume_run_id: ${{ inputs.resume_run_id }}
       resume_artifact: ${{ inputs.resume_artifact }}
       mode: generic
-      orchestrator_workflow: private-assurance-slow-tlc-continuation.yml
     secrets: inherit
