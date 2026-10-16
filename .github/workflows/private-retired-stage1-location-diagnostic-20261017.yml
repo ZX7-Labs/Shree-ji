@@ -49,7 +49,6 @@ jobs:
           cd "$PRIVATE_ROOT"
           python3 tools/verification/private_retired_effect_owner_adapter_materialize.py
           python3 tools/verification/private_retired_archive_owner_forwarders_materialize.py
-          cargo +1.98.1 fmt --all
           git diff --check
           echo "STAGE_1_TRANSFORM=PASS"
 
@@ -79,6 +78,16 @@ jobs:
           EOF
           chmod 0755 "$wrapper"
           printf 'GPRBUILD=%s\n' "$wrapper" >> "$GITHUB_ENV"
+
+      - name: Format candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PRIVATE_ROOT"
+          cargo +1.98.1 fmt --all
+          cargo +1.98.1 fmt --all -- --check
+          git diff --check
+          echo "STAGE_1_FORMAT=PASS"
 
       - name: Emit privacy-safe compiler locations
         shell: bash
