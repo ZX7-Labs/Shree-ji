@@ -1,0 +1,202 @@
+name: Private retired archive chain verification 2026-10-17
+
+on:
+  push:
+    branches:
+      - "verify/retired-archive-chain-20261017"
+    paths:
+      - ".github/workflows/private-retired-archive-chain-20261017.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-retired-archive-chain-20261017
+  cancel-in-progress: false
+
+jobs:
+  verify-stage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        stage: [1, 2, 3]
+    env:
+      EXPECTED_PRIVATE_SHA: 7e853338395c2bb0363f0343d2b05e66fd5d89d4
+      BASE_PRIVATE_SHA: 7efb81bd371a22b36cfb36f6f776045a17c9405f
+      EFFECT_MATERIALIZER_BLOB: bb4f6e5c803b7c64ea27e605659cf998fc942cc2
+      COMPLETE_MATERIALIZER_BLOB: a35184cb70d931c34194e96192b208b8484b7ec9
+      RECLAIM_MATERIALIZER_BLOB: 0b65004b5ec67373ac53127de1193ecbecfba902
+      CANONICAL_VERIFIER_BLOB: 62e3e6dc0fad5dddc7fb0a453a3cd681d911e590
+    steps:
+      - name: Recover exact private tooling revision read-only
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+          echo "::add-mask::$EXPECTED_PRIVATE_SHA"
+          echo "::add-mask::$BASE_PRIVATE_SHA"
+
+          root="$RUNNER_TEMP/private-target"
+          mkdir "$root"
+          cd "$root"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          checkout_log="$RUNNER_TEMP/private-checkout.log"
+          set +e
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$EXPECTED_PRIVATE_SHA" >"$checkout_log" 2>&1
+          head_rc=$?
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$BASE_PRIVATE_SHA" >>"$checkout_log" 2>&1
+          base_rc=$?
+          set -e
+          if [[ "$head_rc" -ne 0 || "$base_rc" -ne 0 ]]; then
+            echo "PRIVATE_EXACT_FETCH=FAIL"
+            echo "Private checkout diagnostics intentionally suppressed."
+            exit 1
+          fi
+          git checkout -q -B verify-target "$EXPECTED_PRIVATE_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_PRIVATE_SHA"
+          git diff --quiet "$BASE_PRIVATE_SHA" "$EXPECTED_PRIVATE_SHA" -- src
+
+          test "$(git hash-object tools/verification/private_retired_effect_owner_adapter_materialize.py)" = "$EFFECT_MATERIALIZER_BLOB"
+          test "$(git hash-object tools/verification/private_retired_archive_complete_transcript_materialize.py)" = "$COMPLETE_MATERIALIZER_BLOB"
+          test "$(git hash-object tools/verification/private_retired_archive_reclaim_materialize.py)" = "$RECLAIM_MATERIALIZER_BLOB"
+          test "$(git hash-object tools/verify_codespaces_all.sh)" = "$CANONICAL_VERIFIER_BLOB"
+
+          proof="$(printf '%s' "$EXPECTED_PRIVATE_SHA" | sha256sum | awk '{print $1}')"
+          echo "PRIVATE_TOOLING_REVISION_PROOF=$proof"
+          printf 'PRIVATE_ROOT=%s\n' "$root" >> "$GITHUB_ENV"
+          unset PRIVATE_TOKEN auth
+          echo "PRIVATE_EXACT_FETCH=PASS"
+
+      - name: Apply exact staged transforms
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PRIVATE_ROOT"
+          python3 tools/verification/private_retired_effect_owner_adapter_materialize.py
+          if [[ "${{ matrix.stage }}" -ge 2 ]]; then
+            python3 tools/verification/private_retired_archive_complete_transcript_materialize.py
+          fi
+          if [[ "${{ matrix.stage }}" -ge 3 ]]; then
+            python3 tools/verification/private_retired_archive_reclaim_materialize.py
+          fi
+          git diff --check
+          echo "STAGE_${{ matrix.stage }}_TRANSFORM=PASS"
+
+      - name: Install exact production toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+
+          archive="$RUNNER_TEMP/alr.zip"
+          prefix="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --silent --show-error \
+            --output "$archive" \
+            "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip"
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $archive" \
+            | sha256sum --check --strict >/dev/null
+          mkdir -p "$prefix"
+          unzip -q "$archive" -d "$prefix"
+          echo "$prefix/bin" >> "$GITHUB_PATH"
+          export PATH="$prefix/bin:$PATH"
+          alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
+          workspace="$RUNNER_TEMP/alire-workspace"
+          mkdir -p "$workspace"
+          cd "$workspace"
+          alr -n init --in-place --no-skel --lib retired_archive_public_verify >/dev/null
+          alr_path="$(command -v alr)"
+          wrapper="$RUNNER_TEMP/gprbuild-via-alire"
+          cat > "$wrapper" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$workspace"
+          exec "$alr_path" exec -- gprbuild "\$@"
+          EOF
+          chmod 0755 "$wrapper"
+          printf 'GPRBUILD=%s\n' "$wrapper" >> "$GITHUB_ENV"
+
+      - name: Format and seal ephemeral candidate revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PRIVATE_ROOT"
+          cargo +1.98.1 fmt --all
+          cargo +1.98.1 fmt --all -- --check
+          git diff --check
+          git config user.name "LAS Public Verification Runner"
+          git config user.email "las-public-verifier@users.noreply.github.com"
+          git add src
+          git diff --cached --check
+          git commit -q -m "Ephemeral retired archive stage ${{ matrix.stage }} verification candidate"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          tree="$(git rev-parse HEAD^{tree})"
+          tree_proof="$(printf '%s' "$tree" | sha256sum | awk '{print $1}')"
+          echo "STAGE_${{ matrix.stage }}_EPHEMERAL_TREE_PROOF=$tree_proof"
+
+      - name: Verify exact production Rust composition
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$PRIVATE_ROOT"
+          log="$RUNNER_TEMP/stage-${{ matrix.stage }}-production.log"
+          run_private() {
+            local label="$1"; shift
+            set +e
+            "$@" >"$log" 2>&1
+            rc=$?
+            set -e
+            if [[ "$rc" -ne 0 ]]; then
+              echo "STAGE_${{ matrix.stage }}_FAILED_CHECK=$label"
+              count="$(grep -c '^error' "$log" || true)"
+              echo "STAGE_${{ matrix.stage }}_ERROR_LINE_COUNT=$count"
+              echo "Private compiler/test diagnostics intentionally suppressed."
+              exit "$rc"
+            fi
+          }
+          run_private cargo-check env GPRBUILD="$GPRBUILD" cargo +1.98.1 check --locked --features "root-ffi linux-peer-credentials" --all-targets
+          run_private clippy env GPRBUILD="$GPRBUILD" cargo +1.98.1 clippy --locked --features "root-ffi linux-peer-credentials" --all-targets -- -D warnings
+          run_private tests env GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --features "root-ffi linux-peer-credentials" --lib -- --test-threads=1
+          echo "STAGE_${{ matrix.stage }}_PRODUCTION_RUST=PASS"
+
+      - name: Run canonical verifier on final stage only
+        if: matrix.stage == 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PRIVATE_ROOT"
+          log="$RUNNER_TEMP/canonical.log"
+          set +e
+          LAS_VERIFY_EXPECTED_BRANCH=verify-target bash tools/verify_codespaces_all.sh >"$log" 2>&1
+          rc=$?
+          set -e
+          if [[ "$rc" -eq 0 ]] && grep -q '^LAS_VERIFY_ALL_RESULT=PASS$' "$log"; then
+            echo "CANONICAL_VERIFIER=tools/verify_codespaces_all.sh"
+            echo "CANONICAL_VERIFIER_BLOB=$CANONICAL_VERIFIER_BLOB"
+            echo "PRIVATE_TOOLING_SHA_PROOF=$(printf '%s' "$EXPECTED_PRIVATE_SHA" | sha256sum | awk '{print $1}')"
+            echo "RETIRED_ARCHIVE_CHAIN_STATUS=PASS"
+            exit 0
+          fi
+          echo "RETIRED_ARCHIVE_CHAIN_STATUS=FAIL"
+          failed_count="$(grep -c '^FAILED_CHECK=' "$log" || true)"
+          echo "CANONICAL_FAILED_COUNT=$failed_count"
+          while IFS= read -r line; do
+            name="${line#FAILED_CHECK=}"
+            hash="$(printf '%s' "$name" | sha256sum | awk '{print $1}')"
+            echo "CANONICAL_FAILED_CHECK_HASH=$hash"
+          done < <(grep '^FAILED_CHECK=' "$log" || true)
+          echo "Private canonical-verifier diagnostics intentionally suppressed."
+          exit 1
