@@ -1,0 +1,320 @@
+name: Candidate3 durable terminal attestation 20261016
+
+on:
+  workflow_dispatch:
+    inputs:
+      terminal_run_id:
+        description: Exact successful Candidate3 continuation run to attest
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: candidate3-terminal-registry-writer-20261016
+  cancel-in-progress: false
+
+env:
+  TERMINAL_RUN_ID: ${{ inputs.terminal_run_id }}
+  RUNNER_REF: verify/candidate3-resumable-tlc-20261016
+  RUNNER_SHA: 43bf26bf734f7b29aa5c8f32c6d2201c4020de7b
+  WRAPPER_PATH: .github/workflows/private-assurance-slow-tlc-continuation.yml
+  WRAPPER_BLOB: 3dc98da64be77f6e9e93bfb98ffda30c90f75894
+  SLICE_PATH: .github/workflows/_private-candidate3-resumable-tlc-slice-20261016.yml
+  SLICE_BLOB: 8c2d62cf3ef50b1d36ccbf337e38322b76900230
+  ORIGINAL_RUN_ID: "38829095332"
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 269a9a8c7afae986f8065e93745c9017f848292a118b2b9d006d007cbdb6b1f8
+  EXPECTED_PRIVATE_TREE_PROOF: 6998e8e80e6c8fb86fbac5e4c512af441f827b4536aa5448dfed6aa14568468e
+  EXPECTED_VERIFIER_BLOB: 62e3e6dc0fad5dddc7fb0a453a3cd681d911e590
+  EXPECTED_TLC_MAP_SHA256: da7bb51d531d0e5e5e6994c80be8f254a110cb8181e6121e3a557fdff9428cee
+  ATTEST_PATH: .github/workflows/private-candidate3-terminal-attestation-20261016.yml
+  REGISTRY_PATH: LAS_CANDIDATE3_TERMINAL_ATTESTATIONS_20261016.json
+  REGISTRY_SCHEMA: las-candidate3-terminal-registry-v1
+  EXPECTED_REPLACEMENTS: "28 29 36 39 109 114 155 156 167 171"
+
+jobs:
+  attest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Revalidate exact terminal run and durably record evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TERMINAL_RUN_ID" =~ ^[0-9]+$ ]]
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          import io
+          import json
+          import os
+          import re
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          import zipfile
+
+          repo=os.environ['GITHUB_REPOSITORY']
+          token=os.environ['GH_TOKEN']
+          api=f"https://api.github.com/repos/{repo}"
+          run_id=int(os.environ['TERMINAL_RUN_ID'])
+          runner_ref=os.environ['RUNNER_REF']
+          runner_sha=os.environ['RUNNER_SHA']
+          wrapper_path=os.environ['WRAPPER_PATH']
+          slice_path=os.environ['SLICE_PATH']
+          replacements={int(x) for x in os.environ['EXPECTED_REPLACEMENTS'].split()}
+
+          class StripAuthOnCrossHostRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  redirected=super().redirect_request(req,fp,code,msg,headers,newurl)
+                  if redirected is None:
+                      return None
+                  if urllib.parse.urlsplit(req.full_url).netloc != urllib.parse.urlsplit(newurl).netloc:
+                      for h in ('Authorization','X-GitHub-Api-Version','Accept'):
+                          redirected.remove_header(h)
+                  return redirected
+          redirect_opener=urllib.request.build_opener(StripAuthOnCrossHostRedirect())
+
+          def req(url, *, method='GET', payload=None, decode_json=True):
+              data=None if payload is None else json.dumps(payload,separators=(',',':')).encode()
+              request=urllib.request.Request(url,data=data,method=method,headers={
+                  'Authorization':f'Bearer {token}',
+                  'Accept':'application/vnd.github+json',
+                  'X-GitHub-Api-Version':'2022-11-28',
+                  'User-Agent':'candidate3-terminal-attestor',
+                  **({'Content-Type':'application/json'} if data is not None else {}),
+              })
+              with urllib.request.urlopen(request,timeout=60) as r:
+                  raw=r.read()
+              if not decode_json:
+                  return raw
+              return None if not raw else json.loads(raw)
+
+          def get(url):
+              value=req(url)
+              if not isinstance(value,dict):
+                  raise SystemExit(f'non-object response: {url}')
+              return value
+
+          def contents(path, ref, optional=False):
+              url=f"{api}/contents/{urllib.parse.quote(path,safe='/')}?ref={urllib.parse.quote(ref,safe='')}"
+              try:
+                  meta=get(url)
+              except urllib.error.HTTPError as exc:
+                  if optional and exc.code==404:
+                      return None
+                  raise
+              if meta.get('type')!='file' or meta.get('encoding')!='base64':
+                  raise SystemExit(f'bad contents object: {path}@{ref}')
+              raw=base64.b64decode(meta['content'].replace('\n',''),validate=True)
+              return meta,raw
+
+          def jobs(rid):
+              out=[]
+              for page in range(1,5):
+                  data=get(f'{api}/actions/runs/{rid}/jobs?filter=latest&per_page=100&page={page}')
+                  batch=data.get('jobs')
+                  if not isinstance(batch,list): raise SystemExit('malformed jobs')
+                  out.extend(batch)
+                  if len(batch)<100: break
+              return out
+
+          def log_bytes(job_id):
+              request=urllib.request.Request(f'{api}/actions/jobs/{job_id}/logs',headers={
+                  'Authorization':f'Bearer {token}','Accept':'application/vnd.github+json',
+                  'X-GitHub-Api-Version':'2022-11-28','User-Agent':'candidate3-terminal-attestor'})
+              with redirect_opener.open(request,timeout=60) as r:
+                  return r.read()
+
+          stamp=re.compile(r'^\d{4}-\d{2}-\d{2}T\S+Z (.*)$')
+          def emitted(raw):
+              lines=[]
+              for line in raw.decode('utf-8',errors='replace').splitlines():
+                  m=stamp.match(line)
+                  if m: lines.append(m.group(1))
+              return lines
+          def one(lines, pattern, label):
+              rx=re.compile(pattern)
+              vals=[m.group(1) for line in lines if (m:=rx.fullmatch(line))]
+              if len(vals)!=1: raise SystemExit(f'missing/ambiguous {label}: {vals}')
+              return vals[0]
+
+          ref=get(f"{api}/git/ref/heads/{urllib.parse.quote(runner_ref,safe='')}")
+          if ref.get('object',{}).get('sha')!=runner_sha: raise SystemExit('runner ref drift')
+          for path,blob in ((wrapper_path,os.environ['WRAPPER_BLOB']),(slice_path,os.environ['SLICE_BLOB'])):
+              meta,_=contents(path,runner_sha)
+              if meta.get('sha')!=blob: raise SystemExit(f'workflow blob drift: {path}')
+          attest_meta,_=contents(os.environ['ATTEST_PATH'],os.environ['GITHUB_SHA'])
+          attestor_blob=attest_meta.get('sha')
+          if not isinstance(attestor_blob,str) or not re.fullmatch(r'[0-9a-f]{40}',attestor_blob): raise SystemExit('attestor workflow blob unavailable')
+
+          run=get(f'{api}/actions/runs/{run_id}')
+          expected={'status':'completed','conclusion':'success','run_attempt':1,'event':'workflow_dispatch',
+                    'head_branch':runner_ref,'head_sha':runner_sha,'path':wrapper_path}
+          for k,v in expected.items():
+              if run.get(k)!=v: raise SystemExit(f'terminal run provenance mismatch: {k}')
+          refs=run.get('referenced_workflows') or []
+          expected_ref_path=f'{repo}/{slice_path}@{runner_sha}'
+          if len(refs)!=1 or refs[0].get('sha')!=runner_sha or refs[0].get('ref')!=f'refs/heads/{runner_ref}' or refs[0].get('path')!=expected_ref_path:
+              raise SystemExit('reusable-workflow provenance mismatch')
+
+          run_jobs=jobs(run_id)
+          by={j.get('name'):j for j in run_jobs}
+          generic_names={'validate','continuation-generic / slice','continuation-profile39'}
+          profile39_names={'validate','continuation-generic','continuation-profile39 / slice'}
+          if len(run_jobs)!=3: raise SystemExit(f'unexpected job count: {len(run_jobs)}')
+          if set(by)==generic_names:
+              mode='generic'; job=by['continuation-generic / slice']; other=by['continuation-profile39']
+          elif set(by)==profile39_names:
+              mode='profile39'; job=by['continuation-profile39 / slice']; other=by['continuation-generic']
+          else:
+              raise SystemExit(f'unexpected job set: {sorted(by)}')
+          if by['validate'].get('conclusion')!='success' or by['validate'].get('status')!='completed':
+              raise SystemExit('validation job not successful')
+          val_steps={s.get('name'):(s.get('status'),s.get('conclusion')) for s in by['validate'].get('steps',[])}
+          if val_steps.get('Validate candidate3 continuation request')!=('completed','success'):
+              raise SystemExit('orchestrator request was not validated')
+          if job.get('status')!='completed' or job.get('conclusion')!='success':
+              raise SystemExit('selected continuation job is not successful')
+          if other.get('status')!='completed' or other.get('conclusion')!='skipped':
+              raise SystemExit('non-selected continuation job is not skipped')
+
+          steps={s.get('name'):(s.get('status'),s.get('conclusion')) for s in job.get('steps',[])}
+          required=(
+              'Validate immutable continuation request',
+              'Bind original cancelled matrix job and pre-TLC evidence',
+              'Reclaim runner storage for exhaustive TLC',
+              'Recover exact frozen private candidate',
+              'Bind exact canonical map and selected positive profile',
+              'Run exact canonical TLC slice with resumable checkpoint barrier',
+              'Write terminal public-safe attestation',
+              'Upload terminal public-safe attestation',
+          )
+          for name in required:
+              if steps.get(name)!=('completed','success'): raise SystemExit(f'required terminal step not successful: {name}')
+          for name in ('Seal authenticated encrypted checkpoint','Upload authenticated encrypted checkpoint','Dispatch next exact slice'):
+              if steps.get(name)!=('completed','skipped'): raise SystemExit(f'terminal run unexpectedly executed continuation tail: {name}')
+
+          raw_log=log_bytes(job['id'])
+          lines=emitted(raw_log)
+          index=int(one(lines,r'LAS_CANDIDATE3_RESUME_INDEX=([0-9]+)','profile index'))
+          segment=int(one(lines,r'LAS_CANDIDATE3_RESUME_SEGMENT=([0-9]+)','segment'))
+          logged_mode=one(lines,r'LAS_CANDIDATE3_RESUME_MODE=(generic|profile39)','mode')
+          profile=one(lines,r'LAS_CANDIDATE3_RESUME_PROFILE_BINDING=([0-9a-f]{64})','profile binding')
+          rc=int(one(lines,r'LAS_CANDIDATE3_RESUME_RC=([0-9]+)','TLC rc'))
+          terminal_sha=one(lines,r'LAS_CANDIDATE3_RESUME_TERMINAL_SHA256=([0-9a-f]{64})','terminal digest')
+          if index not in replacements or segment<1 or rc!=0 or logged_mode!=mode:
+              raise SystemExit('terminal markers violate expected replacement semantics')
+          if (index==39)!=(mode=='profile39'): raise SystemExit('profile39 mode mismatch')
+          required_markers={'LAS_CANDIDATE3_RESUME_RECOVERY=PASS','LAS_CANDIDATE3_RESUME_CANONICAL_ARGS=PASS',
+                            'LAS_CANDIDATE3_RESUME_RESULT=PASS','LAS_CANDIDATE3_RESUME_TERMINAL=PASS'}
+          if required_markers.difference(lines): raise SystemExit('terminal PASS markers incomplete')
+          if any(line.startswith('LAS_CANDIDATE3_RESUME_RESULT=FAIL') or line=='LAS_CANDIDATE3_RESUME_RESULT=SLICE_CHECKPOINT' or line=='LAS_CANDIDATE3_RESUME_BARRIER_TIMEOUT=1' for line in lines):
+              raise SystemExit('terminal log contains fail/slice markers')
+          download=steps.get('Download prior authenticated encrypted checkpoint')
+          restore=steps.get('Authenticate and restore prior checkpoint')
+          if segment==1:
+              if download!=('completed','skipped') or restore!=('completed','skipped'): raise SystemExit('segment1 restore shape mismatch')
+          else:
+              if download!=('completed','success') or restore!=('completed','success'): raise SystemExit('resumed restore steps not successful')
+              for marker in ('LAS_CANDIDATE3_RESUME_CHECKPOINT_AUTH=PASS','LAS_CANDIDATE3_RESUME_TRANSPORT_RECLAIM=PASS','LAS_CANDIDATE3_RESUME_RECOVER_DIR=PASS'):
+                  if marker not in lines: raise SystemExit(f'missing resumed marker: {marker}')
+
+          artifacts=get(f'{api}/actions/runs/{run_id}/artifacts?per_page=100')
+          items=artifacts.get('artifacts')
+          if not isinstance(items,list): raise SystemExit('artifact list malformed')
+          expected_name=f'candidate3-resume-terminal-{index}-{segment}'
+          matches=[a for a in items if a.get('name')==expected_name and not a.get('expired')]
+          if len(matches)!=1: raise SystemExit(f'exact terminal artifact not available: {expected_name}')
+          artifact=matches[0]
+          request=urllib.request.Request(artifact['archive_download_url'],headers={
+              'Authorization':f'Bearer {token}','Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28',
+              'User-Agent':'candidate3-terminal-attestor'})
+          with redirect_opener.open(request,timeout=120) as r:
+              zip_raw=r.read()
+          with zipfile.ZipFile(io.BytesIO(zip_raw)) as zf:
+              names=zf.namelist()
+              if names!=['candidate3-terminal-attestation.txt']: raise SystemExit(f'unexpected terminal artifact members: {names}')
+              attestation=zf.read(names[0])
+          if hashlib.sha256(attestation).hexdigest()!=terminal_sha: raise SystemExit('terminal artifact digest mismatch')
+          text=attestation.decode('utf-8',errors='strict')
+          fields={}
+          for line in text.splitlines():
+              if '=' not in line: raise SystemExit('malformed terminal attestation line')
+              k,v=line.split('=',1)
+              if k in fields: raise SystemExit('duplicate terminal attestation field')
+              fields[k]=v
+          expected_fields={
+              'schema':'candidate3-resumable-terminal-v1','runner':runner_sha,'producer_run':str(run_id),
+              'original_run':os.environ['ORIGINAL_RUN_ID'],'snapshot':os.environ['EXPECTED_PRIVATE_SNAPSHOT_PROOF'],
+              'tree':os.environ['EXPECTED_PRIVATE_TREE_PROOF'],'verifier':os.environ['EXPECTED_VERIFIER_BLOB'],
+              'map':os.environ['EXPECTED_TLC_MAP_SHA256'],'index':str(index),'profile':profile,'segment':str(segment),
+              'mode':mode,'result':'PASS'}
+          if fields!=expected_fields: raise SystemExit('terminal attestation fields do not exactly match expected bindings')
+
+          job_log_sha=hashlib.sha256(raw_log).hexdigest()
+          entry={
+              'profile_binding_sha256':profile,'mode':mode,'terminal_run_id':run_id,
+              'validation_job_id':int(by['validate']['id']),'terminal_job_id':int(job['id']),
+              'terminal_segment':segment,'terminal_job_log_sha256':job_log_sha,
+              'terminal_attestation_sha256':terminal_sha,'terminal_artifact_id':int(artifact['id']),'result':'PASS'}
+
+          path=os.environ['REGISTRY_PATH']
+          current=contents(path,'main',optional=True)
+          if current is None:
+              registry={
+                  'schema':os.environ['REGISTRY_SCHEMA'],'original_run_id':int(os.environ['ORIGINAL_RUN_ID']),
+                  'private_snapshot_proof':os.environ['EXPECTED_PRIVATE_SNAPSHOT_PROOF'],
+                  'private_tree_proof':os.environ['EXPECTED_PRIVATE_TREE_PROOF'],
+                  'canonical_verifier_blob':os.environ['EXPECTED_VERIFIER_BLOB'],
+                  'tlc_map_sha256':os.environ['EXPECTED_TLC_MAP_SHA256'],'runner_sha':runner_sha,
+                  'wrapper_workflow_blob':os.environ['WRAPPER_BLOB'],'slice_workflow_blob':os.environ['SLICE_BLOB'],
+                  'attestor_workflow_blob':attestor_blob,'profiles':{}}
+              prior_sha=None
+          else:
+              meta,raw=current
+              registry=json.loads(raw.decode('utf-8'))
+              prior_sha=meta['sha']
+          fixed={
+              'schema':os.environ['REGISTRY_SCHEMA'],'original_run_id':int(os.environ['ORIGINAL_RUN_ID']),
+              'private_snapshot_proof':os.environ['EXPECTED_PRIVATE_SNAPSHOT_PROOF'],
+              'private_tree_proof':os.environ['EXPECTED_PRIVATE_TREE_PROOF'],
+              'canonical_verifier_blob':os.environ['EXPECTED_VERIFIER_BLOB'],
+              'tlc_map_sha256':os.environ['EXPECTED_TLC_MAP_SHA256'],'runner_sha':runner_sha,
+              'wrapper_workflow_blob':os.environ['WRAPPER_BLOB'],'slice_workflow_blob':os.environ['SLICE_BLOB'],
+              'attestor_workflow_blob':attestor_blob}
+          for k,v in fixed.items():
+              if registry.get(k)!=v: raise SystemExit(f'registry binding mismatch: {k}')
+          profiles=registry.get('profiles')
+          if not isinstance(profiles,dict): raise SystemExit('registry profiles invalid')
+          try: existing_indices={int(k) for k in profiles}
+          except Exception as exc: raise SystemExit('non-numeric registry profile key') from exc
+          if {str(i) for i in existing_indices}!=set(profiles) or not existing_indices.issubset(replacements):
+              raise SystemExit('registry contains noncanonical/unexpected profile')
+          key=str(index)
+          if key in profiles:
+              if profiles[key]!=entry: raise SystemExit('conflicting durable attestation already exists')
+              print(f'LAS_CANDIDATE3_ATTEST_ALREADY_RECORDED={index}')
+              raise SystemExit(0)
+          profiles[key]=entry
+          canonical=(json.dumps(registry,sort_keys=True,indent=2,separators=(',',': '))+'\n').encode()
+          payload={'message':f'Record Candidate3 terminal attestation profile {index}',
+                   'content':base64.b64encode(canonical).decode(),'branch':'main'}
+          if prior_sha is not None: payload['sha']=prior_sha
+          result=req(f"{api}/contents/{urllib.parse.quote(path,safe='/')}",method='PUT',payload=payload)
+          if not isinstance(result,dict) or not isinstance(result.get('commit'),dict): raise SystemExit('registry update response malformed')
+          for _ in range(5):
+              verify=contents(path,'main')
+              if verify[1]==canonical: break
+              time.sleep(2)
+          else: raise SystemExit('durable registry readback mismatch')
+          print(f'LAS_CANDIDATE3_ATTEST_PROFILE={index}')
+          print(f'LAS_CANDIDATE3_ATTEST_RUN={run_id}')
+          print(f'LAS_CANDIDATE3_ATTEST_TERMINAL_SHA256={terminal_sha}')
+          print('LAS_CANDIDATE3_ATTEST_RESULT=PASS')
+          PY
