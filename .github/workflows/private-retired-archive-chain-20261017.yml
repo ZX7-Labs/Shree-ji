@@ -24,9 +24,10 @@ jobs:
       matrix:
         stage: [1, 2, 3]
     env:
-      EXPECTED_PRIVATE_SHA: 7e853338395c2bb0363f0343d2b05e66fd5d89d4
+      EXPECTED_PRIVATE_SHA: f4dedfc604b3305ad6e07c8f56fdf872417d75ee
       BASE_PRIVATE_SHA: 7efb81bd371a22b36cfb36f6f776045a17c9405f
       EFFECT_MATERIALIZER_BLOB: bb4f6e5c803b7c64ea27e605659cf998fc942cc2
+      FORWARDER_MATERIALIZER_BLOB: 3bcc19412e78941befc8faec9a646792fcb8efca
       COMPLETE_MATERIALIZER_BLOB: a35184cb70d931c34194e96192b208b8484b7ec9
       RECLAIM_MATERIALIZER_BLOB: 0b65004b5ec67373ac53127de1193ecbecfba902
       CANONICAL_VERIFIER_BLOB: 62e3e6dc0fad5dddc7fb0a453a3cd681d911e590
@@ -68,6 +69,7 @@ jobs:
           git diff --quiet "$BASE_PRIVATE_SHA" "$EXPECTED_PRIVATE_SHA" -- src
 
           test "$(git hash-object tools/verification/private_retired_effect_owner_adapter_materialize.py)" = "$EFFECT_MATERIALIZER_BLOB"
+          test "$(git hash-object tools/verification/private_retired_archive_owner_forwarders_materialize.py)" = "$FORWARDER_MATERIALIZER_BLOB"
           test "$(git hash-object tools/verification/private_retired_archive_complete_transcript_materialize.py)" = "$COMPLETE_MATERIALIZER_BLOB"
           test "$(git hash-object tools/verification/private_retired_archive_reclaim_materialize.py)" = "$RECLAIM_MATERIALIZER_BLOB"
           test "$(git hash-object tools/verify_codespaces_all.sh)" = "$CANONICAL_VERIFIER_BLOB"
@@ -84,6 +86,7 @@ jobs:
           set -euo pipefail
           cd "$PRIVATE_ROOT"
           python3 tools/verification/private_retired_effect_owner_adapter_materialize.py
+          python3 tools/verification/private_retired_archive_owner_forwarders_materialize.py
           if [[ "${{ matrix.stage }}" -ge 2 ]]; then
             python3 tools/verification/private_retired_archive_complete_transcript_materialize.py
           fi
