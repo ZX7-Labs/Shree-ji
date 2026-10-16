@@ -1,0 +1,397 @@
+name: Candidate3 exact composite formal closure 20261016
+
+on:
+  push:
+    branches:
+      - verify/candidate3-formal-closure-20261016
+    paths:
+      - RUN_CANDIDATE3_FORMAL_CLOSURE_20261016
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  TARGET_REF_HASH: a5f3dd87c6174b2ec1aafe984e6a5722b8cf90562d8ff21cb5e7b12f271466c2
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 269a9a8c7afae986f8065e93745c9017f848292a118b2b9d006d007cbdb6b1f8
+  EXPECTED_PRIVATE_TREE_PROOF: 6998e8e80e6c8fb86fbac5e4c512af441f827b4536aa5448dfed6aa14568468e
+  EXPECTED_VERIFIER_BLOB: 62e3e6dc0fad5dddc7fb0a453a3cd681d911e590
+  EXPECTED_TLC_PROFILE_COUNT: "202"
+  EXPECTED_TLC_MAP_SHA256: da7bb51d531d0e5e5e6994c80be8f254a110cb8181e6121e3a557fdff9428cee
+
+  PRODUCTION_RUN_ID: "38828181454"
+  EXPECTED_PRODUCTION_HEAD: 5ee0129370d5a217bf91e85aa981ed1d3b666e10
+  PRODUCTION_WORKFLOW_PATH: .github/workflows/private-candidate3-production-20261016.yml
+  EXPECTED_PRODUCTION_WORKFLOW_BLOB: c27eb6a9d281420164f72117d653a4b2f2fc29ab
+
+  PRE_TLC_RUN_ID: "38828110294"
+  EXPECTED_PRE_TLC_HEAD: 9c99ebb14e302ef8862f1117d765e7a4edafb198
+  PRE_TLC_WORKFLOW_PATH: .github/workflows/private-candidate3-pre-tlc-20261016.yml
+  EXPECTED_PRE_TLC_WORKFLOW_BLOB: c124c1120e6e1b9bf49115db2d7f8fd149acb580
+
+  ORIGINAL_RUN_ID: "38829095332"
+  EXPECTED_ORIGINAL_HEAD: 55471ace6dd056674830ea7764ed6d088faacaa1
+  EXPECTED_ORIGINAL_BRANCH: verify/candidate3-tlc-20261016
+  ORIGINAL_WORKFLOW_PATH: .github/workflows/private-candidate3-tlc-20261016.yml
+  EXPECTED_ORIGINAL_WORKFLOW_BLOB: e019bd29322d7cbac67df7e0b4366000018311a3
+
+  RESUME_REF: verify/candidate3-resumable-tlc-20261016
+  EXPECTED_RESUME_ENGINE_PARENT: 9b91881c03f76896d6f366420f152cbf0c3c72ee
+  RESUME_MARKER_PATH: RUN_CANDIDATE3_RESUMABLE_TLC_20261016
+  RESUME_CORE_PATH: .github/workflows/_private-candidate3-resumable-tlc-slice-20261016.yml
+  EXPECTED_RESUME_CORE_BLOB: 3493feaff5785fce07d17c9493b69b97ce883562
+  RESUME_GENERIC_PATH: .github/workflows/private-assurance-slow-tlc-continuation.yml
+  EXPECTED_RESUME_GENERIC_BLOB: 27308c297f13d94b3678da8d9b33de5561d5a1a6
+  RESUME_TLC39_PATH: .github/workflows/private-repaired-202-tlc39-continuation.yml
+  EXPECTED_RESUME_TLC39_BLOB: 888db379292d6c5415b7f6a856c157ca07b9b7a0
+  RESUME_LAUNCHER_PATH: .github/workflows/private-candidate3-resumable-launcher-20261016.yml
+  EXPECTED_RESUME_LAUNCHER_BLOB: e8f18b04ae7fd566c219584b416cabc1b095a59b
+
+  CLOSURE_REF: verify/candidate3-formal-closure-20261016
+  JAVA_TOOL_OPTIONS: -Xmx5g
+
+jobs:
+  close:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Recover exact frozen private candidate and canonical TLC map
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "$CLOSURE_REF"
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          ROOT="$GITHUB_WORKSPACE/target"; mkdir "$ROOT"; cd "$ROOT"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; matched_sha=""
+          while read -r sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"; matched_ref="$ref"; matched_sha="$sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$matched_sha"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$matched_sha"
+          test "$(printf '%s' "$matched_sha" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          actual="$(git rev-parse FETCH_HEAD)"; echo "::add-mask::$actual"; test "$actual" = "$matched_sha"
+          test "$(printf '%s' "$actual" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git checkout -q --detach "$actual"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test "$(git hash-object tools/verify_codespaces_all.sh)" = "$EXPECTED_VERIFIER_BLOB"
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+          map_py="$RUNNER_TEMP/tlc-map.py"
+          python3 - tools/verify_codespaces_all.sh "$map_py" <<'PY'
+          from pathlib import Path
+          import sys
+          src=Path(sys.argv[1]).read_text(encoding='utf-8')
+          mh='python3 - "$ROOT" > "$TLC_MAP" <<\'PY\'\n'; me='\nPY\n\nrun_tlc_profile() {'
+          if src.count(mh)!=1 or src.count(me)!=1: raise SystemExit('canonical map anchors are not unique')
+          if src.count('local args=(-workers auto -lncheck final -fp 0)')!=1: raise SystemExit('canonical TLC argument contract changed')
+          if src.count('java -XX:+UseParallelGC -jar "$TLA_JAR" "${args[@]}"')!=1: raise SystemExit('canonical TLC JVM contract changed')
+          start=src.index(mh)+len(mh); end=src.index(me,start)
+          Path(sys.argv[2]).write_text(src[start:end]+'\n',encoding='utf-8')
+          PY
+          map="$RUNNER_TEMP/tlc-map.tsv"
+          python3 "$map_py" "$ROOT" >"$map"
+          test "$(wc -l <"$map" | tr -d ' ')" = "$EXPECTED_TLC_PROFILE_COUNT"
+          test "$(sha256sum "$map" | awk '{print $1}')" = "$EXPECTED_TLC_MAP_SHA256"
+          echo "LAS_CANDIDATE3_CLOSURE_PRIVATE_BINDING=PASS"
+          unset PRIVATE_TOKEN auth matched_ref matched_sha actual tree
+
+      - name: Bind production, pre-TLC, and exact settled 202-profile original evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api_get() {
+            curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" "$1"
+          }
+          api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$PRODUCTION_RUN_ID" >"$RUNNER_TEMP/production-run.json"
+          api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$PRODUCTION_RUN_ID/jobs?per_page=100" >"$RUNNER_TEMP/production-jobs.json"
+          api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/$PRODUCTION_WORKFLOW_PATH?ref=$EXPECTED_PRODUCTION_HEAD" >"$RUNNER_TEMP/production-workflow.json"
+
+          api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$PRE_TLC_RUN_ID" >"$RUNNER_TEMP/pre-run.json"
+          api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$PRE_TLC_RUN_ID/jobs?per_page=100" >"$RUNNER_TEMP/pre-jobs.json"
+          api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/$PRE_TLC_WORKFLOW_PATH?ref=$EXPECTED_PRE_TLC_HEAD" >"$RUNNER_TEMP/pre-workflow.json"
+
+          api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$ORIGINAL_RUN_ID" >"$RUNNER_TEMP/original-run.json"
+          api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/$ORIGINAL_WORKFLOW_PATH?ref=$EXPECTED_ORIGINAL_HEAD" >"$RUNNER_TEMP/original-workflow.json"
+          for page in 1 2 3; do
+            api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$ORIGINAL_RUN_ID/jobs?per_page=100&page=$page" >"$RUNNER_TEMP/original-jobs-$page.json"
+          done
+
+          python3 - "$RUNNER_TEMP/production-run.json" "$RUNNER_TEMP/production-jobs.json" "$RUNNER_TEMP/production-workflow.json" \
+            "$RUNNER_TEMP/pre-run.json" "$RUNNER_TEMP/pre-jobs.json" "$RUNNER_TEMP/pre-workflow.json" \
+            "$RUNNER_TEMP/original-run.json" "$RUNNER_TEMP/original-workflow.json" \
+            "$RUNNER_TEMP/original-jobs-1.json" "$RUNNER_TEMP/original-jobs-2.json" "$RUNNER_TEMP/original-jobs-3.json" \
+            "$RUNNER_TEMP/classification.json" <<'PY'
+          import datetime as dt, json, os, re, sys
+          prod,prod_jobs,prod_wf,pre,pre_jobs,pre_wf,orig,orig_wf= [json.load(open(p,encoding='utf-8')) for p in sys.argv[1:9]]
+          assert prod['head_sha']==os.environ['EXPECTED_PRODUCTION_HEAD'] and prod['path']==os.environ['PRODUCTION_WORKFLOW_PATH']
+          assert prod['event']=='push' and prod['run_attempt']==1 and prod['status']=='completed' and prod['conclusion']=='success'
+          assert prod_wf['sha']==os.environ['EXPECTED_PRODUCTION_WORKFLOW_BLOB']
+          pj=prod_jobs['jobs']; assert len(pj)==1 and pj[0]['name']=='verify-production-composition' and pj[0]['conclusion']=='success'
+          required_prod={
+            'Recover exact frozen private candidate','Install exact Rust toolchain','Install checksum-pinned Alire and exact Ada build toolchain',
+            'Check exact production formatting','Compile exact production feature composition','Clippy exact production feature composition',
+            'Test exact production feature composition','Recheck exact immutable candidate'
+          }
+          psteps={s['name']:s for s in pj[0]['steps']}; assert required_prod <= psteps.keys()
+          assert all(psteps[n]['conclusion']=='success' for n in required_prod)
+
+          assert pre['head_sha']==os.environ['EXPECTED_PRE_TLC_HEAD'] and pre['path']==os.environ['PRE_TLC_WORKFLOW_PATH']
+          assert pre['event']=='push' and pre['run_attempt']==1 and pre['status']=='completed' and pre['conclusion']=='success'
+          assert pre_wf['sha']==os.environ['EXPECTED_PRE_TLC_WORKFLOW_BLOB']
+          qj=pre_jobs['jobs']; assert len(qj)==1 and qj[0]['name']=='pre_tlc' and qj[0]['conclusion']=='success'
+          qsteps={s['name']:s for s in qj[0]['steps']}
+          for n in ('Recover exact frozen private candidate','Run exact canonical pre-TLC stage'):
+              assert qsteps[n]['conclusion']=='success'
+
+          assert orig['head_sha']==os.environ['EXPECTED_ORIGINAL_HEAD'] and orig['head_branch']==os.environ['EXPECTED_ORIGINAL_BRANCH']
+          assert orig['path']==os.environ['ORIGINAL_WORKFLOW_PATH'] and orig['event']=='push' and orig['run_attempt']==1
+          assert orig['status']=='completed'
+          assert orig_wf['sha']==os.environ['EXPECTED_ORIGINAL_WORKFLOW_BLOB']
+          jobs=[]
+          for p in sys.argv[9:12]: jobs.extend(json.load(open(p,encoding='utf-8'))['jobs'])
+          bind=[j for j in jobs if j['name']=='bind-pre-tlc']; assert len(bind)==1 and bind[0]['conclusion']=='success'
+          indexed={}
+          for j in jobs:
+              m=re.fullmatch(r'tlc \((\d+)\)',j['name'])
+              if m:
+                  i=int(m.group(1)); assert i not in indexed; indexed[i]=j
+          assert set(indexed)==set(range(202)), (len(indexed),sorted(set(range(202))-set(indexed)))
+          direct=[]; cancelled=[]
+          for i in range(202):
+              j=indexed[i]; assert j['status']=='completed'
+              steps={s['name']:s for s in j.get('steps',[])}
+              assert steps['Recover exact frozen private candidate']['conclusion']=='success'
+              if j['conclusion']=='success':
+                  assert steps['Run exact canonical TLC profile']['conclusion']=='success'; direct.append(i)
+              elif j['conclusion']=='cancelled':
+                  assert steps['Run exact canonical TLC profile']['conclusion']=='cancelled'
+                  start=dt.datetime.fromisoformat(j['started_at'].replace('Z','+00:00'))
+                  end=dt.datetime.fromisoformat(j['completed_at'].replace('Z','+00:00'))
+                  seconds=(end-start).total_seconds(); assert 350*60 <= seconds <= 357*60, (i,seconds)
+                  cancelled.append(i)
+              else:
+                  raise AssertionError((i,j['conclusion']))
+          assert cancelled and set(direct).isdisjoint(cancelled) and set(direct)|set(cancelled)==set(range(202))
+          json.dump({'direct':direct,'cancelled':cancelled},open(sys.argv[12],'w',encoding='utf-8'),separators=(',',':'),sort_keys=True)
+          print('LAS_CANDIDATE3_CLOSURE_DIRECT_COUNT='+str(len(direct)))
+          print('LAS_CANDIDATE3_CLOSURE_RESUMABLE_COUNT='+str(len(cancelled)))
+          print('LAS_CANDIDATE3_CLOSURE_PUBLIC_PREREQUISITES=PASS')
+          PY
+          rm -f "$RUNNER_TEMP"/production-run.json "$RUNNER_TEMP"/production-jobs.json "$RUNNER_TEMP"/production-workflow.json \
+            "$RUNNER_TEMP"/pre-run.json "$RUNNER_TEMP"/pre-jobs.json "$RUNNER_TEMP"/pre-workflow.json \
+            "$RUNNER_TEMP"/original-run.json "$RUNNER_TEMP"/original-workflow.json "$RUNNER_TEMP"/original-jobs-*.json
+
+      - name: Bind frozen resumable runner revision and exact workflow blobs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api_get() {
+            curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" "$1"
+          }
+          ref_json="$RUNNER_TEMP/resume-ref.json"
+          api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/git/ref/heads/$RESUME_REF" >"$ref_json"
+          resume_sha="$(python3 - "$ref_json" <<'PY'
+          import json,sys
+          print(json.load(open(sys.argv[1],encoding='utf-8'))['object']['sha'])
+          PY
+          )"
+          rm -f "$ref_json"; [[ "$resume_sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "RESUME_RUNNER_SHA=$resume_sha" >>"$GITHUB_ENV"
+
+          api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/commits/$resume_sha" >"$RUNNER_TEMP/resume-commit.json"
+          api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/$RESUME_MARKER_PATH?ref=$resume_sha" >"$RUNNER_TEMP/resume-marker.json"
+          for spec in \
+            "$RESUME_CORE_PATH:$EXPECTED_RESUME_CORE_BLOB:core" \
+            "$RESUME_GENERIC_PATH:$EXPECTED_RESUME_GENERIC_BLOB:generic" \
+            "$RESUME_TLC39_PATH:$EXPECTED_RESUME_TLC39_BLOB:tlc39" \
+            "$RESUME_LAUNCHER_PATH:$EXPECTED_RESUME_LAUNCHER_BLOB:launcher"; do
+            IFS=: read -r path expected label <<<"$spec"
+            api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/$path?ref=$resume_sha" >"$RUNNER_TEMP/resume-$label.json"
+            test "$(python3 - "$RUNNER_TEMP/resume-$label.json" <<'PY'
+          import json,sys
+          print(json.load(open(sys.argv[1],encoding='utf-8'))['sha'])
+          PY
+          )" = "$expected"
+          done
+
+          python3 - "$RUNNER_TEMP/resume-commit.json" "$RUNNER_TEMP/resume-marker.json" <<'PY'
+          import base64,json,os,sys
+          c=json.load(open(sys.argv[1],encoding='utf-8')); marker=json.load(open(sys.argv[2],encoding='utf-8'))
+          assert len(c['parents'])==1 and c['parents'][0]['sha']==os.environ['EXPECTED_RESUME_ENGINE_PARENT']
+          assert len(c['files'])==1 and c['files'][0]['filename']==os.environ['RESUME_MARKER_PATH'] and c['files'][0]['status']=='added'
+          text=base64.b64decode(marker['content']).decode('utf-8')
+          expected=(
+            'schema=candidate3-resumable-launch-v1\n'
+            f"engine_parent={os.environ['EXPECTED_RESUME_ENGINE_PARENT']}\n"
+            f"original_run={os.environ['ORIGINAL_RUN_ID']}\n"
+            f"original_head={os.environ['EXPECTED_ORIGINAL_HEAD']}\n"
+            f"snapshot={os.environ['EXPECTED_PRIVATE_SNAPSHOT_PROOF']}\n"
+            f"tree={os.environ['EXPECTED_PRIVATE_TREE_PROOF']}\n"
+            f"verifier={os.environ['EXPECTED_VERIFIER_BLOB']}\n"
+            f"map={os.environ['EXPECTED_TLC_MAP_SHA256']}\n"
+          )
+          assert text==expected
+          PY
+          rm -f "$RUNNER_TEMP"/resume-commit.json "$RUNNER_TEMP"/resume-marker.json "$RUNNER_TEMP"/resume-core.json "$RUNNER_TEMP"/resume-generic.json "$RUNNER_TEMP"/resume-tlc39.json "$RUNNER_TEMP"/resume-launcher.json
+          echo "LAS_CANDIDATE3_CLOSURE_RESUME_RUNNER=$resume_sha"
+          echo "LAS_CANDIDATE3_CLOSURE_RESUME_BINDING=PASS"
+
+      - name: Verify all resumable terminal attestations and exact 202 of 202 closure
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api_get() {
+            curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" "$1"
+          }
+          encoded_ref="$(python3 - "$RESUME_REF" <<'PY'
+          import sys,urllib.parse
+          print(urllib.parse.quote(sys.argv[1],safe=''))
+          PY
+          )"
+          : >"$RUNNER_TEMP/resume-run-pages.list"
+          for page in $(seq 1 20); do
+            file="$RUNNER_TEMP/resume-runs-$page.json"
+            api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs?branch=$encoded_ref&head_sha=$RESUME_RUNNER_SHA&per_page=100&page=$page" >"$file"
+            count="$(python3 - "$file" <<'PY'
+          import json,sys
+          print(len(json.load(open(sys.argv[1],encoding='utf-8'))['workflow_runs']))
+          PY
+          )"
+            if [[ "$count" -eq 0 ]]; then rm -f "$file"; break; fi
+            echo "$file" >>"$RUNNER_TEMP/resume-run-pages.list"
+          done
+          test -s "$RUNNER_TEMP/resume-run-pages.list"
+
+          python3 - "$RUNNER_TEMP/resume-run-pages.list" "$RUNNER_TEMP/allowed-runs.tsv" <<'PY'
+          import json,os,sys
+          pages=[line.strip() for line in open(sys.argv[1],encoding='utf-8') if line.strip()]
+          runs=[]
+          for p in pages: runs.extend(json.load(open(p,encoding='utf-8'))['workflow_runs'])
+          ids=set(); unique=[]
+          for r in runs:
+              if r['id'] not in ids: ids.add(r['id']); unique.append(r)
+          runs=unique
+          assert all(r['head_sha']==os.environ['RESUME_RUNNER_SHA'] and r['head_branch']==os.environ['RESUME_REF'] for r in runs)
+          launcher=[r for r in runs if r['path']==os.environ['RESUME_LAUNCHER_PATH']]
+          assert len(launcher)==1
+          lr=launcher[0]
+          assert lr['event']=='push' and lr['run_attempt']==1 and lr['status']=='completed' and lr['conclusion']=='success'
+          allowed=[]
+          for r in runs:
+              if r['path'] in {os.environ['RESUME_GENERIC_PATH'],os.environ['RESUME_TLC39_PATH']}:
+                  assert r['event']=='workflow_dispatch' and r['run_attempt']==1
+                  assert r['status']=='completed' and r['conclusion']=='success'
+                  allowed.append((r['id'],r['path']))
+          assert allowed, 'no continuation runs found'
+          with open(sys.argv[2],'w',encoding='utf-8') as f:
+              for rid,path in sorted(allowed): f.write(f'{rid}\t{path}\n')
+          PY
+
+          : >"$RUNNER_TEMP/terminal-evidence.tsv"
+          while IFS=$'\t' read -r run_id run_path; do
+            test -n "$run_id"; test -n "$run_path"
+            artifacts="$RUNNER_TEMP/artifacts-$run_id.json"
+            api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" >"$artifacts"
+            python3 - "$artifacts" "$run_id" "$run_path" <<'PY' >"$RUNNER_TEMP/terminal-artifacts-$run_id.tsv"
+          import json,re,sys
+          d=json.load(open(sys.argv[1],encoding='utf-8'))
+          for a in d['artifacts']:
+              m=re.fullmatch(r'candidate3-resume-terminal-(\d+)-(\d+)',a['name'])
+              if m:
+                  assert not a['expired'] and a['size_in_bytes']>0
+                  print(a['id'],a['name'],m.group(1),m.group(2),sys.argv[2],sys.argv[3],sep='\t')
+          PY
+            while IFS=$'\t' read -r artifact_id artifact_name index segment producer_id producer_path; do
+              [[ -n "$artifact_id" ]] || continue
+              zip="$RUNNER_TEMP/terminal-$artifact_id.zip"
+              curl --proto '=https' --tlsv1.2 --fail-with-body -sS -L \
+                -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" >"$zip"
+              python3 - "$zip" "$artifact_name" "$index" "$segment" "$producer_id" "$producer_path" "$RUNNER_TEMP/tlc-map.tsv" <<'PY' >>"$RUNNER_TEMP/terminal-evidence.tsv"
+          import hashlib,os,re,sys,zipfile
+          zip_path,name,index_s,segment_s,run_id,run_path,map_path=sys.argv[1:]
+          index=int(index_s); segment=int(segment_s)
+          with zipfile.ZipFile(zip_path) as z:
+              members=[i for i in z.infolist() if not i.is_dir()]
+              assert len(members)==1 and members[0].filename=='candidate3-terminal-attestation.txt'
+              assert not members[0].filename.startswith('/') and '..' not in members[0].filename.split('/')
+              text=z.read(members[0]).decode('utf-8')
+          kv={}
+          for line in text.splitlines():
+              assert '=' in line
+              k,v=line.split('=',1); assert k not in kv; kv[k]=v
+          expected_keys={'schema','runner','producer_run','original_run','snapshot','tree','verifier','map','index','profile','segment','mode','result'}
+          assert set(kv)==expected_keys
+          assert kv['schema']=='candidate3-resumable-terminal-v1'
+          assert kv['runner']==os.environ['RESUME_RUNNER_SHA']
+          assert kv['producer_run']==run_id and kv['original_run']==os.environ['ORIGINAL_RUN_ID']
+          assert kv['snapshot']==os.environ['EXPECTED_PRIVATE_SNAPSHOT_PROOF']
+          assert kv['tree']==os.environ['EXPECTED_PRIVATE_TREE_PROOF']
+          assert kv['verifier']==os.environ['EXPECTED_VERIFIER_BLOB'] and kv['map']==os.environ['EXPECTED_TLC_MAP_SHA256']
+          assert int(kv['index'])==index and int(kv['segment'])==segment and segment>=1 and kv['result']=='PASS'
+          expected_mode='profile39' if index==39 else 'generic'; assert kv['mode']==expected_mode
+          expected_path=os.environ['RESUME_TLC39_PATH'] if index==39 else os.environ['RESUME_GENERIC_PATH']; assert run_path==expected_path
+          lines=open(map_path,encoding='utf-8').read().splitlines(); assert len(lines)==202
+          cfg,tla,deadlock,expectation=lines[index].split('\t',3)
+          assert cfg and tla and deadlock in {'0','1'} and expectation==''
+          h=hashlib.sha256(); h.update(cfg.encode()); h.update(b'\0'); h.update(tla.encode()); h.update(b'\0'); h.update(deadlock.encode()); h.update(b'\0'); h.update(expectation.encode())
+          profile=h.hexdigest(); assert kv['profile']==profile and re.fullmatch(r'[0-9a-f]{64}',profile)
+          print(index,run_id,segment,profile,sep='\t')
+          PY
+              rm -f "$zip"
+            done <"$RUNNER_TEMP/terminal-artifacts-$run_id.tsv"
+            rm -f "$artifacts" "$RUNNER_TEMP/terminal-artifacts-$run_id.tsv"
+          done <"$RUNNER_TEMP/allowed-runs.tsv"
+
+          python3 - "$RUNNER_TEMP/classification.json" "$RUNNER_TEMP/terminal-evidence.tsv" <<'PY'
+          import json,sys
+          c=json.load(open(sys.argv[1],encoding='utf-8')); direct=set(c['direct']); cancelled=set(c['cancelled'])
+          rows=[]
+          for line in open(sys.argv[2],encoding='utf-8'):
+              if line.strip(): rows.append(line.rstrip('\n').split('\t'))
+          assert rows, 'no terminal attestations found'
+          indices=[int(r[0]) for r in rows]
+          assert len(indices)==len(set(indices)), ('duplicate terminal index',indices)
+          resumed=set(indices)
+          assert resumed==cancelled, ('terminal coverage mismatch',sorted(cancelled-resumed),sorted(resumed-cancelled))
+          assert direct.isdisjoint(resumed)
+          assert direct|resumed==set(range(202))
+          print('LAS_CANDIDATE3_CLOSURE_DIRECT_COUNT='+str(len(direct)))
+          print('LAS_CANDIDATE3_CLOSURE_RESUMED_COUNT='+str(len(resumed)))
+          print('LAS_CANDIDATE3_CLOSURE_TOTAL_COUNT='+str(len(direct|resumed)))
+          PY
+
+          cd "$GITHUB_WORKSPACE/target"
+          actual="$(git rev-parse HEAD)"; tree="$(git rev-parse 'HEAD^{tree}')"
+          test "$(printf '%s' "$actual" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test "$(git hash-object tools/verify_codespaces_all.sh)" = "$EXPECTED_VERIFIER_BLOB"
+          test "$(sha256sum "$RUNNER_TEMP/tlc-map.tsv" | awk '{print $1}')" = "$EXPECTED_TLC_MAP_SHA256"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "LAS_CANDIDATE3_FORMAL_CLOSURE=PASS"
+          echo "LAS_VERIFY_ALL_RESULT=PASS"
