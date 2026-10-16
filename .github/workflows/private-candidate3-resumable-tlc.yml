@@ -29,10 +29,6 @@ permissions:
   contents: read
   actions: write
 
-concurrency:
-  group: candidate3-exact-resumable-controller
-  cancel-in-progress: false
-
 env:
   SOURCE_RUN_ID: "38829095332"
   SOURCE_HEAD: "55471ace6dd056674830ea7764ed6d088faacaa1"
