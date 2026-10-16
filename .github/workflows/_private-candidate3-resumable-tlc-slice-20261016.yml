@@ -315,6 +315,20 @@ jobs:
           done
           rm -f "$manifest"
           echo "LAS_CANDIDATE3_RESUME_CHECKPOINT_AUTH=PASS"
+          transport_bytes="$(stat -c '%s' "$enc")"
+          test "$transport_bytes" -gt 0
+          unexpected="$(find "$RUNNER_TEMP/resume" -mindepth 1 -maxdepth 1 \
+            ! -name 'checkpoint.tar.gz.enc' ! -name 'checkpoint.tar.gz.enc.hmac' -print -quit)"
+          test -z "$unexpected"
+          free_before_reclaim="$(df -Pk "$RUNNER_TEMP" | awk 'NR==2 {print $4}')"
+          rm -f "$enc" "$mac_file"
+          rmdir "$RUNNER_TEMP/resume"
+          free_after_reclaim="$(df -Pk "$RUNNER_TEMP" | awk 'NR==2 {print $4}')"
+          test ! -e "$RUNNER_TEMP/resume"
+          echo "LAS_CANDIDATE3_RESUME_TRANSPORT_BYTES=$transport_bytes"
+          echo "LAS_CANDIDATE3_RESUME_FREE_KB_BEFORE_TRANSPORT_RECLAIM=$free_before_reclaim"
+          echo "LAS_CANDIDATE3_RESUME_FREE_KB_AFTER_TRANSPORT_RECLAIM=$free_after_reclaim"
+          echo "LAS_CANDIDATE3_RESUME_TRANSPORT_RECLAIM=PASS"
           unset PRIVATE_TOKEN LAS_CHECKPOINT_SECRET LAS_CHECKPOINT_MAC_KEY context expected_mac actual_mac java_fp nproc_fp
 
       - name: Run exact canonical TLC slice with resumable checkpoint barrier
