@@ -260,6 +260,55 @@ def migrate_v1(data: Any) -> dict[str, Any]:
     return out
 
 
+def canonical_executor(executor_id: str) -> dict[str, Any]:
+    canonical = {V4_EXECUTOR_ID: V4_EXECUTOR, V5_EXECUTOR_ID: V5_EXECUTOR}.get(executor_id)
+    if canonical is None:
+        raise RegistryError(f"unknown executor id {executor_id!r}")
+    return copy.deepcopy(canonical)
+
+
+def record_profile(
+    data: Any,
+    *,
+    index: int,
+    executor_id: str,
+    terminal_evidence: Mapping[str, Any],
+    migration_lineage: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], bool]:
+    if not 0 <= index < 202 or index == 39:
+        raise RegistryError(f"profile index {index} is outside the generic non-39 domain")
+    registry = copy.deepcopy(validate_v2(data))
+    executors = registry["executors"]
+    canonical = canonical_executor(executor_id)
+    prior_executor = executors.get(executor_id)
+    if prior_executor is None:
+        executors[executor_id] = canonical
+    elif prior_executor != canonical:
+        raise RegistryError(f"existing executor {executor_id} conflicts with canonical descriptor")
+
+    evidence = _object(dict(terminal_evidence), f"profile {index} terminal evidence")
+    _exact_keys(evidence, set(TERMINAL_KEYS), f"profile {index} terminal evidence")
+    entry = {
+        "executor_id": executor_id,
+        "migration_lineage": copy.deepcopy(migration_lineage),
+        **copy.deepcopy(evidence),
+    }
+    _validate_profile(index, entry, executors)
+    key = str(index)
+    prior = registry["profiles"].get(key)
+    if prior is not None:
+        if prior != entry:
+            raise RegistryError(f"conflicting terminal attestation already exists for profile {index}")
+        return registry, False
+    registry["profiles"][key] = entry
+    registry["profiles"] = {
+        profile: registry["profiles"][profile]
+        for profile in sorted(registry["profiles"], key=lambda value: int(value))
+    }
+    validate_v2(registry)
+    return registry, True
+
+
 def evidence_projection_v1(data: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "common": {key: data[key] for key in COMMON_KEYS},
