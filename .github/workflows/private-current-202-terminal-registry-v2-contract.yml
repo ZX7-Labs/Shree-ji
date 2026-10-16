@@ -89,6 +89,44 @@ jobs:
           print("LAS_CURRENT_202_REGISTRY_V2_MIXED_EXECUTORS=PASS")
           PY
 
+      - name: Prove conflict-safe recording API
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/registry-v2.json" <<'PY'
+          import copy, json, sys
+          sys.path.insert(0, "tools")
+          import current_202_terminal_registry_v2 as registry
+          base=json.load(open(sys.argv[1], encoding="utf-8"))
+          existing=base["profiles"]["2"]
+          evidence={key: existing[key] for key in registry.TERMINAL_KEYS}
+          same, changed=registry.record_profile(
+              base, index=2, executor_id=registry.V4_EXECUTOR_ID, terminal_evidence=evidence
+          )
+          if changed or same != base:
+              raise SystemExit("idempotent terminal record changed existing evidence")
+          conflict=copy.deepcopy(evidence); conflict["terminal_run_id"] += 1
+          try:
+              registry.record_profile(
+                  base, index=2, executor_id=registry.V4_EXECUTOR_ID, terminal_evidence=conflict
+              )
+          except registry.RegistryError:
+              pass
+          else:
+              raise SystemExit("conflicting terminal record overwrote existing evidence")
+          try:
+              registry.record_profile(
+                  base, index=28, executor_id=registry.V5_EXECUTOR_ID, terminal_evidence=evidence
+              )
+          except registry.RegistryError:
+              pass
+          else:
+              raise SystemExit("v5 terminal record without migration lineage was accepted")
+          print("LAS_CURRENT_202_REGISTRY_V2_RECORD_IDEMPOTENT=PASS")
+          print("LAS_CURRENT_202_REGISTRY_V2_RECORD_CONFLICT=PASS")
+          print("LAS_CURRENT_202_REGISTRY_V2_RECORD_LINEAGE_REQUIRED=PASS")
+          PY
+
       - name: Attack registry invariants
         shell: bash
         run: |
