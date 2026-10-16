@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       index:
-        description: Exact cancelled candidate3 canonical TLC profile index (profile 39 uses its dedicated registered workflow)
+        description: Exact cancelled candidate3 canonical TLC profile index
         required: true
         type: string
       segment:
@@ -42,7 +42,7 @@ jobs:
       RESUME_ARTIFACT: ${{ inputs.resume_artifact }}
       CONTINUATION_REF: verify/candidate3-resumable-tlc-20261016
     steps:
-      - name: Validate candidate3 generic continuation request
+      - name: Validate candidate3 continuation request
         shell: bash
         run: |
           set -euo pipefail
@@ -51,7 +51,6 @@ jobs:
           [[ "$SEGMENT" =~ ^[0-9]+$ ]]
           test "$TARGET_INDEX" -ge 0
           test "$TARGET_INDEX" -lt 202
-          test "$TARGET_INDEX" -ne 39
           test "$SEGMENT" -ge 1
           if [[ "$SEGMENT" -eq 1 ]]; then
             test -z "$RESUME_RUN_ID"
@@ -60,10 +59,11 @@ jobs:
             [[ "$RESUME_RUN_ID" =~ ^[0-9]+$ ]]
             test "$RESUME_ARTIFACT" = "candidate3-resume-state-${TARGET_INDEX}-$((SEGMENT - 1))"
           fi
-          echo "LAS_CANDIDATE3_GENERIC_ORCHESTRATOR_REQUEST=PASS"
+          echo "LAS_CANDIDATE3_ORCHESTRATOR_REQUEST=PASS"
 
-  continuation:
+  continuation-generic:
     needs: validate
+    if: inputs.index != '39'
     uses: ./.github/workflows/_private-candidate3-resumable-tlc-slice-20261016.yml
     with:
       index: ${{ fromJSON(inputs.index) }}
@@ -71,4 +71,16 @@ jobs:
       resume_run_id: ${{ inputs.resume_run_id }}
       resume_artifact: ${{ inputs.resume_artifact }}
       mode: generic
+    secrets: inherit
+
+  continuation-profile39:
+    needs: validate
+    if: inputs.index == '39'
+    uses: ./.github/workflows/_private-candidate3-resumable-tlc-slice-20261016.yml
+    with:
+      index: 39
+      segment: ${{ fromJSON(inputs.segment) }}
+      resume_run_id: ${{ inputs.resume_run_id }}
+      resume_artifact: ${{ inputs.resume_artifact }}
+      mode: profile39
     secrets: inherit
