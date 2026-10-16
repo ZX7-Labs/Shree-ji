@@ -1,0 +1,300 @@
+name: Opaque exact private retired archive candidate staging 20261017
+
+on:
+  push:
+    branches:
+      - "verify/retired-archive-candidate-20261017"
+    paths:
+      - ".github/workflows/opaque-retired-archive-candidate-20261017.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opaque-retired-archive-candidate-20261017
+  cancel-in-progress: false
+
+env:
+  TARGET_REF_HASH: 57902b32c7dba883a89cd5a6e47dea395ab8a06b111c3dcdcd0487d67f010f58
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 46e1d9b459a76c08bded6ad8e799ccecdb82184dda6fcd21a083fedb1c67e81f
+  EXPECTED_PRIVATE_TREE_PROOF: 077c64590e1ee43bbbb84ec9bc67ffabc8080a07e60cbd114e3a618be602cec5
+  MATERIALIZER_1_BLOB: bb4f6e5c803b7c64ea27e605659cf998fc942cc2
+  MATERIALIZER_2_BLOB: a35184cb70d931c34194e96192b208b8484b7ec9
+  MATERIALIZER_3_BLOB: 0b65004b5ec67373ac53127de1193ecbecfba902
+  MATERIALIZER_4_BLOB: e821bbaadeb7483d1d51c419b11940facf311fca
+  CANONICAL_VERIFIER_BLOB: 62e3e6dc0fad5dddc7fb0a453a3cd681d911e590
+  BRIDGE_CERT_B64: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUZSVENDQXkyZ0F3SUJBZ0lVYmY4QWYrSlNkYUtOZUZ4Y0REQVhEakY2dzFjd0RRWUpLb1pJaHZjTkFRRUwKQlFBd01qRXdNQzRHQTFVRUF3d25URUZUSUVWd2FHVnRaWEpoYkNCRFlXNWthV1JoZEdVZ1FuSnBaR2RsSURJdwpNall4TURFM01CNFhEVEkyTVRBeE5qSXhNekF6TjFvWERUSTJNVEF4T0RJeE16QXpOMW93TWpFd01DNEdBMVVFCkF3d25URUZUSUVWd2FHVnRaWEpoYkNCRFlXNWthV1JoZEdVZ1FuSnBaR2RsSURJd01qWXhNREUzTUlJQ0lqQU4KQmdrcWhraUc5dzBCQVFFRkFBT0NBZzhBTUlJQ0NnS0NBZ0VBb0FvWDBpRk85MTBhUFA3bFIyMi9ublJOM2dtcgp6THdOV0lPVWNaRUFuTUY1Mm5paU9lZ2FTcmxuUW1tbEROQWRJdWFEYUdtRk8xSlE5NVMzR05Udit1N0hPZGprCmkzbjkrUE9pRDRsVmtzaDVqcjB0TFhhSzFadnRsaXUwTkFYdmVlL1h4MVJyRG1BRVBOWllQTW9WQ3JhN1BlUEQKWVFocUwxdWNsY3hDWWJXRUhYK0t6K2RvaXNOcnNNMlNNbytVYXFZT1RYUXRBTFk5OGVRVHNUR1gvZWE4dGE1QQpGYlVoSGM0cHRpOTltK0kxTmNuYnA0NzIwQjVDMVpKbFJhOFJpL25wRVdmWG5IOUQ2RTFzNzN5VFRkbmdLR24zCm1aR3pkeU5yZE9jcXBoVFhKcHk0TWF4K05wMThTMWxQUVJZNmFCdlNDSjNEOERwVDh1Y2FuVm9IZUdJSytxNEEKQkZXK3REcUNsSzdCYVpneGxVdEwvZmRxbWpyMkNmdnFTVDE0dVoyRE5aRXdTVzhLbE9HeEtQQ3pjYzQ3WDZUegpOZCsrRW8yOTlXRVBRLzVKOHZVYThmSU9VWEo0bTFpK0Nvamxja2NycEVyVytIWE4ra1MyMnIyOG92WUJYNlVoCjk0d2M2bkJmZzFRbFpSbG5rVkpRMnVBWDU5UWNBaWJqVTBnOWwvRGRuTzJzT09rdW1CUzlSb1JRVTRHVWtKUmkKci9mSEdOV2hwc1QyU0JZSWlmaUNaRW1QWTArTy9TOTlZM1NKUTBjdnU0SGxZZmwzVkt3d3dTMkNIOStYNVB6QgpFamFLV1UyRVRubkNIb3h5Vng5NHM4ZmY4S2xBMkNTVUdQYitDdHVGaGg0cHU2ckZTc1VWbzRtZVVjSHI1NjNTCmpPR09yWHNBK1JRcm1Ya0NBd0VBQWFOVE1GRXdIUVlEVlIwT0JCWUVGS1EwcGlZSTNHc2xBb3NrTm1BK1g3UkoKck5vcU1COUdBMVVkSXdRWU1CYUFGS1EwcGlZSTNHc2xBb3NrTm1BK1g3UkpyTm9xTUE4R0ExVWRFd0VCL3dRRgpNQU1CQWY4d0RRWUpLb1pJaHZjTkFRRUxCUUFEZ2dJQkFIQ2VINkxlcFM4WTVySFYrSnllMkVqbWFpSStUeXdqCjlvK3JDNzFua2hIUjJNUFNqMVpkVG1kbjBNcDVWWWZyNzdGdUxBcXlyNmoybEpPbmdxZDM0cWRnRmpCNE1Xd2oKM2JoL0xUVTlPbS9EY0NLRm9wZytJRTdsQVUrZHBackhOZGpSUWg3Y20rcVFWZmZjZEpBMnluMi9SVVNibWJXbwp4dklZVkJVaUhUd1hKcFBkM1RvSDVDbVVhOUQ5eENxSTdDMXJxSEZ2SmU2cjNQS1NTUHlnOG1XNjdhSnMvTDJpCllEN3pyd29vNXpEZVRsTDUvaWFlS3NFcldzUUJhblRUcUk4SnJPM1M5aGpXWmFwSlVUTTBHTzc4L0dzRXJKS24Kbm1PMVNsVlpuMjRDV0UwOTA4WVNEb0VBRTdnT0tvSUR6M1BXbnhKb2hmcmVnTUJpdUR1OExaY0YrVlYzQ2JWMgoxSzQ3ekpqNGMxZW1TU1dFeFNoaURUNHlnNkxWWDRWMU1HQWNxYm1zU1ZjQzJVV0hhcTFwaXpwczhVVmdOdEJMCmhIbDJXRjBydmJXMEdLbWgwWHAyNklYaVkwdStPZ1RteWNZWjlNTU5tN1F0MEY0SGdYSHZtdndHbkhVRGVUSE0Ka3RDR0NqMTV5akMzYUNlSkwwV1F0NXhWRzlJRHJldGw5d1d5TXZCTEdvbkJ0YnMxdEcxSVF5SzBGWXVpYUFOdQp2SE9TNWp4dmxRSGJISjEwVzhkVS9FQTFoR3RQN1FCVmdsSk1XQXBEcGNZbjA2cWt0d1VqRXo0QzNaUFRJVXFWCmhTcmt1MjRqcTRPR25VSHZWRDdPcjk2ZjVaTDdUb3ExMW1EeFh5SmRBOWRCTXg4bXhqOG51REpaWThEU0lvOGMKUjNENEJQY1NoakRqCi0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K
+
+jobs:
+  stage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    steps:
+      - name: Recover exact frozen private candidate base
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private"
+          mkdir "$root"
+          cd "$root"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""
+          matched_sha=""
+          while read -r sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+              matched_sha="$sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"
+          test -n "$matched_ref"
+          test -n "$matched_sha"
+          echo "::add-mask::$matched_ref"
+          echo "::add-mask::$matched_sha"
+          test "$(printf '%s' "$matched_sha" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=64 origin "$matched_ref"
+          actual="$(git rev-parse FETCH_HEAD)"
+          test "$actual" = "$matched_sha"
+          echo "::add-mask::$actual"
+          git checkout -q -B verify-target "$actual"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          printf 'WORK_ROOT=%s\n' "$root" >> "$GITHUB_ENV"
+          printf 'BASE_SHA=%s\n' "$actual" >> "$GITHUB_ENV"
+          printf 'BASE_TREE=%s\n' "$tree" >> "$GITHUB_ENV"
+          unset PRIVATE_TOKEN auth matched_ref matched_sha actual tree
+          echo "LAS_PRIVATE_BASE_RECOVERY=PASS"
+
+      - name: Install exact build toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          archive="$RUNNER_TEMP/alr.zip"
+          prefix="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --silent --show-error \
+            --output "$archive" \
+            "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip"
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $archive" | sha256sum --check --strict >/dev/null
+          mkdir -p "$prefix"
+          unzip -q "$archive" -d "$prefix"
+          echo "$prefix/bin" >> "$GITHUB_PATH"
+          alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
+          workspace="$RUNNER_TEMP/alr-work"
+          mkdir -p "$workspace"
+          cd "$workspace"
+          alr -n init --in-place --no-skel --lib candidate_toolchain >/dev/null
+          alr_path="$(command -v alr)"
+          wrapper="$RUNNER_TEMP/gprbuild-via-alire"
+          cat > "$wrapper" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$workspace"
+          exec "$alr_path" exec -- gprbuild "\$@"
+          EOF
+          chmod 0755 "$wrapper"
+          printf 'GPRBUILD=%s\n' "$wrapper" >> "$GITHUB_ENV"
+          echo "LAS_TOOLCHAIN_INSTALL=PASS"
+
+      - name: Materialize, verify and seal private candidate bytes
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$WORK_ROOT"
+          log="$RUNNER_TEMP/private-verification.log"
+          : >"$log"
+
+          resolve_blob() {
+            local blob="$1"
+            local path
+            path="$(git ls-files -s | awk -v b="$blob" '$2 == b {print $4}')"
+            test -n "$path"
+            test "$(printf '%s\n' "$path" | wc -l)" -eq 1
+            echo "::add-mask::$path"
+            printf '%s' "$path"
+          }
+
+          run_hidden() {
+            local label="$1"
+            shift
+            if "$@" >>"$log" 2>&1; then
+              echo "LAS_${label}=PASS"
+              return 0
+            fi
+            echo "LAS_${label}=FAIL"
+            return 1
+          }
+
+          m1="$(resolve_blob "$MATERIALIZER_1_BLOB")"
+          m2="$(resolve_blob "$MATERIALIZER_2_BLOB")"
+          m3="$(resolve_blob "$MATERIALIZER_3_BLOB")"
+          m4="$(resolve_blob "$MATERIALIZER_4_BLOB")"
+          verifier="$(resolve_blob "$CANONICAL_VERIFIER_BLOB")"
+
+          rc=0
+          run_hidden STAGE1_MATERIALIZE python3 "$m1" || rc=1
+          if [[ "$rc" -eq 0 ]]; then
+            run_hidden STAGE1_FMT cargo +1.98.1 fmt --all || rc=1
+            run_hidden STAGE1_FMT_CHECK cargo +1.98.1 fmt --all -- --check || rc=1
+            run_hidden STAGE1_DIFF_CHECK git diff --check || rc=1
+            run_hidden STAGE1_CHECK cargo +1.98.1 check --locked --features "root-ffi linux-peer-credentials" --all-targets || rc=1
+            run_hidden STAGE1_CLIPPY cargo +1.98.1 clippy --locked --features "root-ffi linux-peer-credentials" --all-targets -- -D warnings || rc=1
+            run_hidden STAGE1_TEST cargo +1.98.1 test --locked --features "root-ffi linux-peer-credentials" --lib -- --test-threads=1 || rc=1
+          fi
+
+          if [[ "$rc" -eq 0 ]]; then
+            run_hidden STAGE2_MATERIALIZE python3 "$m2" || rc=1
+            run_hidden STAGE2_FMT cargo +1.98.1 fmt --all || rc=1
+            run_hidden STAGE2_FMT_CHECK cargo +1.98.1 fmt --all -- --check || rc=1
+            run_hidden STAGE2_DIFF_CHECK git diff --check || rc=1
+            run_hidden STAGE2_CHECK cargo +1.98.1 check --locked --features "root-ffi linux-peer-credentials" --all-targets || rc=1
+            run_hidden STAGE2_CLIPPY cargo +1.98.1 clippy --locked --features "root-ffi linux-peer-credentials" --all-targets -- -D warnings || rc=1
+            run_hidden STAGE2_TEST cargo +1.98.1 test --locked --features "root-ffi linux-peer-credentials" --lib -- --test-threads=1 || rc=1
+          fi
+
+          if [[ "$rc" -eq 0 ]]; then
+            run_hidden STAGE3_MATERIALIZE python3 "$m3" || rc=1
+            run_hidden STAGE3_HYGIENE python3 "$m4" || rc=1
+            run_hidden STAGE3_FMT cargo +1.98.1 fmt --all || rc=1
+            run_hidden STAGE3_FMT_CHECK cargo +1.98.1 fmt --all -- --check || rc=1
+            run_hidden STAGE3_DIFF_CHECK git diff --check || rc=1
+            run_hidden STAGE3_CHECK cargo +1.98.1 check --locked --features "root-ffi linux-peer-credentials" --all-targets || rc=1
+            run_hidden STAGE3_CLIPPY cargo +1.98.1 clippy --locked --features "root-ffi linux-peer-credentials" --all-targets -- -D warnings || rc=1
+            run_hidden STAGE3_TEST cargo +1.98.1 test --locked --features "root-ffi linux-peer-credentials" --lib -- --test-threads=1 || rc=1
+          fi
+
+          if [[ "$rc" -eq 0 ]]; then
+            git add src >>"$log" 2>&1
+            run_hidden FINAL_STAGED_DIFF_CHECK git diff --cached --check || rc=1
+          fi
+
+          if [[ "$rc" -eq 0 ]]; then
+            git config user.name "LAS Ephemeral Verification Canonicalizer"
+            git config user.email "las-ephemeral-verifier@users.noreply.github.com"
+            git commit -m "Ephemeral verified retired archive candidate" >>"$log" 2>&1 || rc=1
+          fi
+
+          if [[ "$rc" -eq 0 ]]; then
+            staged="$RUNNER_TEMP/pre-tlc-verifier.sh"
+            python3 - "$verifier" "$staged" >>"$log" 2>&1 <<'PY'
+          from pathlib import Path
+          import sys
+          src = Path(sys.argv[1]).read_text(encoding="utf-8")
+          needle = 'TLC_MAP="$TMP/tlc-map.tsv"'
+          if src.count(needle) != 1:
+              raise SystemExit("canonical TLC boundary not unique")
+          insertion = '''\nrecord "tracked tree unchanged after candidate pre-TLC verification" bash -c '\n  test -z "$(git status --porcelain --untracked-files=no)"\n'\necho "LAS_CANDIDATE_PRE_TLC_RESULT=PASS"\nexit 0\n\n'''
+          Path(sys.argv[2]).write_text(src.replace(needle, insertion + needle, 1), encoding="utf-8")
+          PY
+            chmod 0700 "$staged"
+            run_hidden CANONICAL_PRE_TLC env LAS_VERIFY_EXPECTED_BRANCH=verify-target bash "$staged" || rc=1
+          fi
+
+          printf 'VERIFY_RC=%s\n' "$rc" >> "$GITHUB_ENV"
+          if [[ "$rc" -eq 0 ]]; then
+            candidate_tree="$(git rev-parse 'HEAD^{tree}')"
+            candidate_commit="$(git rev-parse HEAD)"
+            echo "::add-mask::$candidate_tree"
+            echo "::add-mask::$candidate_commit"
+            printf 'CANDIDATE_TREE=%s\n' "$candidate_tree" >> "$GITHUB_ENV"
+            printf 'CANDIDATE_COMMIT=%s\n' "$candidate_commit" >> "$GITHUB_ENV"
+            echo "LAS_CANDIDATE_TREE_PROOF=$(printf '%s' "$candidate_tree" | sha256sum | awk '{print $1}')"
+            echo "LAS_CANDIDATE_STAGING=PASS"
+          else
+            echo "LAS_CANDIDATE_STAGING=FAIL"
+          fi
+
+      - name: Encrypt private diagnostics and candidate material
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$RUNNER_TEMP/package"
+          mkdir -p "$package"
+          log="$RUNNER_TEMP/private-verification.log"
+          test -f "$log" && cp "$log" "$package/verification.log"
+
+          if [[ "${VERIFY_RC:-1}" = "0" ]]; then
+            cd "$WORK_ROOT"
+            files="$RUNNER_TEMP/changed-files.z"
+            git diff --name-only -z "$BASE_SHA" HEAD -- src >"$files"
+            python3 - "$BASE_SHA" "$BASE_TREE" "$CANDIDATE_COMMIT" "$CANDIDATE_TREE" "$files" "$package" <<'PY'
+          import json, os, pathlib, subprocess, sys
+          base_sha, base_tree, candidate_commit, candidate_tree, list_path, package = sys.argv[1:]
+          raw = pathlib.Path(list_path).read_bytes()
+          paths = [p.decode('utf-8') for p in raw.split(b'\0') if p]
+          if not paths:
+              raise SystemExit('empty candidate change set')
+          entries=[]
+          root=pathlib.Path(package)/'files'
+          for path in paths:
+              src=pathlib.Path(path)
+              if not src.is_file():
+                  raise SystemExit('candidate contains non-file source change')
+              dst=root/path
+              dst.parent.mkdir(parents=True, exist_ok=True)
+              dst.write_bytes(src.read_bytes())
+              blob=subprocess.check_output(['git','hash-object',path],text=True).strip()
+              mode=subprocess.check_output(['git','ls-files','-s','--',path],text=True).split()[0]
+              entries.append({'path':path,'mode':mode,'blob':blob,'size':src.stat().st_size})
+          manifest={
+              'schema':'las-encrypted-candidate-material-v1',
+              'base_commit':base_sha,
+              'base_tree':base_tree,
+              'candidate_ephemeral_commit':candidate_commit,
+              'candidate_tree':candidate_tree,
+              'materializer_blobs':[
+                  os.environ['MATERIALIZER_1_BLOB'],os.environ['MATERIALIZER_2_BLOB'],
+                  os.environ['MATERIALIZER_3_BLOB'],os.environ['MATERIALIZER_4_BLOB']],
+              'canonical_verifier_blob':os.environ['CANONICAL_VERIFIER_BLOB'],
+              'files':entries,
+          }
+          pathlib.Path(package,'manifest.json').write_text(json.dumps(manifest,sort_keys=True,separators=(',',':'))+'\n',encoding='utf-8')
+          PY
+          fi
+
+          tarball="$RUNNER_TEMP/private-package.tar.gz"
+          tar -C "$package" -czf "$tarball" .
+          cert="$RUNNER_TEMP/bridge-cert.pem"
+          printf '%s' "$BRIDGE_CERT_B64" | base64 -d >"$cert"
+          ciphertext="$RUNNER_TEMP/opaque-candidate.p7m"
+          openssl cms -encrypt -binary -aes256 -outform DER -recip "$cert" -in "$tarball" -out "$ciphertext"
+          rm -rf "$package" "$tarball" "$cert"
+          echo "LAS_ENCRYPTED_PAYLOAD_SHA256=$(sha256sum "$ciphertext" | awk '{print $1}')"
+          printf 'CIPHERTEXT_PATH=%s\n' "$ciphertext" >> "$GITHUB_ENV"
+
+      - name: Upload ciphertext only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: opaque-retired-archive-candidate-20261017
+          path: ${{ env.CIPHERTEXT_PATH }}
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Enforce staging result
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${VERIFY_RC:-1}" = "0"
+          echo "LAS_OPAQUE_CANDIDATE_STAGE=PASS"
