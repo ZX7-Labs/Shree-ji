@@ -1,53 +1,171 @@
-name: Private current-202 TLC continuation
+name: Candidate3 exact TLC failed-profile continuation 20261016
 
 on:
   workflow_dispatch:
     inputs:
       index:
-        description: Canonical current-202 profile index; default-branch execution is retired
+        description: Exact failed canonical TLC profile index from parent run 38829095332
         required: true
         type: string
       segment:
         description: Continuation segment number
         required: true
+        default: "1"
         type: string
       resume_run_id:
-        description: Prior checkpoint run id
+        description: Prior continuation run containing authenticated encrypted checkpoint
         required: false
         default: ""
         type: string
       resume_artifact:
-        description: Prior checkpoint artifact name
+        description: Prior authenticated encrypted checkpoint artifact name
         required: false
         default: ""
         type: string
 
 permissions:
   contents: read
+  actions: write
+
+concurrency:
+  group: candidate3-exact-tlc-resume-${{ inputs.index }}
+  cancel-in-progress: false
+
+env:
+  PARENT_RUN_ID: "38829095332"
+  EXPECTED_PARENT_HEAD: 55471ace6dd056674830ea7764ed6d088faacaa1
+  EXPECTED_PARENT_BRANCH: verify/candidate3-tlc-20261016
+  EXPECTED_PARENT_WORKFLOW_BLOB: e019bd29322d7cbac67df7e0b4366000018311a3
+  PARENT_WORKFLOW_PATH: .github/workflows/private-candidate3-tlc-20261016.yml
+  CONTINUATION_REF: verify/candidate3-tlc-resume-20261016
 
 jobs:
-  retired-default-branch:
-    if: github.ref_name == 'main'
+  validate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    env:
+      TARGET_INDEX: ${{ inputs.index }}
+      SEGMENT: ${{ inputs.segment }}
+      RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+      RESUME_ARTIFACT: ${{ inputs.resume_artifact }}
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Reject default-branch legacy continuation
+      - name: Bind immutable runner and exact failed parent profile
         shell: bash
         run: |
           set -euo pipefail
-          echo "LAS_DEFAULT_BRANCH_LEGACY_TLC_CONTINUATION=RETIRED"
-          echo "Canonical current-202 generic execution is allowed only from current-202-tlc-continuation-v4-runner, whose frozen workflow revision is independently bound and verified."
-          exit 1
+          test "$GITHUB_REF_NAME" = "$CONTINUATION_REF"
+          [[ "$TARGET_INDEX" =~ ^[0-9]+$ ]]
+          [[ "$SEGMENT" =~ ^[1-9][0-9]*$ ]]
+          test "$TARGET_INDEX" -ge 0
+          test "$TARGET_INDEX" -lt 202
+          if [[ "$SEGMENT" -eq 1 ]]; then
+            test -z "$RESUME_RUN_ID"
+            test -z "$RESUME_ARTIFACT"
+          else
+            [[ "$RESUME_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+            test "$RESUME_ARTIFACT" = "candidate3-tlc-resume-${TARGET_INDEX}-$((SEGMENT - 1))"
+          fi
 
-  reject-unexpected-ref:
-    if: github.ref_name != 'main'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Reject non-frozen default workflow revision
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "LAS_DEFAULT_WORKFLOW_REVISION_NONCANONICAL_REF=REJECTED"
-          echo "Dispatches to current-202-tlc-continuation-v4-runner execute that ref's frozen workflow, not this default-branch revision."
-          exit 1
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
+          ref_json="$RUNNER_TEMP/continuation-ref.json"
+          curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$api/git/ref/heads/$CONTINUATION_REF" >"$ref_json"
+          continuation_sha="$(python3 - "$ref_json" <<'PY'
+          import json, sys
+          print(json.load(open(sys.argv[1], encoding='utf-8'))['object']['sha'])
+          PY
+          )"
+          rm -f "$ref_json"
+          test "$continuation_sha" = "$GITHUB_SHA"
+
+          run_json="$RUNNER_TEMP/parent-run.json"
+          workflow_json="$RUNNER_TEMP/parent-workflow.json"
+          jobs_dir="$RUNNER_TEMP/parent-jobs"
+          mkdir -p "$jobs_dir"
+          curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$api/actions/runs/$PARENT_RUN_ID" >"$run_json"
+          encoded="$(python3 - "$PARENT_WORKFLOW_PATH" <<'PY'
+          import sys, urllib.parse
+          print(urllib.parse.quote(sys.argv[1], safe='/'))
+          PY
+          )"
+          curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$api/contents/$encoded?ref=$EXPECTED_PARENT_HEAD" >"$workflow_json"
+          for page in 1 2 3; do
+            curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$api/actions/runs/$PARENT_RUN_ID/jobs?per_page=100&page=$page" >"$jobs_dir/$page.json"
+          done
+          python3 - "$run_json" "$workflow_json" "$jobs_dir" "$TARGET_INDEX" <<'PY'
+          import json, os, pathlib, sys
+          run = json.load(open(sys.argv[1], encoding='utf-8'))
+          wf = json.load(open(sys.argv[2], encoding='utf-8'))
+          index = int(sys.argv[4])
+          expected = {
+              'status': 'completed',
+              'conclusion': 'failure',
+              'event': 'push',
+              'run_attempt': 1,
+              'head_branch': os.environ['EXPECTED_PARENT_BRANCH'],
+              'head_sha': os.environ['EXPECTED_PARENT_HEAD'],
+              'path': os.environ['PARENT_WORKFLOW_PATH'],
+          }
+          for key, value in expected.items():
+              if run.get(key) != value:
+                  raise SystemExit(f'parent run mismatch: {key}')
+          if wf.get('type') != 'file' or wf.get('sha') != os.environ['EXPECTED_PARENT_WORKFLOW_BLOB']:
+              raise SystemExit('parent workflow blob mismatch')
+          jobs = []
+          for path in sorted(pathlib.Path(sys.argv[3]).glob('*.json')):
+              jobs.extend(json.load(open(path, encoding='utf-8')).get('jobs', []))
+          by_name = {}
+          for job in jobs:
+              name = job.get('name')
+              if name in by_name:
+                  raise SystemExit(f'duplicate parent job name: {name}')
+              by_name[name] = job
+          expected_tlc = {f'tlc ({i})' for i in range(202)}
+          actual_tlc = {name for name in by_name if isinstance(name, str) and name.startswith('tlc (')}
+          if actual_tlc != expected_tlc:
+              raise SystemExit('parent TLC matrix job set mismatch')
+          bind = by_name.get('bind-pre-tlc')
+          if not bind or bind.get('status') != 'completed' or bind.get('conclusion') != 'success':
+              raise SystemExit('parent pre-TLC binding job not successful')
+          aggregate = by_name.get('aggregate')
+          if not aggregate or aggregate.get('status') != 'completed' or aggregate.get('conclusion') != 'failure':
+              raise SystemExit('parent aggregate failure evidence missing')
+          target = by_name[f'tlc ({index})']
+          if target.get('status') != 'completed' or target.get('conclusion') not in {'failure', 'cancelled'}:
+              raise SystemExit('requested profile is not an exact failed parent profile')
+          steps = {s.get('name'): (s.get('status'), s.get('conclusion')) for s in target.get('steps', [])}
+          if steps.get('Recover exact frozen private candidate') != ('completed', 'success'):
+              raise SystemExit('requested profile private recovery did not succeed')
+          tlc = steps.get('Run exact canonical TLC profile')
+          if tlc is None or tlc[0] != 'completed' or tlc[1] not in {'failure', 'cancelled'}:
+              raise SystemExit('requested profile failure is not in canonical TLC execution')
+          print('LAS_CANDIDATE3_RESUME_PARENT_PROFILE=PASS')
+          PY
+          rm -rf "$run_json" "$workflow_json" "$jobs_dir"
+          echo "LAS_CANDIDATE3_RESUME_ORCHESTRATOR=PASS"
+          echo "LAS_CANDIDATE3_RESUME_INDEX=$TARGET_INDEX"
+
+  continuation:
+    needs: validate
+    uses: ./.github/workflows/_private-assurance-tlc-continuation-slice.yml
+    with:
+      index: ${{ fromJSON(inputs.index) }}
+      segment: ${{ fromJSON(inputs.segment) }}
+      resume_run_id: ${{ inputs.resume_run_id }}
+      resume_artifact: ${{ inputs.resume_artifact }}
+    secrets: inherit
