@@ -1,0 +1,182 @@
+name: Exact candidate3 Root Authority TLC 20261016
+
+on:
+  push:
+    branches:
+      - "verify/candidate3-root-tlc-20261016"
+    paths:
+      - ".github/workflows/private-candidate3-root-tlc-20261016.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exact-candidate3-root-tlc-20261016
+  cancel-in-progress: false
+
+env:
+  TARGET_REF_HASH: a5f3dd87c6174b2ec1aafe984e6a5722b8cf90562d8ff21cb5e7b12f271466c2
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 269a9a8c7afae986f8065e93745c9017f848292a118b2b9d006d007cbdb6b1f8
+  EXPECTED_PRIVATE_TREE_PROOF: 6998e8e80e6c8fb86fbac5e4c512af441f827b4536aa5448dfed6aa14568468e
+  EXPECTED_VERIFIER_BLOB: 62e3e6dc0fad5dddc7fb0a453a3cd681d911e590
+  EXPECTED_ROOT_TLC_WORKFLOW_BLOB: f1850218e5905218fe5ff75e4d06a1ed0a5c776a
+
+jobs:
+  verify-root-tlc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - name: Recover exact frozen private candidate
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+          root="$GITHUB_WORKSPACE/target"
+          mkdir "$root"
+          cd "$root"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""
+          matched_sha=""
+          while read -r sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+              matched_sha="$sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"
+          test -n "$matched_ref"
+          test -n "$matched_sha"
+          echo "::add-mask::$matched_ref"
+          echo "::add-mask::$matched_sha"
+          test "$(printf '%s' "$matched_sha" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          actual="$(git rev-parse FETCH_HEAD)"
+          echo "::add-mask::$actual"
+          test "$actual" = "$matched_sha"
+          test "$(printf '%s' "$actual" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git checkout -q --detach "$actual"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test "$(git hash-object tools/verify_codespaces_all.sh)" = "$EXPECTED_VERIFIER_BLOB"
+          test "$(git hash-object .github/workflows/root-authority-tlc.yml)" = "$EXPECTED_ROOT_TLC_WORKFLOW_BLOB"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          unset PRIVATE_TOKEN auth matched_ref matched_sha actual tree
+          echo "LAS_CANDIDATE3_ROOT_TLC_BINDING=PASS"
+
+      - name: Extract exact private Root TLC shell gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          python3 - .github/workflows/root-authority-tlc.yml "$RUNNER_TEMP" <<'PY'
+          from pathlib import Path
+          import sys
+
+          workflow = Path(sys.argv[1])
+          out = Path(sys.argv[2])
+          targets = [
+              "Verify Java runtime",
+              "Fetch pinned TLA+ tools and verify release checksum",
+              "Parse Root Authority specifications",
+              "Exhaustively model-check Root Authority profiles",
+              "Exhaustively model-check guarded Root composition",
+              "Exhaustively model-check supervisor epoch coordination",
+              "Exhaustively model-check active service lifecycle",
+              "Exhaustively model-check active service fault interleavings",
+              "Exhaustively model-check graceful epoch handoff",
+              "Exhaustively model-check guarded physical-effect settlement",
+              "Exhaustively model-check fresh Root-to-effect handoff",
+          ]
+          lines = workflow.read_text(encoding="utf-8").splitlines()
+          found = {}
+          i = 0
+          while i < len(lines):
+              prefix = "      - name: "
+              if not lines[i].startswith(prefix):
+                  i += 1
+                  continue
+              name = lines[i][len(prefix):]
+              j = i + 1
+              while j < len(lines) and not lines[j].startswith(prefix):
+                  if name in targets and lines[j] == "        run: |":
+                      if name in found:
+                          raise SystemExit(f"duplicate target step: {name}")
+                      k = j + 1
+                      block = []
+                      while k < len(lines):
+                          line = lines[k]
+                          if line.startswith("          "):
+                              block.append(line[10:])
+                              k += 1
+                              continue
+                          if line == "":
+                              block.append("")
+                              k += 1
+                              continue
+                          break
+                      found[name] = "\n".join(block).rstrip() + "\n"
+                      j = k
+                      break
+                  j += 1
+              i = max(i + 1, j)
+          missing = [name for name in targets if name not in found]
+          if missing:
+              raise SystemExit("missing target steps: " + ", ".join(missing))
+          if set(found) != set(targets):
+              raise SystemExit("unexpected extracted step set")
+          for ordinal, name in enumerate(targets, start=1):
+              path = out / f"candidate3-root-tlc-step-{ordinal:02d}.sh"
+              path.write_text("#!/usr/bin/env bash\n" + found[name], encoding="utf-8")
+              path.chmod(0o700)
+              print(f"LAS_CANDIDATE3_ROOT_TLC_EXTRACTED_{ordinal:02d}=PASS")
+          PY
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "LAS_CANDIDATE3_ROOT_TLC_EXTRACTION=PASS"
+
+      - name: Execute exact private Root TLC shell gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          for ordinal in $(seq -w 1 11); do
+            script="$RUNNER_TEMP/candidate3-root-tlc-step-${ordinal}.sh"
+            test -s "$script"
+            if (( 10#$ordinal >= 4 )); then
+              JAVA_TOOL_OPTIONS=-Xmx5g bash "$script"
+            else
+              env -u JAVA_TOOL_OPTIONS bash "$script"
+            fi
+            echo "LAS_CANDIDATE3_ROOT_TLC_STEP_${ordinal}=PASS"
+          done
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "LAS_CANDIDATE3_ROOT_TLC_EXECUTION=PASS"
+
+      - name: Recheck exact immutable candidate and gate identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          actual="$(git rev-parse HEAD)"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$actual"
+          echo "::add-mask::$tree"
+          test "$(printf '%s' "$actual" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test "$(git hash-object tools/verify_codespaces_all.sh)" = "$EXPECTED_VERIFIER_BLOB"
+          test "$(git hash-object .github/workflows/root-authority-tlc.yml)" = "$EXPECTED_ROOT_TLC_WORKFLOW_BLOB"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "LAS_CANDIDATE3_ROOT_TLC_RESULT=PASS"
