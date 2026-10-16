@@ -1,0 +1,121 @@
+name: Candidate3 resumable TLC closure launcher 20261016
+
+on:
+  push:
+    branches:
+      - verify/candidate3-resumable-tlc-20261016
+    paths:
+      - RUN_CANDIDATE3_RESUMABLE_TLC_20261016
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  ORIGINAL_RUN_ID: "38829095332"
+  EXPECTED_ORIGINAL_PUBLIC_HEAD: 55471ace6dd056674830ea7764ed6d088faacaa1
+  EXPECTED_ORIGINAL_BRANCH: verify/candidate3-tlc-20261016
+  ORIGINAL_WORKFLOW_PATH: .github/workflows/private-candidate3-tlc-20261016.yml
+  EXPECTED_ORIGINAL_WORKFLOW_BLOB: e019bd29322d7cbac67df7e0b4366000018311a3
+  CONTINUATION_REF: verify/candidate3-resumable-tlc-20261016
+
+jobs:
+  discover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      indices: ${{ steps.classify.outputs.indices }}
+      count: ${{ steps.classify.outputs.count }}
+    steps:
+      - name: Bind immutable launcher ref and exact settled original run
+        id: classify
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "$CONTINUATION_REF"
+          ref_json="$RUNNER_TEMP/ref.json"
+          curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/git/ref/heads/$CONTINUATION_REF" >"$ref_json"
+          test "$(python3 - "$ref_json" <<'PY'
+          import json,sys
+          print(json.load(open(sys.argv[1],encoding='utf-8'))['object']['sha'])
+          PY
+          )" = "$GITHUB_SHA"
+          rm -f "$ref_json"
+
+          api_get() {
+            curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "$1"
+          }
+          api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$ORIGINAL_RUN_ID" >"$RUNNER_TEMP/run.json"
+          api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/$ORIGINAL_WORKFLOW_PATH?ref=$EXPECTED_ORIGINAL_PUBLIC_HEAD" >"$RUNNER_TEMP/workflow.json"
+          for page in 1 2 3; do
+            api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$ORIGINAL_RUN_ID/jobs?per_page=100&page=$page" >"$RUNNER_TEMP/jobs-$page.json"
+          done
+
+          python3 - "$RUNNER_TEMP/run.json" "$RUNNER_TEMP/workflow.json" "$RUNNER_TEMP/jobs-1.json" "$RUNNER_TEMP/jobs-2.json" "$RUNNER_TEMP/jobs-3.json" \
+            "$EXPECTED_ORIGINAL_PUBLIC_HEAD" "$EXPECTED_ORIGINAL_BRANCH" "$ORIGINAL_WORKFLOW_PATH" "$EXPECTED_ORIGINAL_WORKFLOW_BLOB" "$GITHUB_OUTPUT" <<'PY'
+          import datetime as dt, json, re, sys
+          run=json.load(open(sys.argv[1],encoding='utf-8'))
+          wf=json.load(open(sys.argv[2],encoding='utf-8'))
+          assert run['head_sha']==sys.argv[6]
+          assert run['head_branch']==sys.argv[7]
+          assert run['path']==sys.argv[8]
+          assert run['event']=='push' and run['run_attempt']==1
+          assert run['status']=='completed', f"original run not settled: {run['status']}"
+          assert wf['sha']==sys.argv[9]
+          jobs=[]
+          for p in sys.argv[3:6]: jobs.extend(json.load(open(p,encoding='utf-8'))['jobs'])
+          bind=[j for j in jobs if j['name']=='bind-pre-tlc']
+          assert len(bind)==1 and bind[0]['conclusion']=='success'
+          indexed={}
+          for j in jobs:
+              m=re.fullmatch(r'tlc \((\d+)\)',j['name'])
+              if m:
+                  i=int(m.group(1)); assert i not in indexed; indexed[i]=j
+          assert set(indexed)==set(range(202)), (len(indexed), sorted(set(range(202))-set(indexed)))
+          cancelled=[]
+          for i in range(202):
+              j=indexed[i]
+              assert j['status']=='completed'
+              steps={s['name']:s for s in j.get('steps',[])}
+              assert steps['Recover exact frozen private candidate']['conclusion']=='success'
+              if j['conclusion']=='success':
+                  assert steps['Run exact canonical TLC profile']['conclusion']=='success'
+              elif j['conclusion']=='cancelled':
+                  assert steps['Run exact canonical TLC profile']['conclusion']=='cancelled'
+                  start=dt.datetime.fromisoformat(j['started_at'].replace('Z','+00:00'))
+                  end=dt.datetime.fromisoformat(j['completed_at'].replace('Z','+00:00'))
+                  seconds=(end-start).total_seconds()
+                  assert 350*60 <= seconds <= 357*60, (i,seconds)
+                  cancelled.append(i)
+              else:
+                  raise AssertionError((i,j['conclusion']))
+          assert cancelled, 'no resumable profiles required'
+          out=sys.argv[10]
+          with open(out,'a',encoding='utf-8') as f:
+              f.write('indices='+json.dumps(cancelled,separators=(',',':'))+'\n')
+              f.write('count='+str(len(cancelled))+'\n')
+          print('LAS_CANDIDATE3_RESUMABLE_DISCOVERED_COUNT='+str(len(cancelled)))
+          print('LAS_CANDIDATE3_RESUMABLE_DISCOVERY=PASS')
+          PY
+          rm -f "$RUNNER_TEMP"/run.json "$RUNNER_TEMP"/workflow.json "$RUNNER_TEMP"/jobs-*.json
+
+  resume:
+    needs: discover
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        index: ${{ fromJSON(needs.discover.outputs.indices) }}
+    uses: ./.github/workflows/_private-candidate3-resumable-tlc-slice-20261016.yml
+    with:
+      index: ${{ matrix.index }}
+      segment: 1
+      resume_run_id: ""
+      resume_artifact: ""
+      mode: ${{ matrix.index == 39 && 'profile39' || 'generic' }}
+    secrets: inherit
