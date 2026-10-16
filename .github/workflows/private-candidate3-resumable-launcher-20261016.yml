@@ -20,25 +20,25 @@ env:
   CONTINUATION_REF: verify/candidate3-resumable-tlc-20261016
 
 jobs:
-  discover:
+  discover-and-dispatch:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    outputs:
-      indices: ${{ steps.classify.outputs.indices }}
-      count: ${{ steps.classify.outputs.count }}
     steps:
-      - name: Bind immutable launcher ref and exact settled original run
-        id: classify
+      - name: Bind immutable launcher ref, classify settled run, dispatch isolated continuations
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test "$GITHUB_REF_NAME" = "$CONTINUATION_REF"
+          api_get() {
+            curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" "$1"
+          }
+
           ref_json="$RUNNER_TEMP/ref.json"
-          curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
-            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/git/ref/heads/$CONTINUATION_REF" >"$ref_json"
+          api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/git/ref/heads/$CONTINUATION_REF" >"$ref_json"
           test "$(python3 - "$ref_json" <<'PY'
           import json,sys
           print(json.load(open(sys.argv[1],encoding='utf-8'))['object']['sha'])
@@ -46,18 +46,14 @@ jobs:
           )" = "$GITHUB_SHA"
           rm -f "$ref_json"
 
-          api_get() {
-            curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
-              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "$1"
-          }
           api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$ORIGINAL_RUN_ID" >"$RUNNER_TEMP/run.json"
           api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/$ORIGINAL_WORKFLOW_PATH?ref=$EXPECTED_ORIGINAL_PUBLIC_HEAD" >"$RUNNER_TEMP/workflow.json"
           for page in 1 2 3; do
             api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$ORIGINAL_RUN_ID/jobs?per_page=100&page=$page" >"$RUNNER_TEMP/jobs-$page.json"
           done
 
-          python3 - "$RUNNER_TEMP/run.json" "$RUNNER_TEMP/workflow.json" "$RUNNER_TEMP/jobs-1.json" "$RUNNER_TEMP/jobs-2.json" "$RUNNER_TEMP/jobs-3.json" \
-            "$EXPECTED_ORIGINAL_PUBLIC_HEAD" "$EXPECTED_ORIGINAL_BRANCH" "$ORIGINAL_WORKFLOW_PATH" "$EXPECTED_ORIGINAL_WORKFLOW_BLOB" "$GITHUB_OUTPUT" <<'PY'
+          indices="$(python3 - "$RUNNER_TEMP/run.json" "$RUNNER_TEMP/workflow.json" "$RUNNER_TEMP/jobs-1.json" "$RUNNER_TEMP/jobs-2.json" "$RUNNER_TEMP/jobs-3.json" \
+            "$EXPECTED_ORIGINAL_PUBLIC_HEAD" "$EXPECTED_ORIGINAL_BRANCH" "$ORIGINAL_WORKFLOW_PATH" "$EXPECTED_ORIGINAL_WORKFLOW_BLOB" <<'PY'
           import datetime as dt, json, re, sys
           run=json.load(open(sys.argv[1],encoding='utf-8'))
           wf=json.load(open(sys.argv[2],encoding='utf-8'))
@@ -76,7 +72,7 @@ jobs:
               m=re.fullmatch(r'tlc \((\d+)\)',j['name'])
               if m:
                   i=int(m.group(1)); assert i not in indexed; indexed[i]=j
-          assert set(indexed)==set(range(202)), (len(indexed), sorted(set(range(202))-set(indexed)))
+          assert set(indexed)==set(range(202)), (len(indexed),sorted(set(range(202))-set(indexed)))
           cancelled=[]
           for i in range(202):
               j=indexed[i]
@@ -95,27 +91,35 @@ jobs:
               else:
                   raise AssertionError((i,j['conclusion']))
           assert cancelled, 'no resumable profiles required'
-          out=sys.argv[10]
-          with open(out,'a',encoding='utf-8') as f:
-              f.write('indices='+json.dumps(cancelled,separators=(',',':'))+'\n')
-              f.write('count='+str(len(cancelled))+'\n')
-          print('LAS_CANDIDATE3_RESUMABLE_DISCOVERED_COUNT='+str(len(cancelled)))
-          print('LAS_CANDIDATE3_RESUMABLE_DISCOVERY=PASS')
+          print(','.join(map(str,cancelled)))
           PY
+          )"
           rm -f "$RUNNER_TEMP"/run.json "$RUNNER_TEMP"/workflow.json "$RUNNER_TEMP"/jobs-*.json
+          test -n "$indices"
+          echo "LAS_CANDIDATE3_RESUMABLE_INDICES=$indices"
 
-  resume:
-    needs: discover
-    strategy:
-      fail-fast: false
-      max-parallel: 8
-      matrix:
-        index: ${{ fromJSON(needs.discover.outputs.indices) }}
-    uses: ./.github/workflows/_private-candidate3-resumable-tlc-slice-20261016.yml
-    with:
-      index: ${{ matrix.index }}
-      segment: 1
-      resume_run_id: ""
-      resume_artifact: ""
-      mode: ${{ matrix.index == 39 && 'profile39' || 'generic' }}
-    secrets: inherit
+          dispatched=0
+          IFS=',' read -r -a index_array <<<"$indices"
+          for index in "${index_array[@]}"; do
+            [[ "$index" =~ ^[0-9]+$ ]]
+            if [[ "$index" -eq 39 ]]; then
+              workflow=private-repaired-202-tlc39-continuation.yml
+            else
+              workflow=private-assurance-slow-tlc-continuation.yml
+            fi
+            payload="$(python3 - "$CONTINUATION_REF" "$index" <<'PY'
+          import json,sys
+          print(json.dumps({'ref':sys.argv[1],'inputs':{'index':sys.argv[2],'segment':'1','resume_run_id':'','resume_artifact':''}},separators=(',',':')))
+          PY
+          )"
+            curl --proto '=https' --tlsv1.2 --fail-with-body -sS -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/dispatches" \
+              -d "$payload"
+            dispatched=$((dispatched + 1))
+            echo "LAS_CANDIDATE3_RESUMABLE_DISPATCHED_INDEX=$index"
+          done
+          test "$dispatched" -eq "${#index_array[@]}"
+          echo "LAS_CANDIDATE3_RESUMABLE_DISCOVERED_COUNT=${#index_array[@]}"
+          echo "LAS_CANDIDATE3_RESUMABLE_LAUNCH=PASS"
