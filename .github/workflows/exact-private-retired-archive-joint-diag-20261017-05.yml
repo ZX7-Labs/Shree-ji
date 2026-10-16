@@ -1,0 +1,120 @@
+name: Exact formatted retired archive joint compile discriminator 20261017-05
+
+on:
+  push:
+    branches:
+      - "verify/retired-archive-binding-20261017-01"
+    paths:
+      - ".github/workflows/exact-private-retired-archive-joint-diag-20261017-05.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: cb93309da47e6ca805ecd50d3fd0916da5227714d343a32d5f181ebbbc02fe45
+  EXPECTED_PRIVATE_HEAD_PROOF: 7148c29d97ca11b7092d3984becf0af7fdef21fd532a1da63bdf40e64f245508
+  EXPECTED_PRIVATE_TREE_PROOF: 099c5516e7e05949ea31470246b9d4e9293adc2876b01a09e5f3c3a030315981
+
+jobs:
+  joint-discriminate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Install exact toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          ALR_ZIP="$RUNNER_TEMP/alr.zip"; ALR_PREFIX="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --output "$ALR_ZIP" \
+            "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip" >/dev/null 2>&1
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $ALR_ZIP" | sha256sum --check --strict >/dev/null
+          mkdir -p "$ALR_PREFIX"; unzip -q "$ALR_ZIP" -d "$ALR_PREFIX"; export PATH="$ALR_PREFIX/bin:$PATH"
+          alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
+          ALR_WS="$RUNNER_TEMP/alire-workspace"; mkdir -p "$ALR_WS"
+          (cd "$ALR_WS" && alr -n init --in-place --no-skel --lib las_archive_joint_diag >/dev/null)
+          GPRBUILD_WRAPPER="$RUNNER_TEMP/gprbuild-wrapper"
+          cat > "$GPRBUILD_WRAPPER" <<EOF_GPR
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$ALR_WS"
+          exec "$ALR_PREFIX/bin/alr" exec -- gprbuild "\$@"
+          EOF_GPR
+          chmod 0755 "$GPRBUILD_WRAPPER"
+          printf 'GPRBUILD=%s\n' "$GPRBUILD_WRAPPER" >> "$GITHUB_ENV"
+
+      - name: Recover exact formatted private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          ref=""; head=""
+          while read -r sha name; do
+            if [[ "$(printf '%s' "$name" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then test -z "$ref"; ref="$name"; head="$sha"; fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$ref"; test -n "$head"
+          echo "::add-mask::$ref"; echo "::add-mask::$head"
+          test "$(printf '%s' "$head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_HEAD_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$head"; git checkout -q --detach "$head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          echo "LAS_JOINT_DIAG_EXACT_RECOVERY=PASS"
+
+      - name: Emit source-free joint compiler diagnostics
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          json="$RUNNER_TEMP/joint.jsonl"
+          set +e
+          GPRBUILD="$GPRBUILD" cargo +1.98.1 check --locked --all-targets \
+            --features root-ffi,linux-peer-credentials --message-format=json >"$json" 2>/dev/null
+          rc=$?
+          set -e
+          echo "LAS_JOINT_DIAG_RC=$rc"
+          python3 - "$json" <<'PY'
+          import hashlib,json,sys
+          errors=[]
+          seen=set()
+          for raw in open(sys.argv[1],encoding='utf-8',errors='replace'):
+              try: obj=json.loads(raw)
+              except Exception: continue
+              if obj.get('reason')!='compiler-message': continue
+              msg=obj.get('message') or {}
+              if msg.get('level')!='error': continue
+              code=(msg.get('code') or {}).get('code') or 'NO_CODE'
+              message=str(msg.get('message') or '')
+              mh=hashlib.sha256(message.encode()).hexdigest()
+              spans=[s for s in (msg.get('spans') or []) if s.get('is_primary')]
+              if not spans: spans=[{'file_name':'GLOBAL','line_start':0,'column_start':0}]
+              for s in spans:
+                  path=str(s.get('file_name') or 'GLOBAL')
+                  item=(code,hashlib.sha256(path.encode()).hexdigest(),int(s.get('line_start') or 0),int(s.get('column_start') or 0),mh)
+                  if item not in seen:
+                      seen.add(item); errors.append(item)
+          print(f"LAS_JOINT_DIAG_ERROR_COUNT={len(errors)}")
+          for i,(code,ph,line,col,mh) in enumerate(errors,1):
+              print(f"LAS_JOINT_DIAG_{i}_CODE={code}")
+              print(f"LAS_JOINT_DIAG_{i}_PATH_SHA256={ph}")
+              print(f"LAS_JOINT_DIAG_{i}_LINE={line}")
+              print(f"LAS_JOINT_DIAG_{i}_COLUMN={col}")
+              print(f"LAS_JOINT_DIAG_{i}_MESSAGE_SHA256={mh}")
+          if not errors:
+              raise SystemExit(71 if rc else 0)
+          PY
+          rm -f "$json"
+          test "$rc" -ne 0
