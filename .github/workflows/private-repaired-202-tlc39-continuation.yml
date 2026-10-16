@@ -1,20 +1,73 @@
-name: Repaired exact 202 TLC39 continuation (default branch retired)
+name: Candidate3 exact resumable TLC39 continuation 20261016
 
 on:
   workflow_dispatch:
+    inputs:
+      index:
+        description: Exact candidate3 canonical TLC profile index; must be 39
+        required: true
+        default: "39"
+        type: string
+      segment:
+        description: Exact continuation segment number
+        required: true
+        default: "1"
+        type: string
+      resume_run_id:
+        description: Prior candidate3 TLC39 checkpoint-producing workflow run
+        required: false
+        default: ""
+        type: string
+      resume_artifact:
+        description: Prior authenticated encrypted candidate3 TLC39 checkpoint artifact
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
+  actions: write
+
+concurrency:
+  group: candidate3-resumable-tlc39
+  cancel-in-progress: false
 
 jobs:
-  retired-default-branch:
+  validate:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    env:
+      TARGET_INDEX: ${{ inputs.index }}
+      SEGMENT: ${{ inputs.segment }}
+      RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+      RESUME_ARTIFACT: ${{ inputs.resume_artifact }}
+      CONTINUATION_REF: verify/candidate3-resumable-tlc-20261016
     steps:
-      - name: Reject default-branch TLC39 continuation
+      - name: Validate candidate3 TLC39 continuation request
         shell: bash
         run: |
           set -euo pipefail
-          echo "LAS_REPAIRED_202_TLC39_DEFAULT_BRANCH=RETIRED"
-          echo "Canonical TLC39 execution is bound exclusively to repaired-202-tlc39-v3-runner and its frozen workflow revision."
-          exit 1
+          test "$GITHUB_REF_NAME" = "$CONTINUATION_REF"
+          test "$TARGET_INDEX" = 39
+          [[ "$SEGMENT" =~ ^[0-9]+$ ]]
+          test "$SEGMENT" -ge 1
+          if [[ "$SEGMENT" -eq 1 ]]; then
+            test -z "$RESUME_RUN_ID"
+            test -z "$RESUME_ARTIFACT"
+          else
+            [[ "$RESUME_RUN_ID" =~ ^[0-9]+$ ]]
+            test "$RESUME_ARTIFACT" = "candidate3-resume-state-39-$((SEGMENT - 1))"
+          fi
+          echo "LAS_CANDIDATE3_TLC39_ORCHESTRATOR_REQUEST=PASS"
+
+  continuation:
+    needs: validate
+    uses: ./.github/workflows/_private-candidate3-resumable-tlc-slice-20261016.yml
+    with:
+      index: 39
+      segment: ${{ fromJSON(inputs.segment) }}
+      resume_run_id: ${{ inputs.resume_run_id }}
+      resume_artifact: ${{ inputs.resume_artifact }}
+      mode: profile39
+      orchestrator_workflow: private-repaired-202-tlc39-continuation.yml
+    secrets: inherit
