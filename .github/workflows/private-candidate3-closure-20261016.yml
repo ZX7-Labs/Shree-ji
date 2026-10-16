@@ -1,0 +1,212 @@
+name: Candidate3 exact 202 TLC closure 20261016
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: candidate3-exact-202-closure-20261016
+  cancel-in-progress: false
+
+env:
+  ORIGINAL_RUN_ID: "38829095332"
+  EXPECTED_ORIGINAL_PUBLIC_HEAD: 55471ace6dd056674830ea7764ed6d088faacaa1
+  EXPECTED_ORIGINAL_BRANCH: verify/candidate3-tlc-20261016
+  ORIGINAL_WORKFLOW_PATH: .github/workflows/private-candidate3-tlc-20261016.yml
+  EXPECTED_ORIGINAL_WORKFLOW_BLOB: e019bd29322d7cbac67df7e0b4366000018311a3
+  PRE_TLC_RUN_ID: "38828110294"
+  EXPECTED_PRE_TLC_PUBLIC_HEAD: 9c99ebb14e302ef8862f1117d765e7a4edafb198
+  PRE_TLC_WORKFLOW_PATH: .github/workflows/private-candidate3-pre-tlc-20261016.yml
+  EXPECTED_PRE_TLC_WORKFLOW_BLOB: c124c1120e6e1b9bf49115db2d7f8fd149acb580
+  RUNNER_REF: verify/candidate3-resumable-tlc-20261016
+  RUNNER_SHA: 43bf26bf734f7b29aa5c8f32c6d2201c4020de7b
+  WRAPPER_PATH: .github/workflows/private-assurance-slow-tlc-continuation.yml
+  WRAPPER_BLOB: 3dc98da64be77f6e9e93bfb98ffda30c90f75894
+  SLICE_PATH: .github/workflows/_private-candidate3-resumable-tlc-slice-20261016.yml
+  SLICE_BLOB: 8c2d62cf3ef50b1d36ccbf337e38322b76900230
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 269a9a8c7afae986f8065e93745c9017f848292a118b2b9d006d007cbdb6b1f8
+  EXPECTED_PRIVATE_TREE_PROOF: 6998e8e80e6c8fb86fbac5e4c512af441f827b4536aa5448dfed6aa14568468e
+  EXPECTED_VERIFIER_BLOB: 62e3e6dc0fad5dddc7fb0a453a3cd681d911e590
+  EXPECTED_TLC_MAP_SHA256: da7bb51d531d0e5e5e6994c80be8f254a110cb8181e6121e3a557fdff9428cee
+  EXPECTED_REPLACEMENTS: "28 29 36 39 109 114 155 156 167 171"
+  EXPECTED_ATTEST_BLOB: eb0de239c1cf3e2d84643b507254a01dab321795
+  REGISTRY_PATH: LAS_CANDIDATE3_TERMINAL_ATTESTATIONS_20261016.json
+  REGISTRY_SCHEMA: las-candidate3-terminal-registry-v1
+  RESULT_PATH: LAS_CANDIDATE3_202_TLC_RESULT_20261016.json
+  RESULT_SCHEMA: las-candidate3-exact-202-tlc-closure-v1
+
+jobs:
+  close:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Recompute exact 202-profile closure from source and durable replacements
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64,hashlib,json,os,re,time,urllib.error,urllib.parse,urllib.request
+          repo=os.environ['GITHUB_REPOSITORY']; token=os.environ['GH_TOKEN']; api=f'https://api.github.com/repos/{repo}'
+          original_id=int(os.environ['ORIGINAL_RUN_ID']); replacements={int(x) for x in os.environ['EXPECTED_REPLACEMENTS'].split()}
+          runner_ref=os.environ['RUNNER_REF']; runner_sha=os.environ['RUNNER_SHA']; wrapper=os.environ['WRAPPER_PATH']; slice_path=os.environ['SLICE_PATH']
+
+          class StripAuthOnCrossHostRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  r=super().redirect_request(req,fp,code,msg,headers,newurl)
+                  if r is not None and urllib.parse.urlsplit(req.full_url).netloc!=urllib.parse.urlsplit(newurl).netloc:
+                      for h in ('Authorization','X-GitHub-Api-Version','Accept'): r.remove_header(h)
+                  return r
+          log_opener=urllib.request.build_opener(StripAuthOnCrossHostRedirect())
+          def req(url,method='GET',payload=None):
+              data=None if payload is None else json.dumps(payload,separators=(',',':')).encode()
+              q=urllib.request.Request(url,data=data,method=method,headers={'Authorization':f'Bearer {token}','Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28','User-Agent':'candidate3-202-closure',**({'Content-Type':'application/json'} if data else {})})
+              with urllib.request.urlopen(q,timeout=60) as r: raw=r.read()
+              return None if not raw else json.loads(raw)
+          def get(url):
+              v=req(url)
+              if not isinstance(v,dict): raise SystemExit(f'non-object response: {url}')
+              return v
+          def contents(path,ref='main',optional=False):
+              url=f"{api}/contents/{urllib.parse.quote(path,safe='/')}?ref={urllib.parse.quote(ref,safe='')}"
+              try: m=get(url)
+              except urllib.error.HTTPError as e:
+                  if optional and e.code==404: return None
+                  raise
+              if m.get('type')!='file' or m.get('encoding')!='base64': raise SystemExit(f'bad contents: {path}@{ref}')
+              return m,base64.b64decode(m['content'].replace('\n',''),validate=True)
+          def jobs(rid):
+              out=[]
+              for page in range(1,5):
+                  d=get(f'{api}/actions/runs/{rid}/jobs?filter=latest&per_page=100&page={page}'); b=d.get('jobs')
+                  if not isinstance(b,list): raise SystemExit('malformed jobs')
+                  out.extend(b)
+                  if len(b)<100: break
+              return out
+          def log_bytes(job_id):
+              q=urllib.request.Request(f'{api}/actions/jobs/{job_id}/logs',headers={'Authorization':f'Bearer {token}','Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28','User-Agent':'candidate3-202-closure'})
+              with log_opener.open(q,timeout=60) as r: return r.read()
+          stamp=re.compile(r'^\d{4}-\d{2}-\d{2}T\S+Z (.*)$')
+          def emitted(raw):
+              return [m.group(1) for line in raw.decode('utf-8',errors='replace').splitlines() if (m:=stamp.match(line))]
+          def one(lines,pat,label):
+              rx=re.compile(pat); vals=[m.group(1) for line in lines if (m:=rx.fullmatch(line))]
+              if len(vals)!=1: raise SystemExit(f'missing/ambiguous {label}: {vals}')
+              return vals[0]
+          def assert_blob(path,ref,blob):
+              m,_=contents(path,ref)
+              if m.get('sha')!=blob: raise SystemExit(f'blob drift: {path}@{ref}')
+
+          assert_blob(os.environ['ORIGINAL_WORKFLOW_PATH'],os.environ['EXPECTED_ORIGINAL_PUBLIC_HEAD'],os.environ['EXPECTED_ORIGINAL_WORKFLOW_BLOB'])
+          assert_blob(os.environ['PRE_TLC_WORKFLOW_PATH'],os.environ['EXPECTED_PRE_TLC_PUBLIC_HEAD'],os.environ['EXPECTED_PRE_TLC_WORKFLOW_BLOB'])
+          ref=get(f"{api}/git/ref/heads/{urllib.parse.quote(runner_ref,safe='')}")
+          if ref.get('object',{}).get('sha')!=runner_sha: raise SystemExit('runner ref drift')
+          assert_blob(wrapper,runner_sha,os.environ['WRAPPER_BLOB']); assert_blob(slice_path,runner_sha,os.environ['SLICE_BLOB'])
+
+          pre=get(f"{api}/actions/runs/{os.environ['PRE_TLC_RUN_ID']}")
+          for k,v in {'head_sha':os.environ['EXPECTED_PRE_TLC_PUBLIC_HEAD'],'path':os.environ['PRE_TLC_WORKFLOW_PATH'],'event':'push','run_attempt':1,'status':'completed','conclusion':'success'}.items():
+              if pre.get(k)!=v: raise SystemExit(f'pre-TLC provenance mismatch: {k}')
+
+          source=get(f'{api}/actions/runs/{original_id}')
+          for k,v in {'head_sha':os.environ['EXPECTED_ORIGINAL_PUBLIC_HEAD'],'head_branch':os.environ['EXPECTED_ORIGINAL_BRANCH'],'path':os.environ['ORIGINAL_WORKFLOW_PATH'],'event':'push','run_attempt':1,'status':'completed'}.items():
+              if source.get(k)!=v: raise SystemExit(f'original run provenance mismatch: {k}')
+          source_jobs=jobs(original_id)
+          bind=[j for j in source_jobs if j.get('name')=='bind-pre-tlc']
+          if len(bind)!=1 or bind[0].get('conclusion')!='success': raise SystemExit('original bind-pre-tlc not exactly successful')
+          indexed={}
+          for j in source_jobs:
+              m=re.fullmatch(r'tlc \(([0-9]+)\)',j.get('name',''))
+              if m:
+                  i=int(m.group(1))
+                  if i in indexed: raise SystemExit('duplicate original TLC job')
+                  indexed[i]=j
+          if set(indexed)!=set(range(202)): raise SystemExit('original TLC coverage is not exactly 202')
+          direct=[]; cancelled=[]
+          for i in range(202):
+              j=indexed[i]
+              if j.get('status')!='completed': raise SystemExit(f'original profile not settled: {i}')
+              steps={s.get('name'):s for s in j.get('steps',[])}
+              if steps.get('Recover exact frozen private candidate',{}).get('conclusion')!='success': raise SystemExit(f'candidate recovery not successful: {i}')
+              conclusion=j.get('conclusion')
+              tlc=steps.get('Run exact canonical TLC profile',{}).get('conclusion')
+              if conclusion=='success' and tlc=='success': direct.append(i)
+              elif conclusion=='cancelled' and tlc=='cancelled':
+                  start=j.get('started_at'); end=j.get('completed_at')
+                  if not start or not end: raise SystemExit(f'cancelled profile missing times: {i}')
+                  import datetime as dt
+                  seconds=(dt.datetime.fromisoformat(end.replace('Z','+00:00'))-dt.datetime.fromisoformat(start.replace('Z','+00:00'))).total_seconds()
+                  if not (350*60<=seconds<=357*60): raise SystemExit(f'cancelled profile outside timeout envelope: {i}:{seconds}')
+                  cancelled.append(i)
+              else: raise SystemExit(f'unexpected original outcome: {i}:{conclusion}:{tlc}')
+          if len(direct)!=192 or set(cancelled)!=replacements: raise SystemExit(f'original result-set drift: direct={len(direct)} cancelled={cancelled}')
+          print('LAS_CANDIDATE3_202_SOURCE_SET=PASS')
+
+          registry_value=contents(os.environ['REGISTRY_PATH'],'main')
+          registry=json.loads(registry_value[1].decode('utf-8'))
+          fixed={'schema':os.environ['REGISTRY_SCHEMA'],'original_run_id':original_id,'private_snapshot_proof':os.environ['EXPECTED_PRIVATE_SNAPSHOT_PROOF'],'private_tree_proof':os.environ['EXPECTED_PRIVATE_TREE_PROOF'],'canonical_verifier_blob':os.environ['EXPECTED_VERIFIER_BLOB'],'tlc_map_sha256':os.environ['EXPECTED_TLC_MAP_SHA256'],'runner_sha':runner_sha,'wrapper_workflow_blob':os.environ['WRAPPER_BLOB'],'slice_workflow_blob':os.environ['SLICE_BLOB'],'attestor_workflow_blob':os.environ['EXPECTED_ATTEST_BLOB']}
+          for k,v in fixed.items():
+              if registry.get(k)!=v: raise SystemExit(f'registry binding mismatch: {k}')
+          profiles=registry.get('profiles')
+          if not isinstance(profiles,dict) or set(profiles)!={str(i) for i in replacements}: raise SystemExit('durable terminal registry is not exact replacement set')
+
+          replacement_evidence={}
+          for i in sorted(replacements):
+              e=profiles[str(i)]
+              if not isinstance(e,dict) or e.get('result')!='PASS': raise SystemExit(f'registry profile {i} not PASS')
+              mode='profile39' if i==39 else 'generic'
+              if e.get('mode')!=mode: raise SystemExit(f'profile mode mismatch: {i}')
+              rid=e.get('terminal_run_id'); jid=e.get('terminal_job_id'); vid=e.get('validation_job_id'); seg=e.get('terminal_segment')
+              if not all(isinstance(x,int) and x>0 for x in (rid,jid,vid,seg)): raise SystemExit(f'invalid durable IDs: {i}')
+              run=get(f'{api}/actions/runs/{rid}')
+              for k,v in {'status':'completed','conclusion':'success','run_attempt':1,'event':'workflow_dispatch','head_branch':runner_ref,'head_sha':runner_sha,'path':wrapper}.items():
+                  if run.get(k)!=v: raise SystemExit(f'terminal run provenance mismatch {i}:{k}')
+              refs=run.get('referenced_workflows') or []
+              if len(refs)!=1 or refs[0].get('sha')!=runner_sha or refs[0].get('ref')!=f'refs/heads/{runner_ref}' or refs[0].get('path')!=f'{repo}/{slice_path}@{runner_sha}': raise SystemExit(f'terminal reusable provenance mismatch: {i}')
+              rjobs=jobs(rid); by={j.get('name'):j for j in rjobs}
+              expected_names={'validate','continuation-generic','continuation-profile39 / slice'} if i==39 else {'validate','continuation-generic / slice','continuation-profile39'}
+              if set(by)!=expected_names or len(rjobs)!=3: raise SystemExit(f'terminal job set mismatch: {i}:{sorted(by)}')
+              selected=by['continuation-profile39 / slice' if i==39 else 'continuation-generic / slice']
+              other=by['continuation-generic' if i==39 else 'continuation-profile39']
+              if int(by['validate']['id'])!=vid or int(selected['id'])!=jid: raise SystemExit(f'durable job IDs drift: {i}')
+              if by['validate'].get('conclusion')!='success' or selected.get('conclusion')!='success' or other.get('conclusion')!='skipped': raise SystemExit(f'terminal job outcomes invalid: {i}')
+              raw=log_bytes(jid)
+              if hashlib.sha256(raw).hexdigest()!=e.get('terminal_job_log_sha256'): raise SystemExit(f'terminal job log digest drift: {i}')
+              lines=emitted(raw)
+              if int(one(lines,r'LAS_CANDIDATE3_RESUME_INDEX=([0-9]+)','index'))!=i: raise SystemExit(f'terminal index mismatch: {i}')
+              if int(one(lines,r'LAS_CANDIDATE3_RESUME_SEGMENT=([0-9]+)','segment'))!=seg: raise SystemExit(f'terminal segment mismatch: {i}')
+              if one(lines,r'LAS_CANDIDATE3_RESUME_MODE=(generic|profile39)','mode')!=mode: raise SystemExit(f'terminal mode mismatch: {i}')
+              profile=one(lines,r'LAS_CANDIDATE3_RESUME_PROFILE_BINDING=([0-9a-f]{64})','profile binding')
+              if profile!=e.get('profile_binding_sha256'): raise SystemExit(f'terminal profile binding drift: {i}')
+              if one(lines,r'LAS_CANDIDATE3_RESUME_TERMINAL_SHA256=([0-9a-f]{64})','terminal digest')!=e.get('terminal_attestation_sha256'): raise SystemExit(f'terminal attestation digest drift: {i}')
+              required={'LAS_CANDIDATE3_RESUME_RC=0','LAS_CANDIDATE3_RESUME_RESULT=PASS','LAS_CANDIDATE3_RESUME_TERMINAL=PASS','LAS_CANDIDATE3_RESUME_RECOVERY=PASS','LAS_CANDIDATE3_RESUME_CANONICAL_ARGS=PASS'}
+              if required.difference(lines): raise SystemExit(f'terminal markers incomplete: {i}')
+              if any(line.startswith('LAS_CANDIDATE3_RESUME_RESULT=FAIL') or line=='LAS_CANDIDATE3_RESUME_RESULT=SLICE_CHECKPOINT' for line in lines): raise SystemExit(f'terminal fail/slice marker: {i}')
+              replacement_evidence[str(i)]={'terminal_run_id':rid,'terminal_job_id':jid,'terminal_segment':seg,'mode':mode,'profile_binding_sha256':profile,'terminal_attestation_sha256':e['terminal_attestation_sha256'],'terminal_job_log_sha256':e['terminal_job_log_sha256']}
+          print('LAS_CANDIDATE3_202_REPLACEMENT_SET=PASS')
+
+          coverage=sorted(direct+sorted(replacements))
+          if coverage!=list(range(202)) or len(set(coverage))!=202: raise SystemExit('final exact coverage is not 0..201 once each')
+          coverage_sha=hashlib.sha256(('\n'.join(map(str,coverage))+'\n').encode()).hexdigest()
+          result={'schema':os.environ['RESULT_SCHEMA'],'source_run_id':original_id,'source_public_head':os.environ['EXPECTED_ORIGINAL_PUBLIC_HEAD'],'source_workflow_blob':os.environ['EXPECTED_ORIGINAL_WORKFLOW_BLOB'],'pre_tlc_run_id':int(os.environ['PRE_TLC_RUN_ID']),'private_snapshot_proof':os.environ['EXPECTED_PRIVATE_SNAPSHOT_PROOF'],'private_tree_proof':os.environ['EXPECTED_PRIVATE_TREE_PROOF'],'canonical_verifier_blob':os.environ['EXPECTED_VERIFIER_BLOB'],'tlc_map_sha256':os.environ['EXPECTED_TLC_MAP_SHA256'],'direct_success_count':192,'replacement_count':10,'replacement_indices':sorted(replacements),'replacement_evidence':replacement_evidence,'tlc_profile_count':202,'coverage_sha256':coverage_sha,'result':'PASS','promotion_marker':'LAS_CANDIDATE3_202_TLC_RESULT=PASS'}
+          canonical=(json.dumps(result,sort_keys=True,indent=2,separators=(',',': '))+'\n').encode()
+          path=os.environ['RESULT_PATH']; prior=contents(path,'main',optional=True)
+          if prior is not None:
+              if prior[1]==canonical:
+                  print('LAS_CANDIDATE3_202_CLOSURE=ALREADY_PASS'); raise SystemExit(0)
+              raise SystemExit('conflicting Candidate3 closure result already exists')
+          payload={'message':'Record exact Candidate3 202-profile TLC closure','content':base64.b64encode(canonical).decode(),'branch':'main'}
+          response=req(f"{api}/contents/{urllib.parse.quote(path,safe='/')}",method='PUT',payload=payload)
+          if not isinstance(response,dict) or not isinstance(response.get('commit'),dict): raise SystemExit('closure write response malformed')
+          for _ in range(5):
+              if contents(path,'main')[1]==canonical: break
+              time.sleep(2)
+          else: raise SystemExit('closure readback mismatch')
+          print(f'LAS_CANDIDATE3_202_COVERAGE_SHA256={coverage_sha}')
+          print('LAS_CANDIDATE3_202_DIRECT_SUCCESS_COUNT=192')
+          print('LAS_CANDIDATE3_202_REPLACEMENT_COUNT=10')
+          print('LAS_CANDIDATE3_202_TLC_RESULT=PASS')
+          PY
