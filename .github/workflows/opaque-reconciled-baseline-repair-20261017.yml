@@ -1,5 +1,5 @@
-name: Opaque reconciled baseline repair v2 20261017
-# dispatch-revision: 2
+name: Opaque reconciled baseline repair v3 20261017
+# dispatch-revision: 3
 
 on:
   push:
@@ -13,14 +13,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: opaque-reconciled-baseline-repair-v2-20261017
+  group: opaque-reconciled-baseline-repair-v3-20261017
   cancel-in-progress: false
 
 env:
-  TARGET_REF_HASH: e0d72c854c6cc457b5b0bf4d3d2d25fd8c9b27b7b2a286bf31bd3dc93b69aace
-  EXPECTED_PRIVATE_SNAPSHOT_PROOF: a46dc6629368de507667bc0039f4bf0c2a3c50c7264634cd0f63d67e10f68a6d
-  EXPECTED_PRIVATE_TREE_PROOF: eadaaf421f98a6ff254f0c9002ffaaf8dd3fbc35af7c75715c7279c1d21569d5
-  STAGE_HARNESS_BLOB: 4f2756f1342c6819cafb2b15aded0366b3d25a32
+  TARGET_REF_HASH: 060aa23045ded14f2e9984282456adce3cd5fa94bd92f21f4eeacae5d41abff2
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: b31f813ca672670272306a8bd4b310b68502932e0260973f5e3a7811446c3dbd
+  EXPECTED_PRIVATE_TREE_PROOF: 07fecc93573f973397679704f219aed1ecf6ab7f2eedb72449fd01d002b39f57
+  STAGE_HARNESS_BLOB: e2c1fb39c92d7eac3b6fb29333d42d95e0c3eab7
   BRIDGE_CERT_DER_B64: MIIFRTCCAy2gAwIBAgIUbf8Af+JSdaKNeFxcDDAXDjF6w1cwDQYJKoZIhvcNAQELBQAwMjEwMC4GA1UEAwwnTEFTIEVwaGVtZXJhbCBDYW5kaWRhdGUgQnJpZGdlIDIwMjYxMDE3MB4XDTI2MTAxNjIxMzAzN1oXDTI2MTAxODIxMzAzN1owMjEwMC4GA1UEAwwnTEFTIEVwaGVtZXJhbCBDYW5kaWRhdGUgQnJpZGdlIDIwMjYxMDE3MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAoAoX0iFO910aPP7lR22/nnRN3gmrzLwNWIOUcZEAnMF52niiOegaSrlnQmmlDNAdIuaDaGmFO1JQ95S3GNTv+u7HOdjki3n9+POiD4lVksh5jr0tLXaK1Zvtliu0NAXvee/Xx1RrDmAEPNZYPMoVCra7PePDYQhqL1uclcxCYbWEHX+Kz+doisNrsM2SMo+UaqYOTXQtALY98eQTsTGX/ea8ta5AFbUhHc4pti99m+I1Ncnbp4720B5C1ZJlRa8Ri/npEWfXnH9D6E1s73yTTdngKGn3mZGzdyNrdOcqphTXJpy4Max+Np18S1lPQRY6aBvSCJ3D8DpT8ucanVoHeGIK+q4ABFW+tDqClK7BaZgxlUtL/fdqmjr2CfvqST14uZ2DNZEwSW8KlOGxKPCzcc47X6TzNd++Eo299WEPQ/5J8vUa8fIOUXJ4m1i+CojlckcrpErW+HXN+kS22r28ovYBX6Uh94wc6nBfg1QlZRlnkVJQ2uAX59QcAibjU0g9l/DdnO2sOOkumBS9RoRQU4GUkJRir/fHGNWhpsT2SBYIifiCZEmPY0+O/S99Y3SJQ0cvu4HlYfl3VKwwwS2CH9+X5PzBEjaKWU2ETnnCHoxyVx94s8ff8KlA2CSUGPb+CtuFhh4pu6rFSsUVo4meUcHr563SjOGOrXsA+RQrmXkCAwEAAaNTMFEwHQYDVR0OBBYEFKQ0piYI3GslAoskNmA+X7RJrNoqMB8GA1UdIwQYMBaAFKQ0piYI3GslAoskNmA+X7RJrNoqMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggIBAHCeH6LepS8Y5rHV+Jye2EjmaiI+Tywj9o+rC71nkhHR2MPSj1ZdTmdn0Mp5VYfr77FuLAqyr6j2lJOngqd34qdgFjB4MWwj3bh/LTU9Om/DcCKFopg+IE7lAU+dpZrHNdjRQh7cm+qQVffcdJA2yn2/RUSbmbWoxvIYVBUiHTwXJpPd3ToH5CmUa9D9xCqI7C1rqHFvJe6r3PKSSPyg8mW67aJs/L2iYD7zrwoo5zDeTlL5/iaeKsErWsQBanTTqI8JrO3S9hjWZapJUTM0GO78/GsErJKnnmO1SlVZn24CWE0908YSDoEAE7gOKoIDz3PWnxJohfregMBiuDu8LZcF+VV3CbV21K47zJj4c1emSSWExShiDT4yg6LVX4V1MGAcqbmsSVcC2UWHaq1pizps8UVgNtBLhHl2WF0rvbW0GKmh0Xp26IXiY0u+OgTmycYZ9MMNm7Qt0F4HgXHvmvwGnHUDeTHMktCGCj15yjC3aCeJL0WQt5xVG9IDretl9wWyMvBLGonBtbs1tG1IQyK0FYuiaANuvHOS5jxvlQHbHJ10W8dU/EA1hGtP7QBVglJMWApDpcYn06qktwUjEz4C3ZPTIUqVhSrku24jq4OGnUHvVD7Or96f5ZL7Toq11mDxXyJdA9dBMx8mxj8nuDJZY8DSIo8cR3D4BPcShjDj
 
 jobs:
@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     steps:
-      - name: Recover exact frozen private baseline-repair base
+      - name: Recover exact frozen private proven-repair base
         shell: bash
         env:
           PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
@@ -71,13 +71,13 @@ jobs:
           tree="$(git rev-parse 'HEAD^{tree}')"
           echo "::add-mask::$tree"
           test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
-          git cat-file blob "$STAGE_HARNESS_BLOB" >"$RUNNER_TEMP/private-baseline-repair.sh"
-          test "$(git hash-object "$RUNNER_TEMP/private-baseline-repair.sh")" = "$STAGE_HARNESS_BLOB"
-          chmod 0700 "$RUNNER_TEMP/private-baseline-repair.sh"
+          git cat-file blob "$STAGE_HARNESS_BLOB" >"$RUNNER_TEMP/private-baseline-repair-v3.sh"
+          test "$(git hash-object "$RUNNER_TEMP/private-baseline-repair-v3.sh")" = "$STAGE_HARNESS_BLOB"
+          chmod 0700 "$RUNNER_TEMP/private-baseline-repair-v3.sh"
           test -z "$(git status --porcelain --untracked-files=all)"
           printf 'WORK_ROOT=%s\n' "$root" >> "$GITHUB_ENV"
           printf 'BASE_SHA=%s\n' "$actual" >> "$GITHUB_ENV"
-          echo "LAS_BASELINE_REPAIR_BASE_RECOVERY=PASS"
+          echo "LAS_BASELINE_REPAIR_V3_BASE_RECOVERY=PASS"
 
       - name: Install exact build toolchains
         shell: bash
@@ -99,7 +99,7 @@ jobs:
           workspace="$RUNNER_TEMP/alr-work"
           mkdir -p "$workspace"
           cd "$workspace"
-          alr -n init --in-place --no-skel --lib reconciled_baseline_repair_v2_toolchain >/dev/null
+          alr -n init --in-place --no-skel --lib reconciled_baseline_repair_v3_toolchain >/dev/null
           alr_path="$(command -v alr)"
           wrapper="$RUNNER_TEMP/gprbuild-via-alire"
           cat > "$wrapper" <<EOF
@@ -110,49 +110,49 @@ jobs:
           EOF
           chmod 0755 "$wrapper"
           printf 'GPRBUILD=%s\n' "$wrapper" >> "$GITHUB_ENV"
-          echo "LAS_BASELINE_REPAIR_TOOLCHAINS=PASS"
+          echo "LAS_BASELINE_REPAIR_V3_TOOLCHAINS=PASS"
 
-      - name: Execute fail-closed private baseline repair and encrypt output
+      - name: Execute fail-closed proven private baseline repair and encrypt output
         shell: bash
         env:
           RUSTFLAGS: -Dwarnings
         run: |
           set -euo pipefail
           package="$RUNNER_TEMP/package"
-          log="$RUNNER_TEMP/private-baseline-repair.log"
+          log="$RUNNER_TEMP/private-baseline-repair-v3.log"
           mkdir -p "$package"
           cd "$WORK_ROOT"
           set +e
-          LAS_REPAIR_BASE_SHA="$BASE_SHA" \
-          LAS_REPAIR_PACKAGE_DIR="$package" \
-          LAS_REPAIR_EXPECTED_BRANCH=verify-target \
-            bash "$RUNNER_TEMP/private-baseline-repair.sh" >"$log" 2>&1
+          LAS_BASELINE_REPAIR_BASE_SHA="$BASE_SHA" \
+          LAS_BASELINE_REPAIR_PACKAGE_DIR="$package" \
+          LAS_BASELINE_REPAIR_EXPECTED_BRANCH=verify-target \
+            bash "$RUNNER_TEMP/private-baseline-repair-v3.sh" >"$log" 2>&1
           rc=$?
           set -e
           cp "$log" "$package/verification.log"
 
-          tarball="$RUNNER_TEMP/private-baseline-repair-package.tar.gz"
+          tarball="$RUNNER_TEMP/private-baseline-repair-v3-package.tar.gz"
           tar -C "$package" -czf "$tarball" .
           cert_der="$RUNNER_TEMP/bridge-cert.der"
           cert_pem="$RUNNER_TEMP/bridge-cert.pem"
           printf '%s' "$BRIDGE_CERT_DER_B64" | base64 -d >"$cert_der"
           openssl x509 -inform DER -in "$cert_der" -out "$cert_pem"
-          ciphertext="$RUNNER_TEMP/opaque-reconciled-baseline-repair-v2.p7m"
+          ciphertext="$RUNNER_TEMP/opaque-reconciled-baseline-repair-v3.p7m"
           openssl cms -encrypt -binary -aes256 -outform DER -recip "$cert_pem" -in "$tarball" -out "$ciphertext"
           rm -rf "$package" "$tarball" "$cert_der" "$cert_pem" "$log"
-          echo "LAS_BASELINE_REPAIR_V2_CIPHERTEXT_SHA256=$(sha256sum "$ciphertext" | awk '{print $1}')"
+          echo "LAS_BASELINE_REPAIR_V3_CIPHERTEXT_SHA256=$(sha256sum "$ciphertext" | awk '{print $1}')"
           if [[ "$rc" -eq 0 ]]; then
-            echo "LAS_BASELINE_REPAIR_V2_RUN_RESULT=PASS"
+            echo "LAS_BASELINE_REPAIR_V3_RUN_RESULT=PASS"
           else
-            echo "LAS_BASELINE_REPAIR_V2_RUN_RESULT=FAIL"
+            echo "LAS_BASELINE_REPAIR_V3_RUN_RESULT=FAIL"
           fi
           exit "$rc"
 
-      - name: Upload encrypted baseline-repair v2 evidence only
+      - name: Upload encrypted baseline-repair v3 evidence only
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: opaque-reconciled-baseline-repair-v2-20261017
-          path: ${{ runner.temp }}/opaque-reconciled-baseline-repair-v2.p7m
+          name: opaque-reconciled-baseline-repair-v3-20261017
+          path: ${{ runner.temp }}/opaque-reconciled-baseline-repair-v3.p7m
           if-no-files-found: error
           retention-days: 1
