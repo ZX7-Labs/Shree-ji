@@ -1,0 +1,193 @@
+name: Candidate3 exact resumable TLC closure
+
+on:
+  push:
+    branches:
+      - "verify/candidate3-resumable-20261016"
+    paths:
+      - "RUN_CANDIDATE3_RESUMABLE_20261016"
+  workflow_dispatch:
+    inputs:
+      index:
+        description: Exact canonical TLC profile index being resumed
+        required: true
+        type: string
+      segment:
+        description: Continuation segment number, at least 2
+        required: true
+        type: string
+      resume_run_id:
+        description: Prior segment run containing authenticated checkpoint
+        required: true
+        type: string
+      resume_artifact:
+        description: Exact prior checkpoint artifact name
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: candidate3-exact-resumable-controller
+  cancel-in-progress: false
+
+env:
+  SOURCE_RUN_ID: "38829095332"
+  SOURCE_HEAD: "55471ace6dd056674830ea7764ed6d088faacaa1"
+  SOURCE_BRANCH: "verify/candidate3-tlc-20261016"
+  SOURCE_WORKFLOW_PATH: ".github/workflows/private-candidate3-tlc-20261016.yml"
+  SOURCE_WORKFLOW_BLOB: "e019bd29322d7cbac67df7e0b4366000018311a3"
+  EXPECTED_TIMEOUT_INDICES: "28,29,36,39"
+
+jobs:
+  bind-source-timeouts:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Bind exact source run and timeout-only lanes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
+          run_json="$RUNNER_TEMP/source-run.json"
+          workflow_json="$RUNNER_TEMP/source-workflow.json"
+          curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$api/actions/runs/$SOURCE_RUN_ID" >"$run_json"
+          for page in 1 2 3; do
+            curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$api/actions/runs/$SOURCE_RUN_ID/jobs?per_page=100&page=$page" >"$RUNNER_TEMP/jobs-$page.json"
+          done
+          encoded="$(python3 - "$SOURCE_WORKFLOW_PATH" <<'PY'
+          import sys, urllib.parse
+          print(urllib.parse.quote(sys.argv[1], safe='/'))
+          PY
+          )"
+          curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$api/contents/$encoded?ref=$SOURCE_HEAD" >"$workflow_json"
+          python3 - "$run_json" "$workflow_json" "$RUNNER_TEMP/jobs-1.json" "$RUNNER_TEMP/jobs-2.json" "$RUNNER_TEMP/jobs-3.json" <<'PY'
+          import datetime as dt
+          import json
+          import os
+          import sys
+
+          run = json.load(open(sys.argv[1], encoding='utf-8'))
+          wf = json.load(open(sys.argv[2], encoding='utf-8'))
+          expected_run = {
+              'event': 'push',
+              'run_attempt': 1,
+              'head_branch': os.environ['SOURCE_BRANCH'],
+              'head_sha': os.environ['SOURCE_HEAD'],
+              'path': os.environ['SOURCE_WORKFLOW_PATH'],
+          }
+          for key, value in expected_run.items():
+              if run.get(key) != value:
+                  raise SystemExit(f'source run provenance mismatch: {key}')
+          if run.get('status') not in ('in_progress', 'completed', 'queued'):
+              raise SystemExit('unexpected source run status')
+          if wf.get('type') != 'file' or wf.get('sha') != os.environ['SOURCE_WORKFLOW_BLOB']:
+              raise SystemExit('source workflow blob mismatch')
+
+          jobs = []
+          total_counts = set()
+          for path in sys.argv[3:]:
+              payload = json.load(open(path, encoding='utf-8'))
+              total_counts.add(payload.get('total_count'))
+              jobs.extend(payload.get('jobs', []))
+          if total_counts != {203}:
+              raise SystemExit(f'unexpected source job count: {total_counts}')
+          by_id = {j['id']: j for j in jobs}
+          if len(by_id) != 203:
+              raise SystemExit(f'job pagination did not cover exactly 203 unique jobs: {len(by_id)}')
+          jobs = list(by_id.values())
+          bind = [j for j in jobs if j.get('name') == 'bind-pre-tlc']
+          if len(bind) != 1 or bind[0].get('status') != 'completed' or bind[0].get('conclusion') != 'success':
+              raise SystemExit('bound pre-TLC job is not successful')
+
+          expected = [int(x) for x in os.environ['EXPECTED_TIMEOUT_INDICES'].split(',')]
+          for index in expected:
+              matches = [j for j in jobs if j.get('name') == f'tlc ({index})']
+              if len(matches) != 1:
+                  raise SystemExit(f'profile {index}: expected exactly one source job')
+              job = matches[0]
+              if job.get('status') != 'completed' or job.get('conclusion') != 'cancelled':
+                  raise SystemExit(f'profile {index}: source lane is not a completed cancellation')
+              steps = {s.get('name'): s for s in job.get('steps', [])}
+              recovery = steps.get('Recover exact frozen private candidate')
+              canonical = steps.get('Run exact canonical TLC profile')
+              if not recovery or recovery.get('status') != 'completed' or recovery.get('conclusion') != 'success':
+                  raise SystemExit(f'profile {index}: exact recovery was not successful')
+              if not canonical or canonical.get('status') != 'completed' or canonical.get('conclusion') != 'cancelled':
+                  raise SystemExit(f'profile {index}: canonical TLC did not end by cancellation')
+              start = dt.datetime.fromisoformat(job['started_at'].replace('Z', '+00:00'))
+              end = dt.datetime.fromisoformat(job['completed_at'].replace('Z', '+00:00'))
+              elapsed = (end - start).total_seconds()
+              if elapsed < 350 * 60:
+                  raise SystemExit(f'profile {index}: cancellation occurred before timeout boundary: {elapsed}')
+          print('LAS_CANDIDATE3_SOURCE_TIMEOUT_BINDING=PASS')
+          print('LAS_CANDIDATE3_SOURCE_TIMEOUT_COUNT=4')
+          PY
+
+  launch:
+    if: github.event_name == 'push'
+    needs: bind-source-timeouts
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        index: [28, 29, 36, 39]
+    uses: ./.github/workflows/_private-candidate3-resumable-tlc-slice.yml
+    with:
+      index: ${{ matrix.index }}
+      segment: 1
+      resume_run_id: ""
+      resume_artifact: ""
+    secrets: inherit
+
+  validate-resume:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Validate continuation-only dispatch
+        shell: bash
+        env:
+          TARGET_INDEX: ${{ inputs.index }}
+          SEGMENT: ${{ inputs.segment }}
+          RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+          RESUME_ARTIFACT: ${{ inputs.resume_artifact }}
+        run: |
+          set -euo pipefail
+          case "$TARGET_INDEX" in
+            28|29|36|39) ;;
+            *) echo "index outside exact timeout closure set" >&2; exit 1 ;;
+          esac
+          [[ "$SEGMENT" =~ ^[0-9]+$ ]]
+          test "$SEGMENT" -ge 2
+          [[ "$RESUME_RUN_ID" =~ ^[0-9]+$ ]]
+          test "$RESUME_ARTIFACT" = "candidate3-state-${TARGET_INDEX}-$((SEGMENT - 1))"
+          echo "LAS_CANDIDATE3_RESUME_DISPATCH=PASS"
+
+  resume:
+    if: github.event_name == 'workflow_dispatch'
+    needs: validate-resume
+    uses: ./.github/workflows/_private-candidate3-resumable-tlc-slice.yml
+    with:
+      index: ${{ fromJSON(inputs.index) }}
+      segment: ${{ fromJSON(inputs.segment) }}
+      resume_run_id: ${{ inputs.resume_run_id }}
+      resume_artifact: ${{ inputs.resume_artifact }}
+    secrets: inherit
