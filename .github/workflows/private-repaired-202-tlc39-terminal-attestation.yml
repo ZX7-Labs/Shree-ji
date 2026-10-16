@@ -1,178 +1,20 @@
-name: Candidate3 TLC39 supplemental aggregate 20261016
+name: Candidate3 TLC39 single-gap aggregate retired
 
 on:
   workflow_dispatch:
-    inputs:
-      terminal_run_id:
-        description: Candidate3 TLC39 continuation run claiming terminal PASS
-        required: true
-        type: string
 
 permissions:
-  actions: read
   contents: read
 
-concurrency:
-  group: candidate3-tlc39-supplemental-aggregate-20261016
-  cancel-in-progress: false
-
-env:
-  PARENT_RUN_ID: "38829095332"
-  EXPECTED_PARENT_HEAD: 55471ace6dd056674830ea7764ed6d088faacaa1
-  EXPECTED_PARENT_BRANCH: verify/candidate3-tlc-20261016
-  EXPECTED_PARENT_WORKFLOW_BLOB: e019bd29322d7cbac67df7e0b4366000018311a3
-  PARENT_WORKFLOW_PATH: .github/workflows/private-candidate3-tlc-20261016.yml
-  EXPECTED_PARENT_TLC39_JOB_ID: "116743455202"
-  CONTINUATION_REF: verify/candidate3-tlc39-continuation-20261016
-  CONTINUATION_WORKFLOW_PATH: .github/workflows/private-repaired-202-tlc39-continuation.yml
-  EXPECTED_CONTINUATION_WORKFLOW_BLOB: 4d6ddade6947cc4644392c3c978db00a25d03cbe
-  EXPECTED_CHECKPOINT_SCHEMA: candidate3-periodic-barrier-v1
-  EXPECTED_TLC_WORKERS: "4"
-  TERMINAL_RUN_ID: ${{ inputs.terminal_run_id }}
-
 jobs:
-  attest:
+  retired:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
-      - name: Bind exact parent gap and terminal TLC39 closure
+      - name: Reject obsolete single-gap closure
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
-          test "$GITHUB_REF_NAME" = "$CONTINUATION_REF"
-          [[ "$TERMINAL_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
-
-          ref_json="$RUNNER_TEMP/ref.json"
-          curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
-            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
-            "$api/git/ref/heads/$CONTINUATION_REF" >"$ref_json"
-          runner_sha="$(python3 - "$ref_json" <<'PY'
-          import json, sys
-          print(json.load(open(sys.argv[1], encoding='utf-8'))['object']['sha'])
-          PY
-          )"
-          test "$runner_sha" = "$GITHUB_SHA"
-          echo "LAS_CANDIDATE3_TLC39_RUNNER_IMMUTABLE=PASS"
-
-          parent_run="$RUNNER_TEMP/parent-run.json"
-          parent_wf="$RUNNER_TEMP/parent-wf.json"
-          jobs_dir="$RUNNER_TEMP/parent-jobs"; mkdir -p "$jobs_dir"
-          curl --proto '=https' --tlsv1.2 --fail-with-body -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$api/actions/runs/$PARENT_RUN_ID" >"$parent_run"
-          encoded_parent="$(python3 - "$PARENT_WORKFLOW_PATH" <<'PY'
-          import sys, urllib.parse
-          print(urllib.parse.quote(sys.argv[1], safe='/'))
-          PY
-          )"
-          curl --proto '=https' --tlsv1.2 --fail-with-body -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$api/contents/$encoded_parent?ref=$EXPECTED_PARENT_HEAD" >"$parent_wf"
-          for page in 1 2 3; do
-            curl --proto '=https' --tlsv1.2 --fail-with-body -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$api/actions/runs/$PARENT_RUN_ID/jobs?per_page=100&page=$page" >"$jobs_dir/$page.json"
-          done
-          python3 - "$parent_run" "$parent_wf" "$jobs_dir" <<'PY'
-          import json, os, pathlib, sys
-          run=json.load(open(sys.argv[1],encoding='utf-8')); wf=json.load(open(sys.argv[2],encoding='utf-8'))
-          exp={'status':'completed','conclusion':'failure','event':'push','run_attempt':1,'head_branch':os.environ['EXPECTED_PARENT_BRANCH'],'head_sha':os.environ['EXPECTED_PARENT_HEAD'],'path':os.environ['PARENT_WORKFLOW_PATH']}
-          for k,v in exp.items():
-              if run.get(k)!=v: raise SystemExit(f'parent mismatch: {k}')
-          if wf.get('sha')!=os.environ['EXPECTED_PARENT_WORKFLOW_BLOB']: raise SystemExit('parent workflow blob mismatch')
-          jobs=[]
-          for p in sorted(pathlib.Path(sys.argv[3]).glob('*.json')): jobs += json.load(open(p,encoding='utf-8')).get('jobs',[])
-          by={}
-          for j in jobs:
-              n=j.get('name')
-              if n in by: raise SystemExit(f'duplicate job: {n}')
-              by[n]=j
-          expected={f'tlc ({i})' for i in range(202)}
-          actual={n for n in by if isinstance(n,str) and n.startswith('tlc (')}
-          if actual!=expected: raise SystemExit('parent TLC set mismatch')
-          if by.get('bind-pre-tlc',{}).get('conclusion')!='success': raise SystemExit('pre-TLC bind not success')
-          target=by['tlc (39)']
-          if str(target.get('id'))!=os.environ['EXPECTED_PARENT_TLC39_JOB_ID'] or target.get('conclusion')!='failure': raise SystemExit('TLC39 gap mismatch')
-          steps={s.get('name'):(s.get('status'),s.get('conclusion')) for s in target.get('steps',[])}
-          if steps.get('Recover exact frozen private candidate')!=('completed','success'): raise SystemExit('TLC39 recovery mismatch')
-          if steps.get('Run exact canonical TLC profile') not in {('completed','failure'),('completed','cancelled')}: raise SystemExit('TLC39 failure shape mismatch')
-          for i in range(202):
-              if i!=39 and by[f'tlc ({i})'].get('conclusion')!='success': raise SystemExit(f'additional failed TLC profile: {i}')
-          if by.get('aggregate',{}).get('conclusion')!='failure': raise SystemExit('parent aggregate mismatch')
-          PY
-          echo "LAS_CANDIDATE3_TLC39_PARENT_GAP_REBOUND=PASS"
-
-          terminal_run="$RUNNER_TEMP/terminal-run.json"; terminal_jobs="$RUNNER_TEMP/terminal-jobs.json"; terminal_wf="$RUNNER_TEMP/terminal-wf.json"; terminal_log="$RUNNER_TEMP/terminal.log"
-          completed=0
-          for attempt in $(seq 1 24); do
-            curl --proto '=https' --tlsv1.2 --fail-with-body -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$api/actions/runs/$TERMINAL_RUN_ID" >"$terminal_run"
-            status="$(python3 - "$terminal_run" <<'PY'
-          import json, sys
-          print(json.load(open(sys.argv[1],encoding='utf-8')).get('status',''))
-          PY
-          )"
-            [[ "$status" != "completed" ]] || { completed=1; break; }
-            sleep 5
-          done
-          test "$completed" -eq 1
-          python3 - "$terminal_run" "$GITHUB_SHA" "$CONTINUATION_REF" "$CONTINUATION_WORKFLOW_PATH" <<'PY'
-          import json, sys
-          p,sha,ref,path=sys.argv[1:]; d=json.load(open(p,encoding='utf-8'))
-          exp={'status':'completed','conclusion':'success','run_attempt':1,'event':'workflow_dispatch','head_branch':ref,'head_sha':sha,'path':path}
-          for k,v in exp.items():
-              if d.get(k)!=v: raise SystemExit(f'terminal run mismatch: {k}')
-          PY
-          encoded_cont="$(python3 - "$CONTINUATION_WORKFLOW_PATH" <<'PY'
-          import sys, urllib.parse
-          print(urllib.parse.quote(sys.argv[1], safe='/'))
-          PY
-          )"
-          curl --proto '=https' --tlsv1.2 --fail-with-body -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$api/contents/$encoded_cont?ref=$GITHUB_SHA" >"$terminal_wf"
-          test "$(python3 - "$terminal_wf" <<'PY'
-          import json, sys
-          print(json.load(open(sys.argv[1],encoding='utf-8')).get('sha',''))
-          PY
-          )" = "$EXPECTED_CONTINUATION_WORKFLOW_BLOB"
-          curl --proto '=https' --tlsv1.2 --fail-with-body -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$api/actions/runs/$TERMINAL_RUN_ID/jobs?per_page=100" >"$terminal_jobs"
-          read -r job_id mode < <(python3 - "$terminal_jobs" <<'PY'
-          import json,sys
-          d=json.load(open(sys.argv[1],encoding='utf-8')); jobs=d.get('jobs',[])
-          if d.get('total_count')!=1 or len(jobs)!=1 or jobs[0].get('name')!='slice': raise SystemExit('terminal job set mismatch')
-          j=jobs[0]
-          if j.get('conclusion')!='success': raise SystemExit('terminal job not success')
-          s={x.get('name'):(x.get('status'),x.get('conclusion')) for x in j.get('steps',[])}
-          required=('Validate exact continuation request','Bind exact failed parent matrix gap','Reclaim runner storage for exhaustive TLC','Recover exact frozen private candidate','Bind exact canonical map and profile 39','Run exact canonical TLC39 slice','Dispatch terminal aggregate attestation')
-          for n in required:
-              if s.get(n)!=('completed','success'): raise SystemExit(f'terminal step mismatch: {n}')
-          for n in ('Seal authenticated encrypted checkpoint','Upload authenticated encrypted checkpoint','Dispatch next exact slice'):
-              if s.get(n)!=('completed','skipped'): raise SystemExit(f'unexpected terminal continuation: {n}')
-          dl=s.get('Download prior authenticated encrypted checkpoint'); rs=s.get('Authenticate and restore prior checkpoint')
-          if dl==('completed','skipped') and rs==('completed','skipped'): mode='initial'
-          elif dl==('completed','success') and rs==('completed','success'): mode='resumed'
-          else: raise SystemExit('checkpoint mode mismatch')
-          print(j['id'],mode)
-          PY
-          )
-          curl --proto '=https' --tlsv1.2 --fail-with-body -sSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$api/actions/jobs/$job_id/logs" >"$terminal_log"
-          python3 - "$terminal_log" "$mode" "$EXPECTED_CHECKPOINT_SCHEMA" "$EXPECTED_TLC_WORKERS" <<'PY'
-          import re,sys
-          p,mode,schema,workers=sys.argv[1:]; stamp=re.compile(r'^\d{4}-\d{2}-\d{2}T\S+Z (.*)$'); out=[]
-          for raw in open(p,encoding='utf-8',errors='replace'):
-              m=stamp.match(raw.rstrip('\n'))
-              if m: out.append(m.group(1))
-          req={'LAS_CANDIDATE3_TLC39_REQUEST=PASS',f'LAS_CANDIDATE3_TLC39_CHECKPOINT_SCHEMA={schema}',f'LAS_CANDIDATE3_TLC39_WORKERS={workers}','LAS_CANDIDATE3_TLC39_PARENT_GAP=PASS','LAS_CANDIDATE3_TLC39_RECOVERY=PASS','LAS_CANDIDATE3_TLC39_BINDING=PASS','LAS_CANDIDATE3_TLC39_RC=0','LAS_CANDIDATE3_TLC39_RESULT=PASS','LAS_CANDIDATE3_TLC39_TERMINAL_ATTESTATION_DISPATCH=PASS'}
-          if req.difference(out): raise SystemExit('missing terminal markers')
-          if any(x.startswith(('LAS_CANDIDATE3_TLC39_RESULT=FAIL','LAS_CANDIDATE3_TLC39_RESULT=SLICE_CHECKPOINT','LAS_CANDIDATE3_TLC39_BARRIER_TIMEOUT=1')) for x in out): raise SystemExit('non-PASS terminal marker')
-          def one(pat):
-              v=[m.group(1) for x in out if (m:=re.fullmatch(pat,x))]
-              if len(v)!=1: raise SystemExit(f'ambiguous marker: {pat}')
-              return v[0]
-          seg=int(one(r'LAS_CANDIDATE3_TLC39_SEGMENT=([1-9][0-9]*)')); gen=int(one(r'LAS_CANDIDATE3_TLC39_GENERATED=([0-9]+)')); dist=int(one(r'LAS_CANDIDATE3_TLC39_DISTINCT=([0-9]+)')); q=int(one(r'LAS_CANDIDATE3_TLC39_QUEUE=([0-9]+)')); cut=one(r'LAS_CANDIDATE3_TLC39_CUT_REASON=([a-z]+)'); one(r'LAS_CANDIDATE3_TLC39_LOG_SHA256=([0-9a-f]{64})')
-          if gen<=0 or dist<=0 or q!=0 or cut!='none': raise SystemExit('terminal metrics mismatch')
-          if mode=='initial' and seg!=1: raise SystemExit('initial segment mismatch')
-          if mode=='resumed':
-              if seg<=1: raise SystemExit('resumed segment mismatch')
-              if 'LAS_CANDIDATE3_TLC39_CHECKPOINT_AUTH=PASS' not in out or 'LAS_CANDIDATE3_TLC39_RECOVER_DIR=PASS' not in out: raise SystemExit('missing resume evidence')
-          PY
-          echo "LAS_CANDIDATE3_TLC39_TERMINAL_RUN=PASS"
-          echo "LAS_CANDIDATE3_TLC39_SUPPLEMENTAL_CLOSURE=PASS"
-          echo "LAS_CANDIDATE3_TLC_PROFILES_CLOSED=202"
-          echo "LAS_VERIFY_ALL_RESULT=PASS"
+          echo "LAS_CANDIDATE3_TLC39_SINGLE_GAP_AGGREGATE=RETIRED"
+          echo "Parent run 38829095332 has multiple formal-verification gaps; profile 39 terminal evidence must be composed only by the exact multi-gap reconciler."
+          exit 1
