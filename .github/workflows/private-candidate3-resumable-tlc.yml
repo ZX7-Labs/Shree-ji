@@ -35,7 +35,7 @@ env:
   SOURCE_BRANCH: "verify/candidate3-tlc-20261016"
   SOURCE_WORKFLOW_PATH: ".github/workflows/private-candidate3-tlc-20261016.yml"
   SOURCE_WORKFLOW_BLOB: "e019bd29322d7cbac67df7e0b4366000018311a3"
-  EXPECTED_TIMEOUT_INDICES: "28,29,36,39"
+  EXPECTED_TIMEOUT_INDICES: "28,29,36,39,109"
 
 jobs:
   bind-source-timeouts:
@@ -134,7 +134,7 @@ jobs:
               if elapsed < 350 * 60:
                   raise SystemExit(f'profile {index}: cancellation occurred before timeout boundary: {elapsed}')
           print('LAS_CANDIDATE3_SOURCE_TIMEOUT_BINDING=PASS')
-          print('LAS_CANDIDATE3_SOURCE_TIMEOUT_COUNT=4')
+          print('LAS_CANDIDATE3_SOURCE_TIMEOUT_COUNT=5')
           PY
 
   launch:
@@ -142,9 +142,9 @@ jobs:
     needs: bind-source-timeouts
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 5
       matrix:
-        index: [28, 29, 36, 39]
+        index: [28, 29, 36, 39, 109]
     uses: ./.github/workflows/_private-candidate3-resumable-tlc-slice.yml
     with:
       index: ${{ matrix.index }}
@@ -168,7 +168,7 @@ jobs:
         run: |
           set -euo pipefail
           case "$TARGET_INDEX" in
-            28|29|36|39) ;;
+            28|29|36|39|109) ;;
             *) echo "index outside exact timeout closure set" >&2; exit 1 ;;
           esac
           [[ "$SEGMENT" =~ ^[0-9]+$ ]]
