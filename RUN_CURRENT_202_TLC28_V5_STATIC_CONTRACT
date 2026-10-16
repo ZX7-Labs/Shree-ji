@@ -1,0 +1,4 @@
+purpose=verify-v4-v5-static-contract
+v4_runner=3d37edb1debc9a4dd32da51ec3164840dbc4b252
+v5_runner=dc7221eb78f71256fde7e532145de21cb3b3aa66
+profile=28
