@@ -6,11 +6,17 @@ on:
     paths:
       - ".github/workflows/stop-obsolete-current-202-profile28-v4.yml"
   workflow_dispatch:
+  workflow_run:
+    workflows:
+      - "Private current-202 TLC continuation"
+    types: [requested, in_progress, completed]
 
 # The frozen v4 wrapper uses exactly current-202-v4-tlc-${index}. GitHub
-# concurrency groups are repository-wide across workflows, so this one-shot
-# fence cancels only the obsolete profile-28 v4 chain without mutating its
-# frozen runner or any authenticated checkpoint artifact.
+# concurrency groups are repository-wide across workflows, so this supersession
+# fence cancels only the obsolete profile-28 v4 chain without mutating its frozen
+# runner or any authenticated checkpoint artifact. workflow_run keeps the fence
+# asserted if the reconciler attempts to resurrect that obsolete chain while the
+# v5 replacement proof is still in flight.
 concurrency:
   group: current-202-v4-tlc-28
   cancel-in-progress: true
