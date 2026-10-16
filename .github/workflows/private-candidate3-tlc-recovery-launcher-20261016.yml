@@ -1,0 +1,273 @@
+name: Candidate3 exact TLC recovery launcher 20261016
+
+on:
+  push:
+    branches: [verify/candidate3-tlc-recovery-launcher-20261016]
+    paths:
+      - RUN_CANDIDATE3_TLC_RECOVERY_20261016
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: candidate3-tlc-recovery-launcher-20261016
+  cancel-in-progress: false
+
+env:
+  SOURCE_RUN_ID: "38829095332"
+  EXPECTED_SOURCE_HEAD: 55471ace6dd056674830ea7764ed6d088faacaa1
+  EXPECTED_SOURCE_BRANCH: verify/candidate3-tlc-20261016
+  SOURCE_WORKFLOW_PATH: .github/workflows/private-candidate3-tlc-20261016.yml
+  EXPECTED_SOURCE_WORKFLOW_BLOB: e019bd29322d7cbac67df7e0b4366000018311a3
+  MARKER_PATH: RUN_CANDIDATE3_TLC_RECOVERY_20261016
+  LAUNCHER_WORKFLOW_PATH: .github/workflows/private-candidate3-tlc-recovery-launcher-20261016.yml
+
+  GENERIC_REF: verify/candidate3-tlc-resume-20261016
+  GENERIC_SHA: 19662fd988cbb1fbb854f8d568cff3193d66e3e4
+  GENERIC_WORKFLOW: private-assurance-slow-tlc-continuation.yml
+  GENERIC_WORKFLOW_PATH: .github/workflows/private-assurance-slow-tlc-continuation.yml
+  GENERIC_WORKFLOW_BLOB: 12468a5d5d7b7e6a7b7eade5b5902431f50a2ed2
+
+  TLC39_REF: verify/candidate3-tlc39-continuation-20261016
+  TLC39_SHA: e592543555a06eedf65c0b926a10801c972b6765
+  TLC39_WORKFLOW: private-repaired-202-tlc39-continuation.yml
+  TLC39_WORKFLOW_PATH: .github/workflows/private-repaired-202-tlc39-continuation.yml
+  TLC39_WORKFLOW_BLOB: abf8ea1d01e8a84a03281216074da1249e6a0592
+
+jobs:
+  launch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Bind exact settled gap set and launch frozen recovery runners
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import re
+          import urllib.parse
+          import urllib.request
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          api = f'https://api.github.com/repos/{repo}'
+          marker_path = os.environ['MARKER_PATH']
+          launcher_path = os.environ['LAUNCHER_WORKFLOW_PATH']
+
+          def request(url, *, method='GET', payload=None):
+              body = None if payload is None else json.dumps(payload).encode('utf-8')
+              req = urllib.request.Request(
+                  url,
+                  data=body,
+                  method=method,
+                  headers={
+                      'Authorization': f'Bearer {token}',
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'candidate3-tlc-recovery-launcher',
+                      **({'Content-Type': 'application/json'} if body is not None else {}),
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  raw = response.read()
+                  return None if not raw else json.loads(raw)
+
+          def get(url):
+              value = request(url)
+              if not isinstance(value, dict):
+                  raise SystemExit(f'unexpected non-object response: {url}')
+              return value
+
+          def contents(path, ref):
+              encoded_path = urllib.parse.quote(path, safe='/')
+              encoded_ref = urllib.parse.quote(ref, safe='')
+              meta = get(f'{api}/contents/{encoded_path}?ref={encoded_ref}')
+              if meta.get('type') != 'file' or meta.get('encoding') != 'base64':
+                  raise SystemExit(f'unexpected contents response: {path}@{ref}')
+              raw = base64.b64decode(meta['content'].replace('\n', ''), validate=True)
+              return meta, raw.decode('utf-8')
+
+          def ref_sha(ref):
+              encoded = urllib.parse.quote(f'heads/{ref}', safe='')
+              data = get(f'{api}/git/ref/{encoded}')
+              return data.get('object', {}).get('sha')
+
+          def workflow_run_count(workflow, branch):
+              params = urllib.parse.urlencode({'branch': branch, 'per_page': '1'})
+              data = get(f'{api}/actions/workflows/{urllib.parse.quote(workflow, safe="")}/runs?{params}')
+              count = data.get('total_count')
+              if not isinstance(count, int):
+                  raise SystemExit('malformed workflow run count')
+              return count
+
+          def dispatch(workflow, ref, inputs):
+              request(
+                  f'{api}/actions/workflows/{urllib.parse.quote(workflow, safe="")}/dispatches',
+                  method='POST',
+                  payload={'ref': ref, 'inputs': inputs},
+              )
+
+          # Trigger commit must only add the marker; the reviewed launcher blob must not change.
+          before = os.environ.get('GITHUB_EVENT_BEFORE', '')
+          after = os.environ['GITHUB_SHA']
+          if not re.fullmatch(r'[0-9a-f]{40}', before) or not re.fullmatch(r'[0-9a-f]{40}', after):
+              raise SystemExit('invalid push provenance SHAs')
+          compare = get(f'{api}/compare/{before}...{after}')
+          files = compare.get('files')
+          commits = compare.get('commits')
+          if not isinstance(files, list) or len(files) != 1 or not isinstance(commits, list) or len(commits) != 1:
+              raise SystemExit('launcher trigger must be exactly one commit changing one file')
+          change = files[0]
+          if change.get('filename') != marker_path or change.get('status') != 'added':
+              raise SystemExit('launcher trigger diff is not marker-only addition')
+          before_launcher, _ = contents(launcher_path, before)
+          after_launcher, _ = contents(launcher_path, after)
+          if before_launcher.get('sha') != after_launcher.get('sha'):
+              raise SystemExit('launcher workflow changed in trigger commit')
+          branch = os.environ['GITHUB_REF_NAME']
+          if branch != 'verify/candidate3-tlc-recovery-launcher-20261016':
+              raise SystemExit('launcher branch mismatch')
+          if ref_sha(branch) != after:
+              raise SystemExit('launcher branch moved after trigger')
+
+          marker_meta, marker_text = contents(marker_path, after)
+          lines = marker_text.splitlines()
+          if len(lines) != 3:
+              raise SystemExit('marker must contain exactly three lines')
+          if lines[0] != 'schema=candidate3-tlc-recovery-launch-v1':
+              raise SystemExit('marker schema mismatch')
+          if lines[1] != f'source_run={os.environ["SOURCE_RUN_ID"]}':
+              raise SystemExit('marker source run mismatch')
+          match = re.fullmatch(r'gaps=([0-9]+(?:,[0-9]+)*)', lines[2])
+          if not match:
+              raise SystemExit('marker gap syntax invalid')
+          marker_order = [int(x) for x in match.group(1).split(',')]
+          if marker_order != sorted(set(marker_order)):
+              raise SystemExit('marker gaps must be unique ascending integers')
+          if any(i < 0 or i >= 202 for i in marker_order):
+              raise SystemExit('marker gap index out of range')
+
+          # Freeze recovery runner identity before examining or spending compute.
+          frozen = (
+              (os.environ['GENERIC_REF'], os.environ['GENERIC_SHA'], os.environ['GENERIC_WORKFLOW_PATH'], os.environ['GENERIC_WORKFLOW_BLOB']),
+              (os.environ['TLC39_REF'], os.environ['TLC39_SHA'], os.environ['TLC39_WORKFLOW_PATH'], os.environ['TLC39_WORKFLOW_BLOB']),
+          )
+          for ref, sha, path, blob in frozen:
+              if ref_sha(ref) != sha:
+                  raise SystemExit(f'frozen recovery ref drift: {ref}')
+              meta, _ = contents(path, sha)
+              if meta.get('sha') != blob:
+                  raise SystemExit(f'frozen recovery workflow blob drift: {path}')
+          if workflow_run_count(os.environ['GENERIC_WORKFLOW'], os.environ['GENERIC_REF']) != 0:
+              raise SystemExit('generic recovery branch already has workflow runs')
+          if workflow_run_count(os.environ['TLC39_WORKFLOW'], os.environ['TLC39_REF']) != 0:
+              raise SystemExit('TLC39 recovery branch already has workflow runs')
+          print('LAS_CANDIDATE3_RECOVERY_RUNNER_BINDINGS=PASS')
+
+          source = get(f'{api}/actions/runs/{os.environ["SOURCE_RUN_ID"]}')
+          expected_source = {
+              'id': int(os.environ['SOURCE_RUN_ID']),
+              'head_sha': os.environ['EXPECTED_SOURCE_HEAD'],
+              'head_branch': os.environ['EXPECTED_SOURCE_BRANCH'],
+              'path': os.environ['SOURCE_WORKFLOW_PATH'],
+              'event': 'push',
+              'run_attempt': 1,
+              'status': 'completed',
+              'conclusion': 'failure',
+          }
+          for key, value in expected_source.items():
+              if source.get(key) != value:
+                  raise SystemExit(f'source run provenance mismatch: {key}')
+          source_wf, _ = contents(os.environ['SOURCE_WORKFLOW_PATH'], os.environ['EXPECTED_SOURCE_HEAD'])
+          if source_wf.get('sha') != os.environ['EXPECTED_SOURCE_WORKFLOW_BLOB']:
+              raise SystemExit('source workflow blob mismatch')
+
+          jobs = []
+          for page in (1, 2, 3):
+              data = get(f'{api}/actions/runs/{os.environ["SOURCE_RUN_ID"]}/jobs?filter=latest&per_page=100&page={page}')
+              batch = data.get('jobs')
+              if not isinstance(batch, list):
+                  raise SystemExit('source job list malformed')
+              jobs.extend(batch)
+          by_name = {}
+          for job in jobs:
+              name = job.get('name')
+              if name in by_name:
+                  raise SystemExit(f'duplicate source job: {name}')
+              by_name[name] = job
+          expected_names = {'bind-pre-tlc', 'aggregate'} | {f'tlc ({i})' for i in range(202)}
+          if set(by_name) != expected_names:
+              raise SystemExit(f'source job set mismatch: got {len(by_name)} expected {len(expected_names)}')
+          bind = by_name['bind-pre-tlc']
+          if bind.get('status') != 'completed' or bind.get('conclusion') != 'success':
+              raise SystemExit('source pre-TLC binding not successful')
+          aggregate = by_name['aggregate']
+          if aggregate.get('status') != 'completed' or aggregate.get('conclusion') != 'failure':
+              raise SystemExit('source aggregate is not exact failure evidence')
+
+          gaps = []
+          direct_success = 0
+          for index in range(202):
+              job = by_name[f'tlc ({index})']
+              if job.get('status') != 'completed':
+                  raise SystemExit(f'source profile {index} not completed')
+              conclusion = job.get('conclusion')
+              steps = job.get('steps') or []
+              if conclusion == 'success':
+                  step_map = {s.get('name'): (s.get('status'), s.get('conclusion')) for s in steps}
+                  if step_map.get('Recover exact frozen private candidate') != ('completed', 'success'):
+                      raise SystemExit(f'source profile {index} recovery evidence invalid')
+                  if step_map.get('Run exact canonical TLC profile') != ('completed', 'success'):
+                      raise SystemExit(f'source profile {index} TLC evidence invalid')
+                  direct_success += 1
+                  continue
+              if conclusion not in {'failure', 'cancelled'}:
+                  raise SystemExit(f'source profile {index} unexpected conclusion: {conclusion}')
+              if not steps:
+                  if conclusion != 'cancelled' or job.get('runner_id') is not None:
+                      raise SystemExit(f'source profile {index} unstarted gap shape invalid')
+              else:
+                  step_map = {s.get('name'): (s.get('status'), s.get('conclusion')) for s in steps}
+                  if step_map.get('Recover exact frozen private candidate') != ('completed', 'success'):
+                      raise SystemExit(f'source profile {index} executed gap recovery invalid')
+                  tlc = step_map.get('Run exact canonical TLC profile')
+                  if tlc is None or tlc[0] != 'completed' or tlc[1] not in {'failure', 'cancelled'}:
+                      raise SystemExit(f'source profile {index} executed gap TLC shape invalid')
+              gaps.append(index)
+
+          if gaps != marker_order:
+              raise SystemExit(f'marker/source gap-set mismatch: marker={marker_order} source={gaps}')
+          if not gaps:
+              raise SystemExit('recovery launcher invoked with no formal gaps')
+          if direct_success + len(gaps) != 202:
+              raise SystemExit('source coverage arithmetic mismatch')
+          if 39 not in gaps:
+              raise SystemExit('expected structural TLC39 gap is absent')
+          print(f'LAS_CANDIDATE3_RECOVERY_DIRECT_SUCCESS={direct_success}')
+          print('LAS_CANDIDATE3_RECOVERY_GAPS=' + ','.join(map(str, gaps)))
+          print('LAS_CANDIDATE3_RECOVERY_SOURCE_SET=PASS')
+
+          for index in gaps:
+              if index == 39:
+                  dispatch(
+                      os.environ['TLC39_WORKFLOW'],
+                      os.environ['TLC39_REF'],
+                      {'segment': '1', 'resume_run_id': '', 'resume_artifact': ''},
+                  )
+                  print('LAS_CANDIDATE3_RECOVERY_DISPATCH=39:dedicated')
+              else:
+                  dispatch(
+                      os.environ['GENERIC_WORKFLOW'],
+                      os.environ['GENERIC_REF'],
+                      {'index': str(index), 'segment': '1', 'resume_run_id': '', 'resume_artifact': ''},
+                  )
+                  print(f'LAS_CANDIDATE3_RECOVERY_DISPATCH={index}:generic')
+          print(f'LAS_CANDIDATE3_RECOVERY_DISPATCH_COUNT={len(gaps)}')
+          print('LAS_CANDIDATE3_RECOVERY_LAUNCH=PASS')
+          PY
