@@ -1,0 +1,136 @@
+name: Exact private retired archive binding gate 20261017-01
+
+on:
+  push:
+    branches:
+      - "verify/retired-archive-binding-20261017-01"
+    paths:
+      - ".github/workflows/exact-private-retired-archive-binding-20261017-01.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 557ff9c9ce823081fa62635645397f8eab8a7023f523807b5140a5d4a1a2a609
+  EXPECTED_PRIVATE_HEAD_PROOF: 37f25674670ab870df595bd16f8b41da64f0e49ac9453b82502d75c49171006d
+  EXPECTED_PRIVATE_TREE_PROOF: 45833a31a62bd74cf409997ffb2380e6c95a31b19b2b7928720397d4147b3cbe
+
+jobs:
+  exact-private-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Install exact toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+
+          ALR_ZIP="$RUNNER_TEMP/alr.zip"
+          ALR_PREFIX="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+            --output "$ALR_ZIP" \
+            "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip" \
+            >/dev/null 2>&1
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $ALR_ZIP" \
+            | sha256sum --check --strict >/dev/null
+          mkdir -p "$ALR_PREFIX"
+          unzip -q "$ALR_ZIP" -d "$ALR_PREFIX"
+          export PATH="$ALR_PREFIX/bin:$PATH"
+          alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
+
+          ALR_WS="$RUNNER_TEMP/alire-workspace"
+          mkdir -p "$ALR_WS"
+          (cd "$ALR_WS" && alr -n init --in-place --no-skel --lib las_archive_gate >/dev/null)
+          GPRBUILD_WRAPPER="$RUNNER_TEMP/gprbuild-wrapper"
+          cat > "$GPRBUILD_WRAPPER" <<EOF_GPR
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$ALR_WS"
+          exec "$ALR_PREFIX/bin/alr" exec -- gprbuild "\$@"
+          EOF_GPR
+          chmod 0755 "$GPRBUILD_WRAPPER"
+          printf 'GPRBUILD=%s\n' "$GPRBUILD_WRAPPER" >> "$GITHUB_ENV"
+          echo "LAS_ARCHIVE_GATE_TOOLCHAINS=PASS"
+
+      - name: Recover exact private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+
+          root="$RUNNER_TEMP/private-target"
+          mkdir "$root"
+          cd "$root"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""
+          resolved=""
+          while read -r sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+              resolved="$sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"
+          test -n "$matched_ref"
+          test -n "$resolved"
+          echo "::add-mask::$matched_ref"
+          echo "::add-mask::$resolved"
+          test "$(printf '%s' "$resolved" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_HEAD_PROOF"
+
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$resolved"
+          git checkout -q --detach "$resolved"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          echo "LAS_ARCHIVE_GATE_EXACT_RECOVERY=PASS"
+
+      - name: Run exact source-free Rust gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+
+          run_stage() {
+            stage="$1"
+            shift
+            log="$RUNNER_TEMP/archive-${stage}.private.log"
+            set +e
+            "$@" >"$log" 2>&1
+            rc=$?
+            set -e
+            if [[ $rc -ne 0 ]]; then
+              echo "LAS_ARCHIVE_GATE_STAGE=$stage"
+              echo "LAS_ARCHIVE_GATE_RC=$rc"
+              echo "LAS_ARCHIVE_GATE_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')"
+              exit "$rc"
+            fi
+            rm -f "$log"
+            echo "LAS_ARCHIVE_GATE_${stage}=PASS"
+          }
+
+          run_stage fmt cargo +1.98.1 fmt --all -- --check
+          run_stage default_check env RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --all-targets
+          run_stage joint_check env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 check --locked --all-targets --features root-ffi,linux-peer-credentials
+          run_stage joint_clippy env GPRBUILD="$GPRBUILD" cargo +1.98.1 clippy --locked --all-targets --features root-ffi,linux-peer-credentials -- -D warnings
+          run_stage joint_tests env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --lib --features root-ffi,linux-peer-credentials -- --test-threads=1
+          run_stage all_feature_tests env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --lib --all-features -- --test-threads=1
+          test -z "$(git status --porcelain)"
+          echo "LAS_ARCHIVE_GATE_EXACT_PRIVATE=PASS"
