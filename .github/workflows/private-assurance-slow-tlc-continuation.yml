@@ -35,7 +35,6 @@ concurrency:
 
 env:
   CONTINUATION_REF: current-202-tlc28-v5-storage-repair-experiment
-  GH_TOKEN: ${{ github.token }}
 
 jobs:
   validate:
@@ -46,6 +45,7 @@ jobs:
       RESUME_RUN_ID: ${{ github.event_name == 'push' && '38889300529' || inputs.resume_run_id }}
       RESUME_ARTIFACT: ${{ github.event_name == 'push' && 'current-202-v4-state-28-13' || inputs.resume_artifact }}
       RESUME_GENERATION: ${{ github.event_name == 'push' && 'v4' || 'v5' }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Validate immutable v5 experiment request
         shell: bash
