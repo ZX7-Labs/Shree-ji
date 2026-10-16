@@ -1,0 +1,127 @@
+name: Private retired Stage 1 location diagnostic 2026-10-17
+
+on:
+  push:
+    branches:
+      - "verify/retired-archive-chain-20261017"
+    paths:
+      - ".github/workflows/private-retired-stage1-location-diagnostic-20261017.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      EXPECTED_PRIVATE_SHA: 427ea461262371c532198d161164059363b34a90
+      EFFECT_MATERIALIZER_BLOB: bb4f6e5c803b7c64ea27e605659cf998fc942cc2
+      FORWARDER_MATERIALIZER_BLOB: 3bcc19412e78941befc8faec9a646792fcb8efca
+    steps:
+      - name: Recover exact private revision
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+          echo "::add-mask::$EXPECTED_PRIVATE_SHA"
+          root="$RUNNER_TEMP/private-target"
+          mkdir "$root" && cd "$root"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$EXPECTED_PRIVATE_SHA" >/dev/null 2>&1
+          git checkout -q -B verify-target "$EXPECTED_PRIVATE_SHA"
+          test "$(git hash-object tools/verification/private_retired_effect_owner_adapter_materialize.py)" = "$EFFECT_MATERIALIZER_BLOB"
+          test "$(git hash-object tools/verification/private_retired_archive_owner_forwarders_materialize.py)" = "$FORWARDER_MATERIALIZER_BLOB"
+          printf 'PRIVATE_ROOT=%s\n' "$root" >> "$GITHUB_ENV"
+          echo "PRIVATE_EXACT_FETCH=PASS"
+
+      - name: Materialize Stage 1
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PRIVATE_ROOT"
+          python3 tools/verification/private_retired_effect_owner_adapter_materialize.py
+          python3 tools/verification/private_retired_archive_owner_forwarders_materialize.py
+          cargo +1.98.1 fmt --all
+          git diff --check
+          echo "STAGE_1_TRANSFORM=PASS"
+
+      - name: Install exact toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          archive="$RUNNER_TEMP/alr.zip"
+          prefix="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --silent --show-error --output "$archive" "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip"
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $archive" | sha256sum --check --strict >/dev/null
+          mkdir -p "$prefix" && unzip -q "$archive" -d "$prefix"
+          export PATH="$prefix/bin:$PATH"
+          alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
+          workspace="$RUNNER_TEMP/alire-workspace"
+          mkdir -p "$workspace" && cd "$workspace"
+          alr -n init --in-place --no-skel --lib retired_archive_diag >/dev/null
+          alr_path="$(command -v alr)"
+          wrapper="$RUNNER_TEMP/gprbuild-via-alire"
+          cat > "$wrapper" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$workspace"
+          exec "$alr_path" exec -- gprbuild "\$@"
+          EOF
+          chmod 0755 "$wrapper"
+          printf 'GPRBUILD=%s\n' "$wrapper" >> "$GITHUB_ENV"
+
+      - name: Emit privacy-safe compiler locations
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$PRIVATE_ROOT"
+          json="$RUNNER_TEMP/cargo.jsonl"
+          err="$RUNNER_TEMP/cargo.stderr"
+          set +e
+          GPRBUILD="$GPRBUILD" cargo +1.98.1 check --locked --features "root-ffi linux-peer-credentials" --all-targets --message-format=json >"$json" 2>"$err"
+          rc=$?
+          set -e
+          python3 - "$json" <<'PY'
+          import hashlib, json, sys
+          p = sys.argv[1]
+          rows = []
+          with open(p, encoding='utf-8') as f:
+              for raw in f:
+                  try:
+                      obj = json.loads(raw)
+                  except Exception:
+                      continue
+                  if obj.get('reason') != 'compiler-message':
+                      continue
+                  msg = obj.get('message') or {}
+                  if msg.get('level') != 'error':
+                      continue
+                  code = (msg.get('code') or {}).get('code') or 'UNCODED'
+                  spans = msg.get('spans') or []
+                  primaries = [s for s in spans if s.get('is_primary')] or spans[:1]
+                  if not primaries:
+                      rows.append((code, 'NOSPAN', 0, 0))
+                      continue
+                  for s in primaries:
+                      path = s.get('file_name', '')
+                      digest = hashlib.sha256(path.encode()).hexdigest()
+                      rows.append((code, digest, s.get('line_start', 0), s.get('column_start', 0)))
+          for row in sorted(set(rows)):
+              print('RUST_ERROR_LOCATION=' + '|'.join(map(str,row)))
+          print(f'RUST_ERROR_LOCATION_COUNT={len(set(rows))}')
+          PY
+          echo "CARGO_CHECK_EXIT=$rc"
+          echo "Private source and diagnostic messages intentionally suppressed."
+          test "$rc" -eq 0
