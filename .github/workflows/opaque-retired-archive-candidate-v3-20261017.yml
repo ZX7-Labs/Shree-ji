@@ -120,6 +120,7 @@ jobs:
           package="$RUNNER_TEMP/package"
           log="$RUNNER_TEMP/private-verification.log"
           mkdir -p "$package"
+          cd "$WORK_ROOT"
           set +e
           LAS_CANDIDATE_BASE_SHA="$BASE_SHA" \
           LAS_CANDIDATE_PACKAGE_DIR="$package" \
