@@ -80,18 +80,17 @@ jobs:
           case "$MODE" in
             generic)
               test "$TARGET_INDEX" -ne 39
-              dispatch_workflow=private-assurance-slow-tlc-continuation.yml
               slice_seconds=14400
               min_free_kb=50331648
               ;;
             profile39)
               test "$TARGET_INDEX" -eq 39
-              dispatch_workflow=private-repaired-202-tlc39-continuation.yml
               slice_seconds=7200
               min_free_kb=54525952
               ;;
             *) echo "unsupported continuation mode" >&2; exit 1 ;;
           esac
+          dispatch_workflow=private-assurance-slow-tlc-continuation.yml
           printf 'DISPATCH_WORKFLOW=%s\nSLICE_SECONDS=%s\nCHECKPOINT_GRACE_SECONDS=1200\nINITIAL_MIN_FREE_KB=67108864\nMIN_FREE_KB=%s\n' \
             "$dispatch_workflow" "$slice_seconds" "$min_free_kb" >>"$GITHUB_ENV"
 
