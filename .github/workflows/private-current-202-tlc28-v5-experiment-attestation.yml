@@ -1,0 +1,322 @@
+name: Private current-202 TLC28 v5 experiment attestation
+
+on:
+  push:
+    branches: [current-202-tlc28-v5-experiment-attestation]
+    paths:
+      - "RUN_CURRENT_202_TLC28_V5_ATTEST"
+  workflow_dispatch:
+    inputs:
+      experiment_run_id:
+        description: Completed TLC28 v5 experiment run to attest
+        required: true
+        default: "38896001936"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: current-202-tlc28-v5-experiment-attestation
+  cancel-in-progress: false
+
+env:
+  TARGET_REF_HASH: 28a52175bfc55f4f8b2b0f4312cd2616a65a7082555149f4382746e2254e1b26
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 1b139dc7920e82d5f9bdd2a68c072ad88bc0049d5ef1377380899164da5f93f9
+  EXPECTED_PRIVATE_TREE_PROOF: 7fb364587ed7c9f76d8fd9f69cb4a4d58e576a44a1e653d019c8114ccb65353f
+  EXPECTED_VERIFIER_BLOB: 62e3e6dc0fad5dddc7fb0a453a3cd681d911e590
+  EXPECTED_TLC_MAP_SHA256: da7bb51d531d0e5e5e6994c80be8f254a110cb8181e6121e3a557fdff9428cee
+  EXPECTED_PROFILE_BINDING_SHA256: 8d281f3bc8b39b1f8ee88d692d7548a137af9194c9cce39acf675374ca36ee65
+  EXPECTED_JAVA_FINGERPRINT: 3c5fc3a0a04ae9bdc453367fd84cbb268fa5dd467c674685f1db682c705b0ad4
+  EXPECTED_RUNNER_REF: current-202-tlc28-v5-storage-repair-experiment
+  EXPECTED_RUNNER_SHA: dc7221eb78f71256fde7e532145de21cb3b3aa66
+  EXPECTED_WRAPPER_WORKFLOW_PATH: .github/workflows/private-assurance-slow-tlc-continuation.yml
+  EXPECTED_WRAPPER_WORKFLOW_BLOB: df1a4ef27481e378b32b72c01dc945e94f6010b7
+  EXPECTED_SLICE_WORKFLOW_PATH: .github/workflows/_private-assurance-tlc-continuation-slice.yml
+  EXPECTED_SLICE_WORKFLOW_BLOB: 646b27926b4f934369158d93a601f600e9b24ea4
+  EXPECTED_CHECKPOINT_SCHEMA: current-202-periodic-barrier-v5-storage-repair-exp1
+  EXPECTED_TLC_WORKERS: "4"
+  EXPECTED_PROFILE_INDEX: "28"
+  EXPECTED_LINEAGE_RUN: "38889300529"
+  EXPECTED_LINEAGE_SEGMENT: "13"
+  EXPECTED_LINEAGE_ARTIFACT: current-202-v4-state-28-13
+  EXPECTED_MIN_FREE_KB: "50331648"
+  BASELINE_GENERATED: "747859160"
+  BASELINE_DISTINCT: "747685774"
+  BASELINE_QUEUE: "574291317"
+  BOOTSTRAP_EXPERIMENT_RUN_ID: "38896001936"
+  EXPERIMENT_RUN_ID: ${{ github.event_name == 'push' && '38896001936' || inputs.experiment_run_id }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Validate attestation request
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPERIMENT_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          test "$EXPERIMENT_RUN_ID" = "$BOOTSTRAP_EXPERIMENT_RUN_ID"
+          echo "LAS_CURRENT_202_V5_ATTEST_REQUEST=PASS"
+
+      - name: Revalidate exact frozen private candidate
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+          ROOT="$GITHUB_WORKSPACE/private-target"
+          mkdir "$ROOT"
+          cd "$ROOT"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""
+          while read -r sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+            fi
+          done <"$refs"
+          rm -f "$refs"
+          test -n "$matched_ref"
+          echo "::add-mask::$matched_ref"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          actual="$(git rev-parse FETCH_HEAD)"
+          echo "::add-mask::$actual"
+          test "$(printf '%s' "$actual" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git checkout -q --detach "$actual"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test "$(git hash-object tools/verify_codespaces_all.sh)" = "$EXPECTED_VERIFIER_BLOB"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "LAS_CURRENT_202_V5_ATTEST_PRIVATE_BINDING=PASS"
+          unset PRIVATE_TOKEN auth matched_ref actual tree
+
+      - name: Attest exact experiment execution
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
+          run_json="$RUNNER_TEMP/run.json"
+          jobs_json="$RUNNER_TEMP/jobs.json"
+          wrapper_json="$RUNNER_TEMP/wrapper.json"
+          slice_json="$RUNNER_TEMP/slice.json"
+          validate_log="$RUNNER_TEMP/validate.log"
+          slice_log="$RUNNER_TEMP/slice.log"
+
+          curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$api/actions/runs/$EXPERIMENT_RUN_ID" >"$run_json"
+
+          python3 - "$run_json" "$GITHUB_REPOSITORY" "$EXPECTED_RUNNER_REF" "$EXPECTED_RUNNER_SHA" "$EXPECTED_WRAPPER_WORKFLOW_PATH" "$EXPECTED_SLICE_WORKFLOW_PATH" <<'PY'
+          import json, sys
+          path, repository, runner_ref, runner_sha, wrapper_path, slice_path = sys.argv[1:]
+          data = json.load(open(path, encoding="utf-8"))
+          expected = {
+              "status": "completed",
+              "conclusion": "success",
+              "run_attempt": 1,
+              "event": "push",
+              "head_branch": runner_ref,
+              "head_sha": runner_sha,
+              "path": wrapper_path,
+          }
+          for key, value in expected.items():
+              if data.get(key) != value:
+                  raise SystemExit(f"unexpected experiment run {key}")
+          refs = data.get("referenced_workflows") or []
+          if len(refs) != 1:
+              raise SystemExit("experiment reusable workflow binding is not exact")
+          ref = refs[0]
+          if ref.get("sha") != runner_sha or ref.get("ref") != f"refs/heads/{runner_ref}":
+              raise SystemExit("experiment reusable workflow revision is not exact")
+          if ref.get("path") != f"{repository}/{slice_path}@{runner_sha}":
+              raise SystemExit("experiment reusable workflow path is not exact")
+          PY
+
+          for spec in \
+            "$EXPECTED_WRAPPER_WORKFLOW_PATH|$EXPECTED_WRAPPER_WORKFLOW_BLOB|$wrapper_json" \
+            "$EXPECTED_SLICE_WORKFLOW_PATH|$EXPECTED_SLICE_WORKFLOW_BLOB|$slice_json"; do
+            IFS='|' read -r workflow_path expected_blob out_json <<<"$spec"
+            encoded_path="$(python3 - "$workflow_path" <<'PY'
+          import sys, urllib.parse
+          print(urllib.parse.quote(sys.argv[1], safe='/'))
+          PY
+          )"
+            curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$api/contents/$encoded_path?ref=$EXPECTED_RUNNER_SHA" >"$out_json"
+            actual_blob="$(python3 - "$out_json" <<'PY'
+          import json, sys
+          print(json.load(open(sys.argv[1], encoding="utf-8")).get("sha", ""))
+          PY
+          )"
+            test "$actual_blob" = "$expected_blob"
+          done
+          echo "LAS_CURRENT_202_V5_ATTEST_RUNNER_BLOBS=PASS"
+
+          curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$api/actions/runs/$EXPERIMENT_RUN_ID/jobs?per_page=100" >"$jobs_json"
+
+          read -r validate_job_id slice_job_id mode < <(
+            python3 - "$jobs_json" <<'PY'
+          import json, sys
+          data=json.load(open(sys.argv[1], encoding="utf-8"))
+          jobs=data.get("jobs", [])
+          if data.get("total_count") != 2 or len(jobs) != 2:
+              raise SystemExit("experiment must contain exactly two jobs")
+          by_name={j.get("name"):j for j in jobs}
+          if set(by_name) != {"validate","continuation / slice"}:
+              raise SystemExit("experiment job set is not exact")
+          validate=by_name["validate"]; sl=by_name["continuation / slice"]
+          for job in (validate, sl):
+              if job.get("status") != "completed" or job.get("conclusion") != "success":
+                  raise SystemExit("experiment required job is not successful")
+          vsteps={s.get("name"):(s.get("status"),s.get("conclusion")) for s in validate.get("steps",[])}
+          if vsteps.get("Validate immutable v5 experiment request") != ("completed","success"):
+              raise SystemExit("v5 immutable request validation did not succeed")
+          steps={s.get("name"):(s.get("status"),s.get("conclusion")) for s in sl.get("steps",[])}
+          required=[
+              "Validate exact v5 continuation request",
+              "Reclaim runner storage for exhaustive TLC",
+              "Recover exact frozen private candidate",
+              "Bind exact canonical map and profile 28",
+              "Verify legacy v4 producer identity",
+              "Download prior authenticated encrypted checkpoint",
+              "Authenticate, restore, and reclaim checkpoint transport",
+              "Run exact canonical TLC slice",
+          ]
+          for name in required:
+              if steps.get(name) != ("completed","success"):
+                  raise SystemExit(f"required experiment step not successful: {name}")
+          tail=[
+              "Seal authenticated encrypted v5 checkpoint",
+              "Upload authenticated encrypted v5 checkpoint",
+              "Dispatch next exact v5 slice",
+          ]
+          states=[steps.get(n) for n in tail]
+          if states == [("completed","success")]*3:
+              mode="slice"
+          elif states == [("completed","skipped")]*3:
+              mode="terminal"
+          else:
+              raise SystemExit("experiment tail steps are inconsistent")
+          print(validate["id"], sl["id"], mode)
+          PY
+          )
+
+          curl --proto '=https' --tlsv1.2 --fail-with-body -sSL \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" "$api/actions/jobs/$validate_job_id/logs" >"$validate_log"
+          curl --proto '=https' --tlsv1.2 --fail-with-body -sSL \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" "$api/actions/jobs/$slice_job_id/logs" >"$slice_log"
+
+          python3 - "$validate_log" "$slice_log" "$mode" \
+            "$EXPECTED_CHECKPOINT_SCHEMA" "$EXPECTED_TLC_WORKERS" "$EXPECTED_PROFILE_INDEX" \
+            "$EXPECTED_JAVA_FINGERPRINT" "$EXPECTED_MIN_FREE_KB" \
+            "$BASELINE_GENERATED" "$BASELINE_DISTINCT" "$BASELINE_QUEUE" <<'PY'
+          import re, sys
+          (validate_path, slice_path, mode, schema, workers, profile, java_fp, min_free,
+           base_generated, base_distinct, base_queue) = sys.argv[1:]
+          min_free=int(min_free); base_generated=int(base_generated); base_distinct=int(base_distinct); base_queue=int(base_queue)
+          stamp=re.compile(r'^(\d{4}-\d{2}-\d{2}T\S+Z) (.*)$')
+          def emitted(path):
+              out=[]
+              for line in open(path, encoding="utf-8", errors="replace"):
+                  m=stamp.match(line.rstrip("\n"))
+                  if m: out.append((m.group(1),m.group(2)))
+              return out
+          validate=emitted(validate_path); sl=emitted(slice_path)
+          vm=[m for _,m in validate]; sm=[m for _,m in sl]
+          for marker in (
+              "LAS_CURRENT_202_V5_ORCHESTRATOR_REQUEST=PASS",
+              "LAS_CURRENT_202_V5_ORCHESTRATOR_REF_BINDING=PASS",
+              "LAS_CURRENT_202_V5_ORCHESTRATOR_GENERATION=v4",
+          ):
+              if marker not in vm: raise SystemExit(f"missing validate marker: {marker}")
+          required={
+              "LAS_CURRENT_202_V5_REQUEST=PASS",
+              f"LAS_CURRENT_202_V5_SCHEMA={schema}",
+              f"LAS_CURRENT_202_V5_WORKERS={workers}",
+              "LAS_CURRENT_202_V5_RESUME_GENERATION=v4",
+              "LAS_CURRENT_202_V5_RECOVERY=PASS",
+              "LAS_CURRENT_202_V5_BINDING=PASS",
+              "LAS_CURRENT_202_V5_LEGACY_PRODUCER=PASS",
+              "LAS_CURRENT_202_V5_CHECKPOINT_AUTH=PASS",
+              f"LAS_CURRENT_202_V5_JAVA_FINGERPRINT={java_fp}",
+              "LAS_CURRENT_202_V5_TRANSPORT_RECLAIM=PASS",
+              "LAS_CURRENT_202_V5_RECOVER_DIR=PASS",
+          }
+          missing=required.difference(sm)
+          if missing: raise SystemExit(f"missing v5 evidence markers: {sorted(missing)}")
+          forbidden=(
+              "LAS_CURRENT_202_V5_RESULT=FAIL",
+              "LAS_CURRENT_202_V5_RESULT=FAIL_CLOSED",
+              "LAS_CURRENT_202_V5_RESULT=FAIL_BARRIER",
+              "LAS_CURRENT_202_V5_BARRIER_TIMEOUT=1",
+          )
+          if any(m.startswith(forbidden) for m in sm):
+              raise SystemExit("v5 experiment contains failure evidence")
+          def one(pattern,label):
+              vals=[m.group(1) for _,line in sl if (m:=re.fullmatch(pattern,line))]
+              if len(vals)!=1: raise SystemExit(f"missing or ambiguous {label}")
+              return vals[0]
+          index=int(one(r'LAS_CURRENT_202_V5_INDEX=([0-9]+)',"profile"))
+          segment=int(one(r'LAS_CURRENT_202_V5_SEGMENT=([1-9][0-9]*)',"segment"))
+          transport=int(one(r'LAS_CURRENT_202_V5_TRANSPORT_KB=([0-9]+)',"transport KB"))
+          pre=int(one(r'LAS_CURRENT_202_V5_FREE_KB_PRE_CLEANUP=([0-9]+)',"pre-cleanup free"))
+          post=int(one(r'LAS_CURRENT_202_V5_FREE_KB_POST_CLEANUP=([0-9]+)',"post-cleanup free"))
+          reclaimed=int(one(r'LAS_CURRENT_202_V5_RECLAIMED_KB=(-?[0-9]+)',"reclaimed KB"))
+          start_free=int(one(r'LAS_CURRENT_202_V5_TLC_START_FREE_KB=([0-9]+)',"TLC start free"))
+          generated=int(one(r'LAS_CURRENT_202_V5_GENERATED=([0-9]+)',"generated"))
+          distinct=int(one(r'LAS_CURRENT_202_V5_DISTINCT=([0-9]+)',"distinct"))
+          queue=int(one(r'LAS_CURRENT_202_V5_QUEUE=([0-9]+)',"queue"))
+          rc=int(one(r'LAS_CURRENT_202_V5_RC=([0-9]+)',"rc"))
+          cut=one(r'LAS_CURRENT_202_V5_CUT_REASON=([a-z]+)',"cut reason")
+          log_sha=one(r'LAS_CURRENT_202_V5_LOG_SHA256=([0-9a-f]{64})',"log sha")
+          if index != int(profile) or segment != 14:
+              raise SystemExit("bootstrap experiment profile/segment mismatch")
+          if transport < 16_000_000 or reclaimed <= 0 or post <= pre or start_free <= min_free:
+              raise SystemExit("transport cleanup did not establish usable disk headroom")
+          if generated < base_generated or distinct < base_distinct:
+              raise SystemExit("recovered TLC counters regressed below the authenticated v4 source")
+          if mode == "slice":
+              if rc not in (137,143) or "LAS_CURRENT_202_V5_RESULT=SLICE_CHECKPOINT" not in sm:
+                  raise SystemExit("slice mode lacks valid checkpoint result")
+              for marker in ("LAS_CURRENT_202_V5_BARRIER_REQUESTED=1","LAS_CURRENT_202_V5_BARRIER_COMPLETE=1"):
+                  if marker not in sm: raise SystemExit("slice mode lacks barrier evidence")
+          else:
+              if rc != 0 or cut != "none" or "LAS_CURRENT_202_V5_RESULT=PASS" not in sm:
+                  raise SystemExit("terminal mode lacks exact PASS evidence")
+          print(f"LAS_CURRENT_202_V5_ATTEST_MODE={mode}")
+          print(f"LAS_CURRENT_202_V5_ATTEST_PROFILE={index}")
+          print(f"LAS_CURRENT_202_V5_ATTEST_SEGMENT={segment}")
+          print(f"LAS_CURRENT_202_V5_ATTEST_RECLAIMED_KB={reclaimed}")
+          print(f"LAS_CURRENT_202_V5_ATTEST_TLC_START_FREE_KB={start_free}")
+          print(f"LAS_CURRENT_202_V5_ATTEST_GENERATED_DELTA={generated-base_generated}")
+          print(f"LAS_CURRENT_202_V5_ATTEST_DISTINCT_DELTA={distinct-base_distinct}")
+          print(f"LAS_CURRENT_202_V5_ATTEST_QUEUE_DELTA={queue-base_queue}")
+          print(f"LAS_CURRENT_202_V5_ATTEST_TLC_LOG_SHA256={log_sha}")
+          print("LAS_CURRENT_202_V5_EXPERIMENT_ATTESTATION=PASS")
+          PY
