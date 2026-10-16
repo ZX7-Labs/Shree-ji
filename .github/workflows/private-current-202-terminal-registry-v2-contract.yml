@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/private-current-202-terminal-registry-v2-contract.yml"
       - "tools/current_202_terminal_registry_v2.py"
+      - "LAS_CURRENT_202_TERMINAL_ATTESTATIONS.json"
       - "RUN_CURRENT_202_TERMINAL_REGISTRY_V2_CONTRACT"
   workflow_dispatch:
 
@@ -46,15 +47,33 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source="$RUNNER_TEMP/registry-v1.json"
           out="$RUNNER_TEMP/registry-v2.json"
           log="$RUNNER_TEMP/migrate.log"
+          git show "$BASE_MAIN_SHA:LAS_CURRENT_202_TERMINAL_ATTESTATIONS.json" >"$source"
           python3 tools/current_202_terminal_registry_v2.py migrate-v1 \
-            LAS_CURRENT_202_TERMINAL_ATTESTATIONS.json "$out" \
-            --print-evidence-digest | tee "$log"
+            "$source" "$out" --print-evidence-digest | tee "$log"
           grep -qx "LAS_CURRENT_202_REGISTRY_V2_EVIDENCE_SHA256=$EXPECTED_EVIDENCE_SHA256" "$log"
           grep -qx "LAS_CURRENT_202_REGISTRY_V1_TO_V2=PASS" "$log"
           python3 tools/current_202_terminal_registry_v2.py validate-v2 "$out" | \
             grep -qx "LAS_CURRENT_202_REGISTRY_V2_VALIDATE=PASS"
+          python3 - "$source" "$out" LAS_CURRENT_202_TERMINAL_ATTESTATIONS.json <<'PY'
+          import json, sys
+          sys.path.insert(0, "tools")
+          import current_202_terminal_registry_v2 as registry
+          source, generated, current = [json.load(open(p, encoding="utf-8")) for p in sys.argv[1:]]
+          if current.get("schema") == registry.SCHEMA_V1:
+              if current != source:
+                  raise SystemExit("working-tree v1 registry drifted from the bound migration source")
+              print("LAS_CURRENT_202_REGISTRY_V2_WORKTREE_MODE=V1_SOURCE")
+          elif current.get("schema") == registry.SCHEMA_V2:
+              registry.validate_v2(current)
+              if current != generated:
+                  raise SystemExit("working-tree v2 registry is not the exact lossless migration output")
+              print("LAS_CURRENT_202_REGISTRY_V2_WORKTREE_MODE=V2_EXACT")
+          else:
+              raise SystemExit("working-tree registry schema is unsupported")
+          PY
           python3 - "$out" <<'PY'
           import json, sys
           data=json.load(open(sys.argv[1], encoding="utf-8"))
