@@ -1,0 +1,114 @@
+name: Exact private retired archive format repair 20261017-03
+
+on:
+  push:
+    branches:
+      - "verify/retired-archive-binding-20261017-01"
+    paths:
+      - ".github/workflows/exact-private-retired-archive-format-repair-20261017-03.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exact-private-retired-archive-format-repair-20261017-03
+  cancel-in-progress: false
+
+env:
+  TARGET_REF_HASH: cb93309da47e6ca805ecd50d3fd0916da5227714d343a32d5f181ebbbc02fe45
+  EXPECTED_PRIVATE_HEAD_PROOF: 37f25674670ab870df595bd16f8b41da64f0e49ac9453b82502d75c49171006d
+  EXPECTED_PRIVATE_TREE_PROOF: 45833a31a62bd74cf409997ffb2380e6c95a31b19b2b7928720397d4147b3cbe
+
+jobs:
+  format-exact-child:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact hidden private child
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_WRITE_TOKEN: ${{ secrets.LAS_PRIVATE_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_WRITE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_WRITE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_WRITE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""; matched_sha=""
+          while read -r sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"; matched_ref="$ref"; matched_sha="$sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$matched_ref"; test -n "$matched_sha"
+          echo "::add-mask::$matched_ref"; echo "::add-mask::$matched_sha"
+          test "$(printf '%s' "$matched_sha" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_HEAD_PROOF"
+
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$matched_sha"
+          git checkout -q -B format-target "$matched_sha"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+
+          printf '%s' "$matched_ref" >"$RUNNER_TEMP/private-ref"
+          printf '%s' "$matched_sha" >"$RUNNER_TEMP/private-start-sha"
+          printf '%s' "$auth" >"$RUNNER_TEMP/private-auth"
+          chmod 600 "$RUNNER_TEMP/private-ref" "$RUNNER_TEMP/private-start-sha" "$RUNNER_TEMP/private-auth"
+          echo "LAS_ARCHIVE_FORMAT_EXACT_START=PASS"
+
+      - name: Apply pinned rustfmt and verify scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt >/dev/null
+          cargo +1.98.1 fmt --all
+          cargo +1.98.1 fmt --all -- --check
+
+          changed="$RUNNER_TEMP/format-paths"
+          git diff --name-only >"$changed"
+          test -s "$changed"
+          count="$(wc -l <"$changed" | tr -d ' ')"
+          test "$count" = "15"
+          while IFS= read -r path; do
+            case "$path" in
+              *.rs) ;;
+              *) echo "LAS_ARCHIVE_FORMAT_SCOPE=FAIL"; exit 2 ;;
+            esac
+          done <"$changed"
+          git diff --check
+          echo "LAS_ARCHIVE_FORMAT_CHANGED_FILES=$count"
+          echo "LAS_ARCHIVE_FORMAT_SCOPE=RUST_ONLY"
+
+      - name: Commit and fast-forward exact private child
+        shell: bash
+        env:
+          PRIVATE_WRITE_TOKEN: ${{ secrets.LAS_PRIVATE_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          matched_ref="$(cat "$RUNNER_TEMP/private-ref")"
+          start_sha="$(cat "$RUNNER_TEMP/private-start-sha")"
+          auth="$(cat "$RUNNER_TEMP/private-auth")"
+          echo "::add-mask::$PRIVATE_WRITE_TOKEN"; echo "::add-mask::$auth"; echo "::add-mask::$start_sha"
+
+          remote_sha="$(git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote origin "$matched_ref" | awk '{print $1}')"
+          echo "::add-mask::$remote_sha"
+          test "$remote_sha" = "$start_sha"
+
+          git config user.name "LAS Verification Formatter"
+          git config user.email "las-verification@users.noreply.github.com"
+          git add -u
+          git commit -q -m "Format retired archive lineage with pinned rustfmt 1.98.1"
+          new_sha="$(git rev-parse HEAD)"; echo "::add-mask::$new_sha"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" push -q origin HEAD:"$matched_ref"
+          echo "LAS_ARCHIVE_FORMAT_RESULT=PASS"
+          echo "LAS_ARCHIVE_FORMAT_COMMIT_PROOF=$(printf '%s' "$new_sha" | sha256sum | awk '{print $1}')"
