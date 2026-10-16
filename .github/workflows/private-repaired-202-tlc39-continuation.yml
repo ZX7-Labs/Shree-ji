@@ -69,5 +69,4 @@ jobs:
       resume_run_id: ${{ inputs.resume_run_id }}
       resume_artifact: ${{ inputs.resume_artifact }}
       mode: profile39
-      orchestrator_workflow: private-repaired-202-tlc39-continuation.yml
     secrets: inherit
