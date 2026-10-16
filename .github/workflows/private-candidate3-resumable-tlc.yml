@@ -78,6 +78,7 @@ jobs:
           import datetime as dt
           import json
           import os
+          import re
           import sys
 
           run = json.load(open(sys.argv[1], encoding='utf-8'))
@@ -98,27 +99,35 @@ jobs:
               raise SystemExit('source workflow blob mismatch')
 
           jobs = []
-          total_counts = set()
+          declared_counts = set()
           for path in sys.argv[3:]:
               payload = json.load(open(path, encoding='utf-8'))
-              total_counts.add(payload.get('total_count'))
+              declared_counts.add(payload.get('total_count'))
               jobs.extend(payload.get('jobs', []))
-          if total_counts != {203}:
-              raise SystemExit(f'unexpected source job count: {total_counts}')
+          if not declared_counts or not declared_counts.issubset({203, 204}):
+              raise SystemExit(f'unexpected source job count declaration: {declared_counts}')
           by_id = {j['id']: j for j in jobs}
-          if len(by_id) != 203:
-              raise SystemExit(f'job pagination did not cover exactly 203 unique jobs: {len(by_id)}')
+          if len(by_id) not in (203, 204):
+              raise SystemExit(f'job pagination did not cover expected source jobs: {len(by_id)}')
           jobs = list(by_id.values())
           bind = [j for j in jobs if j.get('name') == 'bind-pre-tlc']
           if len(bind) != 1 or bind[0].get('status') != 'completed' or bind[0].get('conclusion') != 'success':
               raise SystemExit('bound pre-TLC job is not successful')
+          tlc_by_index = {}
+          for job in jobs:
+              match = re.fullmatch(r'tlc \(([0-9]+)\)', job.get('name', ''))
+              if not match:
+                  continue
+              index = int(match.group(1))
+              if index in tlc_by_index:
+                  raise SystemExit(f'duplicate TLC profile job: {index}')
+              tlc_by_index[index] = job
+          if set(tlc_by_index) != set(range(202)):
+              raise SystemExit('source run does not contain exactly canonical TLC indices 0..201')
 
           expected = [int(x) for x in os.environ['EXPECTED_TIMEOUT_INDICES'].split(',')]
           for index in expected:
-              matches = [j for j in jobs if j.get('name') == f'tlc ({index})']
-              if len(matches) != 1:
-                  raise SystemExit(f'profile {index}: expected exactly one source job')
-              job = matches[0]
+              job = tlc_by_index[index]
               if job.get('status') != 'completed' or job.get('conclusion') != 'cancelled':
                   raise SystemExit(f'profile {index}: source lane is not a completed cancellation')
               steps = {s.get('name'): s for s in job.get('steps', [])}
