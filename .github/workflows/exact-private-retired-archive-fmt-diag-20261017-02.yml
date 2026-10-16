@@ -1,0 +1,79 @@
+name: Exact private retired archive fmt discriminator 20261017-02
+
+on:
+  push:
+    branches:
+      - "verify/retired-archive-binding-20261017-01"
+    paths:
+      - ".github/workflows/exact-private-retired-archive-fmt-diag-20261017-02.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REF_HASH: 557ff9c9ce823081fa62635645397f8eab8a7023f523807b5140a5d4a1a2a609
+  EXPECTED_PRIVATE_HEAD_PROOF: 37f25674670ab870df595bd16f8b41da64f0e49ac9453b82502d75c49171006d
+  EXPECTED_PRIVATE_TREE_PROOF: 45833a31a62bd74cf409997ffb2380e6c95a31b19b2b7928720397d4147b3cbe
+
+jobs:
+  fmt-discriminate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Install pinned rustfmt
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt >/dev/null
+
+      - name: Recover exact private revision opaquely
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"; test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private-target"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          ref=""; head=""
+          while read -r sha name; do
+            if [[ "$(printf '%s' "$name" | sha256sum | awk '{print $1}')" = "$TARGET_REF_HASH" ]]; then
+              test -z "$ref"; ref="$name"; head="$sha"
+            fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$ref"; test -n "$head"
+          echo "::add-mask::$ref"; echo "::add-mask::$head"
+          test "$(printf '%s' "$head" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_HEAD_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$head"; git checkout -q --detach "$head"
+          tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain)"
+          echo "LAS_FMT_DIAG_EXACT_RECOVERY=PASS"
+
+      - name: Emit source-free formatting delta identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-target"
+          cargo +1.98.1 fmt --all
+          mapfile -d '' paths < <(git diff --name-only -z)
+          echo "LAS_FMT_DIAG_CHANGED_COUNT=${#paths[@]}"
+          i=0
+          for path in "${paths[@]}"; do
+            i=$((i+1))
+            path_hash="$(printf '%s' "$path" | sha256sum | awk '{print $1}')"
+            before="$(git rev-parse "HEAD:$path")"
+            after="$(git hash-object "$path")"
+            echo "LAS_FMT_DIAG_${i}_PATH_SHA256=$path_hash"
+            echo "LAS_FMT_DIAG_${i}_BEFORE_BLOB=$before"
+            echo "LAS_FMT_DIAG_${i}_AFTER_BLOB=$after"
+          done
+          test "${#paths[@]}" -gt 0
