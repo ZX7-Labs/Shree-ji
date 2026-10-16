@@ -24,12 +24,13 @@ jobs:
       matrix:
         stage: [1, 2, 3]
     env:
-      EXPECTED_PRIVATE_SHA: f4dedfc604b3305ad6e07c8f56fdf872417d75ee
+      EXPECTED_PRIVATE_SHA: 427ea461262371c532198d161164059363b34a90
       BASE_PRIVATE_SHA: 7efb81bd371a22b36cfb36f6f776045a17c9405f
       EFFECT_MATERIALIZER_BLOB: bb4f6e5c803b7c64ea27e605659cf998fc942cc2
       FORWARDER_MATERIALIZER_BLOB: 3bcc19412e78941befc8faec9a646792fcb8efca
       COMPLETE_MATERIALIZER_BLOB: a35184cb70d931c34194e96192b208b8484b7ec9
       RECLAIM_MATERIALIZER_BLOB: 0b65004b5ec67373ac53127de1193ecbecfba902
+      RECLAIM_HYGIENE_BLOB: e821bbaadeb7483d1d51c419b11940facf311fca
       CANONICAL_VERIFIER_BLOB: 62e3e6dc0fad5dddc7fb0a453a3cd681d911e590
     steps:
       - name: Recover exact private tooling revision read-only
@@ -72,6 +73,7 @@ jobs:
           test "$(git hash-object tools/verification/private_retired_archive_owner_forwarders_materialize.py)" = "$FORWARDER_MATERIALIZER_BLOB"
           test "$(git hash-object tools/verification/private_retired_archive_complete_transcript_materialize.py)" = "$COMPLETE_MATERIALIZER_BLOB"
           test "$(git hash-object tools/verification/private_retired_archive_reclaim_materialize.py)" = "$RECLAIM_MATERIALIZER_BLOB"
+          test "$(git hash-object tools/verification/private_retired_archive_reclaim_ownership_hygiene.py)" = "$RECLAIM_HYGIENE_BLOB"
           test "$(git hash-object tools/verify_codespaces_all.sh)" = "$CANONICAL_VERIFIER_BLOB"
 
           proof="$(printf '%s' "$EXPECTED_PRIVATE_SHA" | sha256sum | awk '{print $1}')"
@@ -92,6 +94,7 @@ jobs:
           fi
           if [[ "${{ matrix.stage }}" -ge 3 ]]; then
             python3 tools/verification/private_retired_archive_reclaim_materialize.py
+            python3 tools/verification/private_retired_archive_reclaim_ownership_hygiene.py
           fi
           git diff --check
           echo "STAGE_${{ matrix.stage }}_TRANSFORM=PASS"
