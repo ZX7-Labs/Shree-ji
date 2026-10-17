@@ -1,4 +1,4 @@
-name: Opaque verified retired effect source-tree attestation 20261017
+name: Opaque verified retired effect source-tree export 20261017
 
 on:
   push:
@@ -16,6 +16,7 @@ env:
   BASE_SNAPSHOT_PROOF: bd4d73399dc34da2586900c270f6b33f2a1049e934472301f5546ad9973cc49e
   BASE_TREE_PROOF: 93bcdc3d05cc578589d0600beb22d21dda366b5cd9fd81cc31f4f487d9e35981
   EXPECTED_GREEN_BASELINE_TREE: ffc6621866ec4353d070d74746e0a2de8a9a9d20
+  EXPECTED_EFFECT_SOURCE_TREE: 5b1eea71f2e1c253c4b665f593f5a4c69b6f2a14
   EXPECTED_EFFECT_PATHSET_SHA256: 34543f21c76a615caf8978ae593ed6312993039ceacd329098299bedfde3c44a
   EFFECT_REF_HASH: 57902b32c7dba883a89cd5a6e47dea395ab8a06b111c3dcdcd0487d67f010f58
   M1_BLOB: bb4f6e5c803b7c64ea27e605659cf998fc942cc2
@@ -23,11 +24,13 @@ env:
   M3_BLOB: 67746f8a4776b872b3878f6861eb3bb7658a9fbd
   M4_BLOB: 13820e643e7d76cd087293429f6856183f4d9b07
   M5_BLOB: ace99b29dcf1ab6041d602247158f07ab13d41eb
+  RSA_MODULUS_HEX: CE75F692EE29763A73DBA77FC7828E0BFA078388E8F33297792B6F4BE5584B72A13ADA4A991C067D49650769AC911E58A1C36F105FC061EE5013596E291A52462383A81A8B352B88775002830C8A069C3C330D5261D938525F1110C1019D073B0EEE6CB57F06A03CDC1A2D54AD0F253E3CB455C4DD8285F091664CEC9B9397492B5915DFE2664A136BB0ED67ADEDB1B0B9D390FABEAE811322BCC6CB4C450D784984F06E3460724FF141AD9B8F34A535A934D5C0D253782EF72CFF4FD702846C9C1403A2FD7369475ED816867192DFC911E7B3B8B611497890B971422793CBCCE98EE648446977D073780A071129C05E9E155853AA2D14767265A0B5C63FA5F7457AE3B23395C13829709DD8D81B197903B9AE699671434F2E317EA2008F593CF49E191BA97A6C0662733027EFB56B413C5E95DDADAE4B0BB15613D0684E3FC349188CA78202A7F363A2F23898516C8407951F04F091BCBBF69E21D9E43635A3972138869FBE11CAB833075755BC858177DF95CE4BD4442820A2D8B3E308F8C1
+  RSA_EXPONENT: "65537"
 
 jobs:
-  attest:
+  export:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Recover exact private source and immutable materializers
         shell: bash
@@ -60,7 +63,7 @@ jobs:
             test "$(git hash-object "$RUNNER_TEMP/$name")" = "$blob"
           done
           printf 'WORK_ROOT=%s\n' "$root" >>"$GITHUB_ENV"
-          echo "LAS_EFFECT_SOURCE_ATTEST_RECOVERY=PASS"
+          echo "LAS_EFFECT_EXPORT_RECOVERY=PASS"
 
       - name: Install exact Rust formatter
         shell: bash
@@ -68,9 +71,9 @@ jobs:
           set -euo pipefail
           rustup toolchain install 1.98.1 --profile minimal >/dev/null
           rustup component add --toolchain 1.98.1 rustfmt >/dev/null
-          echo "LAS_EFFECT_SOURCE_ATTEST_TOOLCHAIN=PASS"
+          echo "LAS_EFFECT_EXPORT_TOOLCHAIN=PASS"
 
-      - name: Derive verified source-only tree deterministically
+      - name: Reconstruct attested source tree and encrypt source package
         shell: bash
         run: |
           set -euo pipefail
@@ -81,11 +84,11 @@ jobs:
           cargo +1.98.1 fmt --all >/dev/null 2>&1
           git add src
           test "$(git write-tree)" = "$EXPECTED_GREEN_BASELINE_TREE"
-          git config user.name "LAS Source Tree Attestor"
-          git config user.email "las-source-tree-attestor@users.noreply.github.com"
+          git config user.name "LAS Verified Source Export Canonicalizer"
+          git config user.email "las-verified-source-export@users.noreply.github.com"
           git commit -q -m "Ephemeral exact verified green baseline"
 
-          work="$RUNNER_TEMP/effect-work"; git worktree add -q -b verify-effect-source "$work" HEAD; cd "$work"
+          work="$RUNNER_TEMP/effect-work"; git worktree add -q -b verify-effect-export "$work" HEAD; cd "$work"
           mkdir -p tools/verification
           install -m 0644 "$RUNNER_TEMP/m1.py" tools/verification/private_retired_effect_owner_adapter_materialize.py
           install -m 0644 "$RUNNER_TEMP/m2.py" tools/verification/private_retired_effect_schema_semantic_repair.py
@@ -105,5 +108,84 @@ jobs:
           test "$(wc -l < "$changed" | tr -d ' ')" = 7
           test "$(sha256sum "$changed" | awk '{print $1}')" = "$EXPECTED_EFFECT_PATHSET_SHA256"
           tree="$(git write-tree)"
-          echo "LAS_VERIFIED_RETIRED_EFFECT_SOURCE_TREE=$tree"
-          echo "LAS_RETIRED_EFFECT_SOURCE_TREE_ATTESTATION=PASS"
+          test "$tree" = "$EXPECTED_EFFECT_SOURCE_TREE"
+          echo "LAS_EFFECT_EXPORT_SOURCE_TREE=PASS"
+
+          package="$RUNNER_TEMP/package"; mkdir -p "$package/files"
+          python3 - "$changed" "$package" "$EXPECTED_GREEN_BASELINE_TREE" "$tree" <<'PY'
+          import json, pathlib, subprocess, sys
+          changed, package, base_tree, candidate_tree = sys.argv[1:]
+          paths = [p for p in pathlib.Path(changed).read_text(encoding='utf-8').splitlines() if p]
+          out = pathlib.Path(package)
+          entries = []
+          for path in paths:
+              src = pathlib.Path(path)
+              if not path.startswith('src/') or not src.is_file():
+                  raise SystemExit('invalid verified source export member')
+              dst = out / 'files' / path
+              dst.parent.mkdir(parents=True, exist_ok=True)
+              dst.write_bytes(src.read_bytes())
+              blob = subprocess.check_output(['git','hash-object',path], text=True).strip()
+              mode = subprocess.check_output(['git','ls-files','-s','--',path], text=True).split()[0]
+              entries.append({'path': path, 'mode': mode, 'blob': blob, 'size': src.stat().st_size})
+          manifest = {
+              'schema': 'las-verified-retired-effect-source-tree-export-v2',
+              'verified_baseline_tree': base_tree,
+              'verified_source_tree': candidate_tree,
+              'source_pathset_sha256': '34543f21c76a615caf8978ae593ed6312993039ceacd329098299bedfde3c44a',
+              'materializer_blobs': [
+                  'bb4f6e5c803b7c64ea27e605659cf998fc942cc2',
+                  '6fb90f15a1194d596f420ebee9f0ed3e4ae2b112',
+                  '67746f8a4776b872b3878f6861eb3bb7658a9fbd',
+                  '13820e643e7d76cd087293429f6856183f4d9b07',
+                  'ace99b29dcf1ab6041d602247158f07ab13d41eb',
+              ],
+              'files': entries,
+          }
+          (out/'manifest.json').write_text(json.dumps(manifest, sort_keys=True, separators=(',',':'))+'\n', encoding='utf-8')
+          PY
+          tarball="$RUNNER_TEMP/verified-effect.tar.gz"; tar -C "$package" -czf "$tarball" .
+
+          python3 - "$RSA_MODULUS_HEX" "$RSA_EXPONENT" "$RUNNER_TEMP/pub.der" <<'PY'
+          import pathlib, sys
+          n = int(sys.argv[1], 16); e = int(sys.argv[2]); out = pathlib.Path(sys.argv[3])
+          def L(n):
+              if n < 128: return bytes([n])
+              b = n.to_bytes((n.bit_length()+7)//8, 'big'); return bytes([0x80|len(b)])+b
+          def T(tag, content): return bytes([tag])+L(len(content))+content
+          def I(v):
+              b = v.to_bytes((v.bit_length()+7)//8 or 1, 'big')
+              if b[0] & 0x80: b = b'\x00'+b
+              return T(0x02,b)
+          rsa = T(0x30, I(n)+I(e))
+          alg = T(0x30, bytes.fromhex('06092a864886f70d010101') + bytes.fromhex('0500'))
+          out.write_bytes(T(0x30, alg + T(0x03, b'\x00'+rsa)))
+          PY
+          openssl pkey -pubin -inform DER -in "$RUNNER_TEMP/pub.der" -out "$RUNNER_TEMP/pub.pem" >/dev/null 2>&1
+          keymat_hex="$(openssl rand -hex 64)"
+          enc_key="${keymat_hex:0:64}"; mac_key="${keymat_hex:64:64}"; iv="$(openssl rand -hex 16)"
+          python3 - "$keymat_hex" "$RUNNER_TEMP/keymat.bin" <<'PY'
+          import pathlib, sys
+          pathlib.Path(sys.argv[2]).write_bytes(bytes.fromhex(sys.argv[1]))
+          PY
+          openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/pub.pem" \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 \
+            -in "$RUNNER_TEMP/keymat.bin" -out "$RUNNER_TEMP/keymat.rsa"
+          openssl enc -aes-256-cbc -K "$enc_key" -iv "$iv" -in "$tarball" -out "$RUNNER_TEMP/candidate.enc"
+          printf '%s' "$iv" >"$RUNNER_TEMP/iv.hex"
+          cat "$RUNNER_TEMP/iv.hex" "$RUNNER_TEMP/candidate.enc" | \
+            openssl dgst -sha256 -mac HMAC -macopt "hexkey:$mac_key" -binary >"$RUNNER_TEMP/candidate.hmac"
+          export_dir="$RUNNER_TEMP/export"; mkdir "$export_dir"
+          cp "$RUNNER_TEMP/keymat.rsa" "$RUNNER_TEMP/iv.hex" "$RUNNER_TEMP/candidate.enc" "$RUNNER_TEMP/candidate.hmac" "$export_dir/"
+          printf '{"schema":"las-hybrid-envelope-v1","source_tree":"%s","rsa_oaep":"sha256","cipher":"aes-256-cbc","mac":"hmac-sha256"}\n' "$tree" >"$export_dir/envelope.json"
+          echo "LAS_VERIFIED_EFFECT_SOURCE_EXPORT_TREE=$tree"
+          echo "LAS_VERIFIED_EFFECT_SOURCE_EXPORT_CIPHERTEXT_SHA256=$(sha256sum "$RUNNER_TEMP/candidate.enc" | awk '{print $1}')"
+          echo "LAS_VERIFIED_EFFECT_SOURCE_TREE_EXPORT=PASS"
+
+      - name: Upload encrypted verified source-tree package only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: opaque-verified-retired-effect-source-tree-20261017
+          path: ${{ runner.temp }}/export
+          if-no-files-found: error
+          retention-days: 1
