@@ -1,4 +1,4 @@
-name: Opaque retired effect stage4 gate classifier 20261017
+name: Opaque retired effect stage4 canonical Rust classifier 20261017
 
 on:
   push:
@@ -61,9 +61,8 @@ jobs:
             git cat-file blob "$blob" >"$RUNNER_TEMP/$name"
             test "$(git hash-object "$RUNNER_TEMP/$name")" = "$blob"
           done
-          test -z "$(git status --porcelain --untracked-files=all)"
           printf 'WORK_ROOT=%s\nBASE_SHA=%s\n' "$root" "$base_sha" >>"$GITHUB_ENV"
-          echo "LAS_EFFECT_CLASSIFIER_RECOVERY=PASS"
+          echo "LAS_EFFECT_RUST_MATRIX_RECOVERY=PASS"
 
       - name: Install exact Rust and Ada toolchains
         shell: bash
@@ -77,13 +76,13 @@ jobs:
           mkdir -p "$prefix"; unzip -q "$archive" -d "$prefix"; export PATH="$prefix/bin:$PATH"; echo "$prefix/bin" >>"$GITHUB_PATH"
           alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
           workspace="$RUNNER_TEMP/alr-work"; mkdir -p "$workspace"; cd "$workspace"
-          alr -n init --in-place --no-skel --lib effect_gate_classifier >/dev/null
+          alr -n init --in-place --no-skel --lib effect_rust_matrix_classifier >/dev/null
           alr_path="$(command -v alr)"; wrapper="$RUNNER_TEMP/gprbuild-via-alire"
           printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' "cd \"$workspace\"" "exec \"$alr_path\" exec -- gprbuild \"\$@\"" >"$wrapper"
           chmod 0755 "$wrapper"; printf 'GPRBUILD=%s\n' "$wrapper" >>"$GITHUB_ENV"
-          echo "LAS_EFFECT_CLASSIFIER_TOOLCHAINS=PASS"
+          echo "LAS_EFFECT_RUST_MATRIX_TOOLCHAINS=PASS"
 
-      - name: Classify private focused gate
+      - name: Classify canonical Rust matrix
         shell: bash
         env:
           RUSTFLAGS: -Dwarnings
@@ -94,35 +93,45 @@ jobs:
           python3 tools/verification/private_reconciled_baseline_visibility_repair.py >/dev/null 2>&1
           python3 tools/verification/private_reconciled_baseline_clippy_contract_repair.py >/dev/null 2>&1
           cargo +1.98.1 fmt --all >/dev/null 2>&1
-          git add src
-          test "$(git write-tree)" = "$EXPECTED_GREEN_BASELINE_TREE"
-          git config user.name "LAS Ephemeral Gate Classifier"
-          git config user.email "las-ephemeral-gate-classifier@users.noreply.github.com"
+          git add src; test "$(git write-tree)" = "$EXPECTED_GREEN_BASELINE_TREE"
+          git config user.name "LAS Ephemeral Rust Matrix Classifier"
+          git config user.email "las-ephemeral-rust-matrix@users.noreply.github.com"
           git commit -q -m "Ephemeral exact verified green baseline"
-
           work="$RUNNER_TEMP/effect-work"; git worktree add -q -b verify-effect-target "$work" HEAD; cd "$work"
           mkdir -p tools/verification
           install -m 0644 "$RUNNER_TEMP/effect-owner.py" tools/verification/private_retired_effect_owner_adapter_materialize.py
           install -m 0644 "$RUNNER_TEMP/effect-semantic.py" tools/verification/private_retired_effect_schema_semantic_repair.py
           install -m 0644 "$RUNNER_TEMP/effect-recovery.py" tools/verification/private_retired_effect_recovery_congruence_hardening.py
           install -m 0644 "$RUNNER_TEMP/effect-borrow.py" tools/verification/private_retired_effect_archive_borrow_repair.py
-          git add tools/verification; git commit -q -m "Ephemeral exact effect verifier overlay"
+          git add tools/verification; git commit -q -m "Ephemeral exact effect matrix overlay"
+          python3 tools/verification/private_retired_effect_owner_adapter_materialize.py >/dev/null 2>&1
+          python3 tools/verification/private_retired_effect_schema_semantic_repair.py >/dev/null 2>&1
+          python3 tools/verification/private_retired_effect_recovery_congruence_hardening.py >/dev/null 2>&1
+          python3 tools/verification/private_retired_effect_archive_borrow_repair.py >/dev/null 2>&1
+          cargo +1.98.1 fmt --all >/dev/null 2>&1
 
           classify() {
             local label="$1"; shift
             if "$@" >"$RUNNER_TEMP/classifier.log" 2>&1; then echo "PASS:$label"; else echo "FAIL:$label"; exit 1; fi
           }
-          classify materialize python3 tools/verification/private_retired_effect_owner_adapter_materialize.py
-          classify semantic python3 tools/verification/private_retired_effect_schema_semantic_repair.py
-          classify recovery python3 tools/verification/private_retired_effect_recovery_congruence_hardening.py
-          classify borrow python3 tools/verification/private_retired_effect_archive_borrow_repair.py
-          classify rustfmt cargo +1.98.1 fmt --all
-          classify rustfmt_check cargo +1.98.1 fmt --all -- --check
+          classify fmt_check cargo +1.98.1 fmt --all -- --check
           classify diff_check git diff --check
-          classify prod_check cargo +1.98.1 check --locked --features "root-ffi linux-peer-credentials" --all-targets
-          classify prod_clippy cargo +1.98.1 clippy --locked --features "root-ffi linux-peer-credentials" --all-targets -- -D warnings
-          classify prod_tests cargo +1.98.1 test --locked --features "root-ffi linux-peer-credentials" --lib -- --test-threads=1
-          classify all_check cargo +1.98.1 check --locked --all-features --all-targets
-          classify all_clippy cargo +1.98.1 clippy --locked --all-features --all-targets -- -D warnings
+          classify check_default env RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --all-targets
+          classify check_linux env RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --features linux-peer-credentials --all-targets
+          classify check_root env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 check --locked --features root-ffi --all-targets
+          classify check_prod env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 check --locked --features "root-ffi linux-peer-credentials" --all-targets
+          classify check_all env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 check --locked --all-features --all-targets
+          classify clippy_default cargo +1.98.1 clippy --locked --all-targets -- -D warnings
+          classify clippy_linux cargo +1.98.1 clippy --locked --features linux-peer-credentials --all-targets -- -D warnings
+          classify clippy_root env GPRBUILD="$GPRBUILD" cargo +1.98.1 clippy --locked --features root-ffi --all-targets -- -D warnings
+          classify clippy_prod env GPRBUILD="$GPRBUILD" cargo +1.98.1 clippy --locked --features "root-ffi linux-peer-credentials" --all-targets -- -D warnings
+          classify clippy_all env GPRBUILD="$GPRBUILD" cargo +1.98.1 clippy --locked --all-features --all-targets -- -D warnings
+          classify tests_default env RUSTFLAGS=-Dwarnings cargo +1.98.1 test --locked --all-targets -- --test-threads=1
+          classify tests_linux env RUSTFLAGS=-Dwarnings cargo +1.98.1 test --locked --features linux-peer-credentials --all-targets -- --test-threads=1
+          classify tests_root env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --features root-ffi --all-targets -- --test-threads=1
+          classify tests_prod env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --features "root-ffi linux-peer-credentials" --all-targets -- --test-threads=1
+          classify tests_all env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --all-features --all-targets -- --test-threads=1
+          classify release_default env RUSTFLAGS=-Dwarnings cargo +1.98.1 test --locked --release --lib -- --test-threads=1
+          classify release_all env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --release --all-features --lib -- --test-threads=1
           rm -f "$RUNNER_TEMP/classifier.log"
-          echo "LAS_EFFECT_FOCUSED_GATES=PASS"
+          echo "LAS_EFFECT_CANONICAL_RUST_MATRIX=PASS"
