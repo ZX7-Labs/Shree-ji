@@ -24,12 +24,13 @@ env:
   BASELINE_M2_BLOB: 05c34343c5433ee384b91da449082fa31c82f9f3
   BASELINE_M3_BLOB: 465f297bc69c0279306c04f52e2bf928933ace82
   EFFECT_REF_HASH: 57902b32c7dba883a89cd5a6e47dea395ab8a06b111c3dcdcd0487d67f010f58
-  EFFECT_SNAPSHOT_PROOF: f5ab152fc0cbe347294afc3c6280fe79bda36f51780661b641147167d14294e4
-  EFFECT_TREE_PROOF: 9394ccc9b9aa1a54530f6574a492fdcc08d97cbaca3a408687cd3170a8b2a472
+  EFFECT_SNAPSHOT_PROOF: a7a261a6bcfd853332fccc548b03030f8255338d133c26a0bbcefc2c0b78a611
+  EFFECT_TREE_PROOF: 8c31aef6a04a5b1c1b2a3c555abf393c8327bcf700a7bc2adfede624b133784a
   EFFECT_OWNER_BLOB: bb4f6e5c803b7c64ea27e605659cf998fc942cc2
   EFFECT_SEMANTIC_BLOB: 6fb90f15a1194d596f420ebee9f0ed3e4ae2b112
   EFFECT_RECOVERY_BLOB: 67746f8a4776b872b3878f6861eb3bb7658a9fbd
-  EFFECT_HARNESS_BLOB: a15e23ec5c7775905b161676bd2cae4b38a51426
+  EFFECT_BORROW_BLOB: 039db692cf34f1b967896b14d8c30f3bb2a070ad
+  EFFECT_HARNESS_BLOB: 8881d312f2f679f1c53f60402d05ea83e7e89a15
 
 jobs:
   verify:
@@ -99,12 +100,14 @@ jobs:
           git cat-file blob "$EFFECT_OWNER_BLOB" >"$RUNNER_TEMP/effect-owner.py"
           git cat-file blob "$EFFECT_SEMANTIC_BLOB" >"$RUNNER_TEMP/effect-semantic.py"
           git cat-file blob "$EFFECT_RECOVERY_BLOB" >"$RUNNER_TEMP/effect-recovery.py"
-          git cat-file blob "$EFFECT_HARNESS_BLOB" >"$RUNNER_TEMP/effect-stage2.sh"
+          git cat-file blob "$EFFECT_BORROW_BLOB" >"$RUNNER_TEMP/effect-borrow.py"
+          git cat-file blob "$EFFECT_HARNESS_BLOB" >"$RUNNER_TEMP/effect-stage3.sh"
           test "$(git hash-object "$RUNNER_TEMP/effect-owner.py")" = "$EFFECT_OWNER_BLOB"
           test "$(git hash-object "$RUNNER_TEMP/effect-semantic.py")" = "$EFFECT_SEMANTIC_BLOB"
           test "$(git hash-object "$RUNNER_TEMP/effect-recovery.py")" = "$EFFECT_RECOVERY_BLOB"
-          test "$(git hash-object "$RUNNER_TEMP/effect-stage2.sh")" = "$EFFECT_HARNESS_BLOB"
-          chmod 0700 "$RUNNER_TEMP/effect-stage2.sh"
+          test "$(git hash-object "$RUNNER_TEMP/effect-borrow.py")" = "$EFFECT_BORROW_BLOB"
+          test "$(git hash-object "$RUNNER_TEMP/effect-stage3.sh")" = "$EFFECT_HARNESS_BLOB"
+          chmod 0700 "$RUNNER_TEMP/effect-stage3.sh"
           test -z "$(git status --porcelain --untracked-files=all)"
           printf 'WORK_ROOT=%s\nBASE_SHA=%s\n' "$root" "$base_sha" >>"$GITHUB_ENV"
           echo "LAS_EFFECT_FRESH_RECOVERY=PASS"
@@ -163,13 +166,14 @@ jobs:
           install -m 0644 "$RUNNER_TEMP/effect-owner.py" tools/verification/private_retired_effect_owner_adapter_materialize.py
           install -m 0644 "$RUNNER_TEMP/effect-semantic.py" tools/verification/private_retired_effect_schema_semantic_repair.py
           install -m 0644 "$RUNNER_TEMP/effect-recovery.py" tools/verification/private_retired_effect_recovery_congruence_hardening.py
-          git add tools/verification/private_retired_effect_owner_adapter_materialize.py tools/verification/private_retired_effect_schema_semantic_repair.py tools/verification/private_retired_effect_recovery_congruence_hardening.py
+          install -m 0644 "$RUNNER_TEMP/effect-borrow.py" tools/verification/private_retired_effect_archive_borrow_repair.py
+          git add tools/verification/private_retired_effect_owner_adapter_materialize.py tools/verification/private_retired_effect_schema_semantic_repair.py tools/verification/private_retired_effect_recovery_congruence_hardening.py tools/verification/private_retired_effect_archive_borrow_repair.py
           git commit -q -m "Ephemeral retired effect verifier overlay"
           effect_base="$(git rev-parse HEAD)"
           effect_package="$RUNNER_TEMP/effect-package"
           mkdir -p "$effect_package"
           set +e
-          LAS_EFFECT_BASE_SHA="$effect_base" LAS_EFFECT_PACKAGE_DIR="$effect_package" LAS_EFFECT_EXPECTED_BRANCH=verify-effect-target bash "$RUNNER_TEMP/effect-stage2.sh" >"$RUNNER_TEMP/effect.log" 2>&1
+          LAS_EFFECT_BASE_SHA="$effect_base" LAS_EFFECT_PACKAGE_DIR="$effect_package" LAS_EFFECT_EXPECTED_BRANCH=verify-effect-target bash "$RUNNER_TEMP/effect-stage3.sh" >"$RUNNER_TEMP/effect.log" 2>&1
           rc=$?
           set -e
           if [[ "$rc" -eq 0 ]]; then
