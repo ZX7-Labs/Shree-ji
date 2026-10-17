@@ -1,4 +1,4 @@
-name: Opaque retired effect check-default redacted classifier 20261017
+name: Opaque retired effect default-check v2 20261017
 
 on:
   push:
@@ -17,15 +17,16 @@ env:
   BASE_TREE_PROOF: 93bcdc3d05cc578589d0600beb22d21dda366b5cd9fd81cc31f4f487d9e35981
   EXPECTED_GREEN_BASELINE_TREE: ffc6621866ec4353d070d74746e0a2de8a9a9d20
   EFFECT_REF_HASH: 57902b32c7dba883a89cd5a6e47dea395ab8a06b111c3dcdcd0487d67f010f58
-  EFFECT_OWNER_BLOB: bb4f6e5c803b7c64ea27e605659cf998fc942cc2
-  EFFECT_SEMANTIC_BLOB: 6fb90f15a1194d596f420ebee9f0ed3e4ae2b112
-  EFFECT_RECOVERY_BLOB: 67746f8a4776b872b3878f6861eb3bb7658a9fbd
-  EFFECT_BORROW_BLOB: 13820e643e7d76cd087293429f6856183f4d9b07
+  M1_BLOB: bb4f6e5c803b7c64ea27e605659cf998fc942cc2
+  M2_BLOB: 6fb90f15a1194d596f420ebee9f0ed3e4ae2b112
+  M3_BLOB: 67746f8a4776b872b3878f6861eb3bb7658a9fbd
+  M4_BLOB: 13820e643e7d76cd087293429f6856183f4d9b07
+  M5_BLOB: ace99b29dcf1ab6041d602247158f07ab13d41eb
 
 jobs:
-  classify:
+  verify-default:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 60
     steps:
       - name: Recover exact private inputs
         shell: bash
@@ -49,20 +50,16 @@ jobs:
           rm -f "$refs"; test -n "$base_ref" && test -n "$effect_ref"
           echo "::add-mask::$base_ref"; echo "::add-mask::$effect_ref"; echo "::add-mask::$base_sha"
           test "$(printf '%s' "$base_sha" | sha256sum | awk '{print $1}')" = "$BASE_SNAPSHOT_PROOF"
-          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=128 origin "$base_ref" "$effect_ref"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=160 origin "$base_ref" "$effect_ref"
           git checkout -q -B verify-baseline-target "$base_sha"
           test "$(printf '%s' "$(git rev-parse 'HEAD^{tree}')" | sha256sum | awk '{print $1}')" = "$BASE_TREE_PROOF"
-          for pair in \
-            "$EFFECT_OWNER_BLOB:effect-owner.py" \
-            "$EFFECT_SEMANTIC_BLOB:effect-semantic.py" \
-            "$EFFECT_RECOVERY_BLOB:effect-recovery.py" \
-            "$EFFECT_BORROW_BLOB:effect-borrow.py"; do
+          for pair in "$M1_BLOB:m1.py" "$M2_BLOB:m2.py" "$M3_BLOB:m3.py" "$M4_BLOB:m4.py" "$M5_BLOB:m5.py"; do
             blob="${pair%%:*}"; name="${pair##*:}"
             git cat-file blob "$blob" >"$RUNNER_TEMP/$name"
             test "$(git hash-object "$RUNNER_TEMP/$name")" = "$blob"
           done
-          printf 'WORK_ROOT=%s\nBASE_SHA=%s\n' "$root" "$base_sha" >>"$GITHUB_ENV"
-          echo "LAS_EFFECT_REDACTED_RECOVERY=PASS"
+          printf 'WORK_ROOT=%s\n' "$root" >>"$GITHUB_ENV"
+          echo "LAS_EFFECT_DEFAULT_V2_RECOVERY=PASS"
 
       - name: Install exact Rust toolchain
         shell: bash
@@ -70,9 +67,9 @@ jobs:
           set -euo pipefail
           rustup toolchain install 1.98.1 --profile minimal >/dev/null
           rustup component add --toolchain 1.98.1 rustfmt >/dev/null
-          echo "LAS_EFFECT_REDACTED_TOOLCHAIN=PASS"
+          echo "LAS_EFFECT_DEFAULT_V2_TOOLCHAIN=PASS"
 
-      - name: Classify check-default without exposing diagnostics
+      - name: Verify default all-targets after M5
         shell: bash
         env:
           RUSTFLAGS: -Dwarnings
@@ -84,56 +81,21 @@ jobs:
           python3 tools/verification/private_reconciled_baseline_clippy_contract_repair.py >/dev/null 2>&1
           cargo +1.98.1 fmt --all >/dev/null 2>&1
           git add src; test "$(git write-tree)" = "$EXPECTED_GREEN_BASELINE_TREE"
-          git config user.name "LAS Ephemeral Redacted Classifier"
-          git config user.email "las-ephemeral-redacted@users.noreply.github.com"
+          git config user.name "LAS Ephemeral Default V2"
+          git config user.email "las-ephemeral-default-v2@users.noreply.github.com"
           git commit -q -m "Ephemeral exact verified green baseline"
-          work="$RUNNER_TEMP/effect-work"; git worktree add -q -b verify-effect-target "$work" HEAD; cd "$work"
+          work="$RUNNER_TEMP/effect-work"; git worktree add -q -b verify-effect-default-v2 "$work" HEAD; cd "$work"
           mkdir -p tools/verification
-          install -m 0644 "$RUNNER_TEMP/effect-owner.py" tools/verification/private_retired_effect_owner_adapter_materialize.py
-          install -m 0644 "$RUNNER_TEMP/effect-semantic.py" tools/verification/private_retired_effect_schema_semantic_repair.py
-          install -m 0644 "$RUNNER_TEMP/effect-recovery.py" tools/verification/private_retired_effect_recovery_congruence_hardening.py
-          install -m 0644 "$RUNNER_TEMP/effect-borrow.py" tools/verification/private_retired_effect_archive_borrow_repair.py
-          git add tools/verification; git commit -q -m "Ephemeral exact effect redacted overlay"
+          install -m 0644 "$RUNNER_TEMP/m1.py" tools/verification/private_retired_effect_owner_adapter_materialize.py
+          install -m 0644 "$RUNNER_TEMP/m2.py" tools/verification/private_retired_effect_schema_semantic_repair.py
+          install -m 0644 "$RUNNER_TEMP/m3.py" tools/verification/private_retired_effect_recovery_congruence_hardening.py
+          install -m 0644 "$RUNNER_TEMP/m4.py" tools/verification/private_retired_effect_archive_borrow_repair.py
+          install -m 0644 "$RUNNER_TEMP/m5.py" tools/verification/private_retired_effect_default_feature_test_gate_repair.py
           python3 tools/verification/private_retired_effect_owner_adapter_materialize.py >/dev/null 2>&1
           python3 tools/verification/private_retired_effect_schema_semantic_repair.py >/dev/null 2>&1
           python3 tools/verification/private_retired_effect_recovery_congruence_hardening.py >/dev/null 2>&1
           python3 tools/verification/private_retired_effect_archive_borrow_repair.py >/dev/null 2>&1
+          python3 tools/verification/private_retired_effect_default_feature_test_gate_repair.py >/dev/null 2>&1
           cargo +1.98.1 fmt --all >/dev/null 2>&1
-          out="$RUNNER_TEMP/rust.jsonl"; err="$RUNNER_TEMP/cargo.err"
-          set +e
-          cargo +1.98.1 check --locked --all-targets --message-format=json >"$out" 2>"$err"
-          rc=$?
-          set -e
-          python3 - "$out" "$err" <<'PY'
-          import collections, json, pathlib, sys
-          out, err = map(pathlib.Path, sys.argv[1:])
-          codes = collections.Counter()
-          messages = []
-          for line in out.read_text(errors="replace").splitlines():
-              try: obj = json.loads(line)
-              except Exception: continue
-              if obj.get("reason") != "compiler-message": continue
-              msg = obj.get("message") or {}
-              level = msg.get("level") or "unknown"
-              code = (msg.get("code") or {}).get("code") or "NO_CODE"
-              if level in {"error", "warning"}: codes[code] += 1
-              messages.append((level, code, (msg.get("message") or "").lower()))
-          raw = err.read_text(errors="replace").lower() + "\n" + "\n".join(m for _,_,m in messages)
-          for code, count in sorted(codes.items()): print(f"RUST_CODE_{code}={count}")
-          categories = {
-              "VISIBILITY": ["private", "visibility"],
-              "TYPE_MISMATCH": ["mismatched types"],
-              "TRAIT_BOUND": ["trait bound", "not satisfied"],
-              "BORROW": ["borrow", "lifetime"],
-              "DEAD_CODE": ["dead code", "never used", "never constructed"],
-              "UNUSED": ["unused import", "unused variable", "unused mut"],
-              "PRIVATE_INTERFACE": ["private_interfaces", "private_bounds"],
-              "NON_EXHAUSTIVE": ["non-exhaustive", "not covered"],
-              "SIZE_LAYOUT": ["too large", "large enum", "type_complexity"],
-          }
-          for label, needles in categories.items():
-              print(f"CATEGORY_{label}={int(any(n in raw for n in needles))}")
-          print("LAS_EFFECT_CHECK_DEFAULT_REDACTED_CLASSIFICATION=PASS")
-          PY
-          echo "LAS_EFFECT_CHECK_DEFAULT_ACTUAL_EXIT=$rc"
-          exit "$rc"
+          cargo +1.98.1 check --locked --all-targets >/dev/null 2>&1
+          echo "LAS_EFFECT_DEFAULT_V2_RESULT=PASS"
