@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Reconstruct through owner and prove current-lineage reclaim anchors
+      - name: Reconstruct through owner and identify exact current-lineage reclaim anchor
         shell: bash
         env:
           PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
@@ -64,6 +64,7 @@ jobs:
             test "$(git hash-object "$RUNNER_TEMP/$name")" = "$blob"
           done
           test "$(git cat-file -t "$RECLAIM_SOURCE_BLOB")" = blob
+          echo "LAS_RECLAIM_ANCHOR_RECOVERY=PASS"
           python3 tools/verification/private_reconciled_baseline_repair.py >/dev/null 2>&1
           python3 tools/verification/private_reconciled_baseline_visibility_repair.py >/dev/null 2>&1
           python3 tools/verification/private_reconciled_baseline_clippy_contract_repair.py >/dev/null 2>&1
@@ -74,7 +75,22 @@ jobs:
           python3 "$RUNNER_TEMP/m5.py" >/dev/null 2>&1
           python3 "$RUNNER_TEMP/complete.py" >/dev/null 2>&1
           python3 "$RUNNER_TEMP/owner.py" >/dev/null 2>&1
+          echo "LAS_RECLAIM_ANCHOR_OWNER_BASE=PASS"
+          python3 - "$RUNNER_TEMP/reclaim.py" <<'PY'
+          from pathlib import Path
+          import sys
+          p=Path(sys.argv[1]); s=p.read_text()
+          old='''def one(path: str, old: str, new: str) -> None:\n    p = Path(path)\n    text = p.read_text(encoding="utf-8")\n    if text.count(old) != 1:\n        raise SystemExit(f"{path}: current-lineage reclaim anchor mismatch")\n    p.write_text(text.replace(old, new, 1), encoding="utf-8")\n'''
+          new='''_stage = 0\ndef one(path: str, old: str, new: str) -> None:\n    global _stage\n    _stage += 1\n    p = Path(path)\n    text = p.read_text(encoding="utf-8")\n    if text.count(old) != 1:\n        raise SystemExit(40 + _stage)\n    p.write_text(text.replace(old, new, 1), encoding="utf-8")\n'''
+          if s.count(old) != 1: raise SystemExit('diagnostic patcher shape mismatch')
+          p.write_text(s.replace(old,new,1))
+          PY
+          set +e
           python3 "$RUNNER_TEMP/reclaim.py" >/dev/null 2>&1
+          rc=$?
+          set -e
+          if [[ "$rc" -ne 0 ]]; then echo "LAS_RECLAIM_MATCHED_OWNER_ANCHORS=FAIL_RC_${rc}"; exit "$rc"; fi
+          echo "LAS_RECLAIM_MATCHED_OWNER_APPLY=PASS"
           test "$(git hash-object src/effect_fabric/root_supervisor_linux_production_runtime/facade/retired_archive_reclaim.rs)" = "$RECLAIM_SOURCE_BLOB"
           git diff --check
           mapfile -t changed < <(git status --porcelain=v1 --untracked-files=all | sed 's/^...//' | LC_ALL=C sort)
