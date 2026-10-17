@@ -1,0 +1,126 @@
+name: Opaque retired effect stage4 gate classifier 20261017
+
+on:
+  push:
+    branches:
+      - "verify/reconciled-baseline-repair-v3-bd95-20261017"
+    paths:
+      - ".github/workflows/opaque-effect-stage4-gate-classifier-20261017.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASE_REF_HASH: 060aa23045ded14f2e9984282456adce3cd5fa94bd92f21f4eeacae5d41abff2
+  BASE_SNAPSHOT_PROOF: bd4d73399dc34da2586900c270f6b33f2a1049e934472301f5546ad9973cc49e
+  BASE_TREE_PROOF: 93bcdc3d05cc578589d0600beb22d21dda366b5cd9fd81cc31f4f487d9e35981
+  EXPECTED_GREEN_BASELINE_TREE: ffc6621866ec4353d070d74746e0a2de8a9a9d20
+  EFFECT_REF_HASH: 57902b32c7dba883a89cd5a6e47dea395ab8a06b111c3dcdcd0487d67f010f58
+  EFFECT_OWNER_BLOB: bb4f6e5c803b7c64ea27e605659cf998fc942cc2
+  EFFECT_SEMANTIC_BLOB: 6fb90f15a1194d596f420ebee9f0ed3e4ae2b112
+  EFFECT_RECOVERY_BLOB: 67746f8a4776b872b3878f6861eb3bb7658a9fbd
+  EFFECT_BORROW_BLOB: 13820e643e7d76cd087293429f6856183f4d9b07
+
+jobs:
+  classify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Recover exact private base and verifier blobs
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY" && test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/refs"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          base_ref=; base_sha=; effect_ref=
+          while read -r sha ref; do
+            h="$(printf '%s' "$ref" | sha256sum | awk '{print $1}')"
+            if [[ "$h" = "$BASE_REF_HASH" ]]; then test -z "$base_ref"; base_ref="$ref"; base_sha="$sha"; fi
+            if [[ "$h" = "$EFFECT_REF_HASH" ]]; then test -z "$effect_ref"; effect_ref="$ref"; fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$base_ref" && test -n "$effect_ref"
+          echo "::add-mask::$base_ref"; echo "::add-mask::$effect_ref"; echo "::add-mask::$base_sha"
+          test "$(printf '%s' "$base_sha" | sha256sum | awk '{print $1}')" = "$BASE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=128 origin "$base_ref" "$effect_ref"
+          git checkout -q -B verify-baseline-target "$base_sha"
+          test "$(printf '%s' "$(git rev-parse 'HEAD^{tree}')" | sha256sum | awk '{print $1}')" = "$BASE_TREE_PROOF"
+          for pair in \
+            "$EFFECT_OWNER_BLOB:effect-owner.py" \
+            "$EFFECT_SEMANTIC_BLOB:effect-semantic.py" \
+            "$EFFECT_RECOVERY_BLOB:effect-recovery.py" \
+            "$EFFECT_BORROW_BLOB:effect-borrow.py"; do
+            blob="${pair%%:*}"; name="${pair##*:}"
+            git cat-file blob "$blob" >"$RUNNER_TEMP/$name"
+            test "$(git hash-object "$RUNNER_TEMP/$name")" = "$blob"
+          done
+          test -z "$(git status --porcelain --untracked-files=all)"
+          printf 'WORK_ROOT=%s\nBASE_SHA=%s\n' "$root" "$base_sha" >>"$GITHUB_ENV"
+          echo "LAS_EFFECT_CLASSIFIER_RECOVERY=PASS"
+
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          echo "LAS_EFFECT_CLASSIFIER_TOOLCHAIN=PASS"
+
+      - name: Classify private Rust gate
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$WORK_ROOT"
+          python3 tools/verification/private_reconciled_baseline_repair.py >/dev/null 2>&1
+          python3 tools/verification/private_reconciled_baseline_visibility_repair.py >/dev/null 2>&1
+          python3 tools/verification/private_reconciled_baseline_clippy_contract_repair.py >/dev/null 2>&1
+          cargo +1.98.1 fmt --all >/dev/null 2>&1
+          git add src
+          test "$(git write-tree)" = "$EXPECTED_GREEN_BASELINE_TREE"
+          git config user.name "LAS Ephemeral Gate Classifier"
+          git config user.email "las-ephemeral-gate-classifier@users.noreply.github.com"
+          git commit -q -m "Ephemeral exact verified green baseline"
+
+          work="$RUNNER_TEMP/effect-work"
+          git worktree add -q -b verify-effect-target "$work" HEAD
+          cd "$work"
+          mkdir -p tools/verification
+          install -m 0644 "$RUNNER_TEMP/effect-owner.py" tools/verification/private_retired_effect_owner_adapter_materialize.py
+          install -m 0644 "$RUNNER_TEMP/effect-semantic.py" tools/verification/private_retired_effect_schema_semantic_repair.py
+          install -m 0644 "$RUNNER_TEMP/effect-recovery.py" tools/verification/private_retired_effect_recovery_congruence_hardening.py
+          install -m 0644 "$RUNNER_TEMP/effect-borrow.py" tools/verification/private_retired_effect_archive_borrow_repair.py
+          git add tools/verification; git commit -q -m "Ephemeral exact effect verifier overlay"
+
+          classify() {
+            local label="$1"; shift
+            if "$@" >"$RUNNER_TEMP/classifier.log" 2>&1; then
+              echo "PASS:$label"
+            else
+              echo "FAIL:$label"
+              exit 1
+            fi
+          }
+
+          classify materialize python3 tools/verification/private_retired_effect_owner_adapter_materialize.py
+          classify semantic python3 tools/verification/private_retired_effect_schema_semantic_repair.py
+          classify recovery python3 tools/verification/private_retired_effect_recovery_congruence_hardening.py
+          classify borrow python3 tools/verification/private_retired_effect_archive_borrow_repair.py
+          classify rustfmt cargo +1.98.1 fmt --all
+          classify rustfmt_check cargo +1.98.1 fmt --all -- --check
+          classify diff_check git diff --check
+          classify prod_check cargo +1.98.1 check --locked --features "root-ffi linux-peer-credentials" --all-targets
+          classify prod_clippy cargo +1.98.1 clippy --locked --features "root-ffi linux-peer-credentials" --all-targets -- -D warnings
+          classify prod_tests cargo +1.98.1 test --locked --features "root-ffi linux-peer-credentials" --lib -- --test-threads=1
+          classify all_check cargo +1.98.1 check --locked --all-features --all-targets
+          classify all_clippy cargo +1.98.1 clippy --locked --all-features --all-targets -- -D warnings
+          rm -f "$RUNNER_TEMP/classifier.log"
+          echo "LAS_EFFECT_FOCUSED_RUST_GATES=PASS"
