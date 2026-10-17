@@ -1,0 +1,163 @@
+name: Opaque retired effect stage4 post-focused classifier 20261017
+
+on:
+  push:
+    branches:
+      - "verify/reconciled-baseline-repair-v3-bd95-20261017"
+    paths:
+      - ".github/workflows/opaque-effect-stage4-post-focused-classifier-20261017.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASE_REF_HASH: 060aa23045ded14f2e9984282456adce3cd5fa94bd92f21f4eeacae5d41abff2
+  BASE_SNAPSHOT_PROOF: bd4d73399dc34da2586900c270f6b33f2a1049e934472301f5546ad9973cc49e
+  BASE_TREE_PROOF: 93bcdc3d05cc578589d0600beb22d21dda366b5cd9fd81cc31f4f487d9e35981
+  EXPECTED_GREEN_BASELINE_TREE: ffc6621866ec4353d070d74746e0a2de8a9a9d20
+  EFFECT_REF_HASH: 57902b32c7dba883a89cd5a6e47dea395ab8a06b111c3dcdcd0487d67f010f58
+  EFFECT_OWNER_BLOB: bb4f6e5c803b7c64ea27e605659cf998fc942cc2
+  EFFECT_SEMANTIC_BLOB: 6fb90f15a1194d596f420ebee9f0ed3e4ae2b112
+  EFFECT_RECOVERY_BLOB: 67746f8a4776b872b3878f6861eb3bb7658a9fbd
+  EFFECT_BORROW_BLOB: 13820e643e7d76cd087293429f6856183f4d9b07
+  CANONICAL_BLOB: 62e3e6dc0fad5dddc7fb0a453a3cd681d911e590
+
+jobs:
+  classify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Recover exact private inputs
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY" && test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/refs"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          base_ref=; base_sha=; effect_ref=
+          while read -r sha ref; do
+            h="$(printf '%s' "$ref" | sha256sum | awk '{print $1}')"
+            if [[ "$h" = "$BASE_REF_HASH" ]]; then test -z "$base_ref"; base_ref="$ref"; base_sha="$sha"; fi
+            if [[ "$h" = "$EFFECT_REF_HASH" ]]; then test -z "$effect_ref"; effect_ref="$ref"; fi
+          done <"$refs"
+          rm -f "$refs"; test -n "$base_ref" && test -n "$effect_ref"
+          echo "::add-mask::$base_ref"; echo "::add-mask::$effect_ref"; echo "::add-mask::$base_sha"
+          test "$(printf '%s' "$base_sha" | sha256sum | awk '{print $1}')" = "$BASE_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=128 origin "$base_ref" "$effect_ref"
+          git checkout -q -B verify-baseline-target "$base_sha"
+          test "$(printf '%s' "$(git rev-parse 'HEAD^{tree}')" | sha256sum | awk '{print $1}')" = "$BASE_TREE_PROOF"
+          for pair in \
+            "$EFFECT_OWNER_BLOB:effect-owner.py" \
+            "$EFFECT_SEMANTIC_BLOB:effect-semantic.py" \
+            "$EFFECT_RECOVERY_BLOB:effect-recovery.py" \
+            "$EFFECT_BORROW_BLOB:effect-borrow.py"; do
+            blob="${pair%%:*}"; name="${pair##*:}"
+            git cat-file blob "$blob" >"$RUNNER_TEMP/$name"
+            test "$(git hash-object "$RUNNER_TEMP/$name")" = "$blob"
+          done
+          test "$(git hash-object tools/verify_codespaces_all.sh)" = "$CANONICAL_BLOB"
+          printf 'WORK_ROOT=%s\nBASE_SHA=%s\n' "$root" "$base_sha" >>"$GITHUB_ENV"
+          echo "LAS_EFFECT_POST_FOCUSED_RECOVERY=PASS"
+
+      - name: Install exact toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          archive="$RUNNER_TEMP/alr.zip"; prefix="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --silent --show-error --output "$archive" "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip"
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $archive" | sha256sum --check --strict >/dev/null
+          mkdir -p "$prefix"; unzip -q "$archive" -d "$prefix"; export PATH="$prefix/bin:$PATH"; echo "$prefix/bin" >>"$GITHUB_PATH"
+          alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
+          workspace="$RUNNER_TEMP/alr-work"; mkdir -p "$workspace"; cd "$workspace"
+          alr -n init --in-place --no-skel --lib effect_post_focused_classifier >/dev/null
+          alr_path="$(command -v alr)"; wrapper="$RUNNER_TEMP/gprbuild-via-alire"
+          printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' "cd \"$workspace\"" "exec \"$alr_path\" exec -- gprbuild \"\$@\"" >"$wrapper"
+          chmod 0755 "$wrapper"; printf 'GPRBUILD=%s\n' "$wrapper" >>"$GITHUB_ENV"
+          echo "LAS_EFFECT_POST_FOCUSED_TOOLCHAINS=PASS"
+
+      - name: Materialize and prove exact source boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$WORK_ROOT"
+          python3 tools/verification/private_reconciled_baseline_repair.py >/dev/null 2>&1
+          python3 tools/verification/private_reconciled_baseline_visibility_repair.py >/dev/null 2>&1
+          python3 tools/verification/private_reconciled_baseline_clippy_contract_repair.py >/dev/null 2>&1
+          cargo +1.98.1 fmt --all >/dev/null 2>&1
+          git add src; test "$(git write-tree)" = "$EXPECTED_GREEN_BASELINE_TREE"
+          git config user.name "LAS Ephemeral Boundary Classifier"
+          git config user.email "las-ephemeral-boundary-classifier@users.noreply.github.com"
+          git commit -q -m "Ephemeral exact verified green baseline"
+          work="$RUNNER_TEMP/effect-work"; git worktree add -q -b verify-effect-target "$work" HEAD; cd "$work"
+          mkdir -p tools/verification
+          install -m 0644 "$RUNNER_TEMP/effect-owner.py" tools/verification/private_retired_effect_owner_adapter_materialize.py
+          install -m 0644 "$RUNNER_TEMP/effect-semantic.py" tools/verification/private_retired_effect_schema_semantic_repair.py
+          install -m 0644 "$RUNNER_TEMP/effect-recovery.py" tools/verification/private_retired_effect_recovery_congruence_hardening.py
+          install -m 0644 "$RUNNER_TEMP/effect-borrow.py" tools/verification/private_retired_effect_archive_borrow_repair.py
+          git add tools/verification; git commit -q -m "Ephemeral exact effect boundary overlay"
+          effect_base="$(git rev-parse HEAD)"
+          printf 'EFFECT_ROOT=%s\nEFFECT_BASE=%s\n' "$work" "$effect_base" >>"$GITHUB_ENV"
+          python3 tools/verification/private_retired_effect_owner_adapter_materialize.py >/dev/null 2>&1
+          python3 tools/verification/private_retired_effect_schema_semantic_repair.py >/dev/null 2>&1
+          python3 tools/verification/private_retired_effect_recovery_congruence_hardening.py >/dev/null 2>&1
+          python3 tools/verification/private_retired_effect_archive_borrow_repair.py >/dev/null 2>&1
+          cargo +1.98.1 fmt --all >/dev/null 2>&1
+          git add src
+          expected="$RUNNER_TEMP/expected-paths"; actual="$RUNNER_TEMP/actual-paths"
+          printf '%s\n' \
+            src/effect_fabric/fake_actuator.rs \
+            src/effect_fabric/guarded_actuator.rs \
+            src/effect_fabric/guardian_precommit.rs \
+            src/effect_fabric/root_supervisor_linux_production_runtime/facade.rs \
+            src/effect_fabric/root_supervisor_linux_production_runtime/facade/retired_archive_effect.rs \
+            src/effect_fabric/root_supervisor_linux_production_runtime/facade/retired_archive_effect_schema.rs \
+            src/reality_nervous_system/pre_action_shadow.rs | LC_ALL=C sort >"$expected"
+          git diff --cached --name-only "$effect_base" -- src | LC_ALL=C sort >"$actual"
+          cmp --silent "$expected" "$actual"
+          git diff --cached --check
+          test -z "$(git diff --name-only "$effect_base" -- . ':(exclude)src')"
+          git commit -q -m "Ephemeral retired effect boundary candidate"
+          printf 'EFFECT_CANDIDATE=%s\n' "$(git rev-parse HEAD)" >>"$GITHUB_ENV"
+          echo "LAS_EFFECT_EXACT_PATH_BOUNDARY=PASS"
+
+      - name: Classify canonical pre-TLC boundary
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$EFFECT_ROOT"
+          test "$(git rev-parse HEAD)" = "$EFFECT_CANDIDATE"
+          staged="$RUNNER_TEMP/effect-pre-tlc.sh"
+          python3 - tools/verify_codespaces_all.sh "$staged" <<'PY'
+          from pathlib import Path
+          import sys
+          src = Path(sys.argv[1]).read_text(encoding="utf-8")
+          needle = 'TLC_MAP="$TMP/tlc-map.tsv"'
+          if src.count(needle) != 1:
+              raise SystemExit("canonical TLC boundary not unique")
+          insertion = '''
+          if test -z "$(git status --porcelain --untracked-files=no)"; then
+            echo "PASS: tracked tree unchanged after retired-effect post-focused verification"
+          else
+            exit 1
+          fi
+          echo "LAS_EFFECT_CANONICAL_PRE_TLC=PASS"
+          exit 0
+
+          '''
+          Path(sys.argv[2]).write_text(src.replace(needle, insertion + needle, 1), encoding="utf-8")
+          PY
+          chmod 0700 "$staged"
+          env LAS_VERIFY_EXPECTED_BRANCH=verify-effect-target bash "$staged" >/dev/null
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "LAS_EFFECT_CANONICAL_BOUNDARY=PASS"
