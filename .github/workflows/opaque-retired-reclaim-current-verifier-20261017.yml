@@ -103,12 +103,15 @@ jobs:
           python3 "$RUNNER_TEMP/m5.py" >/dev/null 2>&1
           python3 "$RUNNER_TEMP/complete.py" >/dev/null 2>&1
           python3 "$RUNNER_TEMP/owner.py" >/dev/null 2>&1
+          cargo +1.98.1 fmt --all >/dev/null 2>&1
+          git diff --check
           git add src
           git config user.name "LAS Reclaim Current Verifier"
           git config user.email "las-reclaim-current@users.noreply.github.com"
-          git commit -q -m "Ephemeral exact verified owner base"
+          git commit -q -m "Ephemeral exact canonical owner base"
           owner_base="$(git rev-parse HEAD)"
           test -z "$(git status --porcelain --untracked-files=all)"
+          echo "LAS_RECLAIM_OWNER_BASE_CANONICAL=PASS"
           python3 "$RUNNER_TEMP/reclaim.py" >/dev/null 2>&1
           test "$(git hash-object src/effect_fabric/root_supervisor_linux_production_runtime/facade/retired_archive_reclaim.rs)" = "$RECLAIM_SOURCE_BLOB"
           cargo +1.98.1 fmt --all >/dev/null 2>&1
@@ -124,6 +127,7 @@ jobs:
           printf '%s\n' "${changed[@]}" >"$RUNNER_TEMP/changed"
           printf '%s\n' "${expected[@]}" | LC_ALL=C sort >"$RUNNER_TEMP/expected"
           cmp --silent "$RUNNER_TEMP/expected" "$RUNNER_TEMP/changed"
+          echo "LAS_RECLAIM_EXACT_PATHSET=PASS"
           gate() { name="$1"; shift; if "$@" >"$RUNNER_TEMP/${name}.log" 2>&1; then echo "LAS_RECLAIM_GATE_${name}=PASS"; else rc=$?; echo "LAS_RECLAIM_GATE_${name}=FAIL_RC_${rc}"; exit "$rc"; fi; }
           gate FMT cargo +1.98.1 fmt --all -- --check
           gate CHECK_DEFAULT cargo +1.98.1 check --locked --all-targets
