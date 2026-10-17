@@ -83,6 +83,7 @@ jobs:
           cargo +1.98.1 fmt --all >/dev/null 2>&1
           git add src
           test "$(git write-tree)" = "$EXPECTED_GREEN_BASELINE_TREE"
+          echo "LAS_EFFECT_EXPORT_BASELINE_TREE=PASS"
           git config user.name "LAS Verified Tree Export Canonicalizer"
           git config user.email "las-verified-tree-export@users.noreply.github.com"
           git commit -q -m "Ephemeral exact verified green baseline"
@@ -103,6 +104,7 @@ jobs:
           git add src
           tree="$(git write-tree)"
           test "$tree" = "$EXPECTED_EFFECT_TREE"
+          echo "LAS_EFFECT_EXPORT_EFFECT_TREE=PASS"
 
           package="$RUNNER_TEMP/package"; mkdir -p "$package/files"
           git diff --cached --name-only -z HEAD -- src >"$RUNNER_TEMP/paths.z"
@@ -142,6 +144,7 @@ jobs:
           (out/'manifest.json').write_text(json.dumps(manifest, sort_keys=True, separators=(',',':'))+'\n', encoding='utf-8')
           PY
           tarball="$RUNNER_TEMP/verified-effect.tar.gz"; tar -C "$package" -czf "$tarball" .
+          echo "LAS_EFFECT_EXPORT_PACKAGE=PASS"
 
           python3 - "$RSA_MODULUS_HEX" "$RSA_EXPONENT" "$RUNNER_TEMP/pub.der" <<'PY'
           import pathlib, sys
@@ -160,6 +163,7 @@ jobs:
           out.write_bytes(spki)
           PY
           openssl pkey -pubin -inform DER -in "$RUNNER_TEMP/pub.der" -out "$RUNNER_TEMP/pub.pem" >/dev/null 2>&1
+          echo "LAS_EFFECT_EXPORT_RSA_PUBLIC_KEY=PASS"
           keymat_hex="$(openssl rand -hex 64)"
           enc_key="${keymat_hex:0:64}"; mac_key="${keymat_hex:64:64}"; iv="$(openssl rand -hex 16)"
           python3 - "$keymat_hex" "$RUNNER_TEMP/keymat.bin" <<'PY'
@@ -169,10 +173,13 @@ jobs:
           openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/pub.pem" \
             -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 \
             -in "$RUNNER_TEMP/keymat.bin" -out "$RUNNER_TEMP/keymat.rsa"
+          echo "LAS_EFFECT_EXPORT_KEY_WRAP=PASS"
           openssl enc -aes-256-cbc -K "$enc_key" -iv "$iv" -in "$tarball" -out "$RUNNER_TEMP/candidate.enc"
+          echo "LAS_EFFECT_EXPORT_CIPHER=PASS"
           printf '%s' "$iv" >"$RUNNER_TEMP/iv.hex"
           cat "$RUNNER_TEMP/iv.hex" "$RUNNER_TEMP/candidate.enc" | \
             openssl dgst -sha256 -mac HMAC -macopt "hexkey:$mac_key" -binary >"$RUNNER_TEMP/candidate.hmac"
+          echo "LAS_EFFECT_EXPORT_HMAC=PASS"
           export_dir="$RUNNER_TEMP/export"; mkdir "$export_dir"
           cp "$RUNNER_TEMP/keymat.rsa" "$RUNNER_TEMP/iv.hex" "$RUNNER_TEMP/candidate.enc" "$RUNNER_TEMP/candidate.hmac" "$export_dir/"
           printf '{"schema":"las-hybrid-envelope-v1","candidate_tree":"%s","rsa_oaep":"sha256","cipher":"aes-256-cbc","mac":"hmac-sha256"}\n' "$tree" >"$export_dir/envelope.json"
