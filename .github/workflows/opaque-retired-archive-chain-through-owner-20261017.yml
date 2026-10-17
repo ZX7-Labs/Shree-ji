@@ -1,4 +1,4 @@
-name: Opaque retired archive chain through owner 20261017
+name: Opaque retired archive chain through reclaim 20261017
 
 on:
   push:
@@ -28,11 +28,14 @@ env:
   COMPLETE_VERIFIER_BLOB: 9762c5a8f788302eb0ed9199941dae4b31904e5f
   OWNER_MATERIALIZER_BLOB: 2b0c4b756131b92afa313abafe20461e2cabfff2
   OWNER_VERIFIER_BLOB: 1c0040c4af117bbfcdd06f24805eeb05f49b3c8f
+  RECLAIM_MATERIALIZER_BLOB: 0b65004b5ec67373ac53127de1193ecbecfba902
+  RECLAIM_HYGIENE_BLOB: 28ad68dd4153a2d1e76e7529afc1b31b8c8e251a
+  RECLAIM_VERIFIER_BLOB: c3f905737be180b4aa839a96f4d95f9cd4a9348f
 
 jobs:
   verify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 300
     steps:
       - name: Recover exact private base and chain objects
         shell: bash
@@ -56,20 +59,22 @@ jobs:
           rm -f "$refs"; test -n "$base_ref" && test -n "$effect_ref"
           echo "::add-mask::$base_ref"; echo "::add-mask::$effect_ref"; echo "::add-mask::$base_sha"
           test "$(printf '%s' "$base_sha" | sha256sum | awk '{print $1}')" = "$BASE_SNAPSHOT_PROOF"
-          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=192 origin "$base_ref" "$effect_ref"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=224 origin "$base_ref" "$effect_ref"
           git checkout -q -B verify-baseline-target "$base_sha"
           test "$(printf '%s' "$(git rev-parse 'HEAD^{tree}')" | sha256sum | awk '{print $1}')" = "$BASE_TREE_PROOF"
           for pair in \
             "$M1_BLOB:m1.py" "$M2_BLOB:m2.py" "$M3_BLOB:m3.py" "$M4_BLOB:m4.py" "$M5_BLOB:m5.py" \
             "$EFFECT_STAGE3_BLOB:effect-stage3.sh" "$EFFECT_STAGE5_BLOB:effect-stage5.sh" \
             "$COMPLETE_MATERIALIZER_BLOB:complete.py" "$COMPLETE_VERIFIER_BLOB:complete.sh" \
-            "$OWNER_MATERIALIZER_BLOB:owner.py" "$OWNER_VERIFIER_BLOB:owner.sh"; do
+            "$OWNER_MATERIALIZER_BLOB:owner.py" "$OWNER_VERIFIER_BLOB:owner.sh" \
+            "$RECLAIM_MATERIALIZER_BLOB:reclaim.py" "$RECLAIM_HYGIENE_BLOB:reclaim-hygiene.py" \
+            "$RECLAIM_VERIFIER_BLOB:reclaim.sh"; do
             blob="${pair%%:*}"; name="${pair##*:}"
             git cat-file blob "$blob" >"$RUNNER_TEMP/$name"
             test "$(git hash-object "$RUNNER_TEMP/$name")" = "$blob"
           done
           printf 'WORK_ROOT=%s\nBASE_SHA=%s\n' "$root" "$base_sha" >>"$GITHUB_ENV"
-          echo "LAS_ARCHIVE_CHAIN_RECOVERY=PASS"
+          echo "LAS_ARCHIVE_RECLAIM_CHAIN_RECOVERY=PASS"
 
       - name: Install exact build toolchains
         shell: bash
@@ -83,13 +88,13 @@ jobs:
           mkdir -p "$prefix"; unzip -q "$archive" -d "$prefix"; export PATH="$prefix/bin:$PATH"; echo "$prefix/bin" >>"$GITHUB_PATH"
           alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
           workspace="$RUNNER_TEMP/alr-work"; mkdir -p "$workspace"; cd "$workspace"
-          alr -n init --in-place --no-skel --lib retired_archive_chain >/dev/null
+          alr -n init --in-place --no-skel --lib retired_archive_reclaim_chain >/dev/null
           alr_path="$(command -v alr)"; wrapper="$RUNNER_TEMP/gprbuild-via-alire"
           printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' "cd \"$workspace\"" "exec \"$alr_path\" exec -- gprbuild \"\$@\"" >"$wrapper"
           chmod 0755 "$wrapper"; printf 'GPRBUILD=%s\n' "$wrapper" >>"$GITHUB_ENV"
-          echo "LAS_ARCHIVE_CHAIN_TOOLCHAINS=PASS"
+          echo "LAS_ARCHIVE_RECLAIM_CHAIN_TOOLCHAINS=PASS"
 
-      - name: Verify effect complete transcript and owner commitment chain
+      - name: Verify effect complete owner and reclaim chain
         shell: bash
         env:
           RUSTFLAGS: -Dwarnings
@@ -101,8 +106,8 @@ jobs:
           python3 tools/verification/private_reconciled_baseline_clippy_contract_repair.py >/dev/null 2>&1
           cargo +1.98.1 fmt --all >/dev/null 2>&1
           git add src; test "$(git write-tree)" = "$EXPECTED_GREEN_BASELINE_TREE"
-          git config user.name "LAS Ephemeral Archive Chain"
-          git config user.email "las-ephemeral-archive-chain@users.noreply.github.com"
+          git config user.name "LAS Ephemeral Archive Reclaim Chain"
+          git config user.email "las-ephemeral-archive-reclaim-chain@users.noreply.github.com"
           git commit -q -m "Ephemeral exact verified green baseline"
           work="$RUNNER_TEMP/archive-chain"; git worktree add -q -b verify-archive-chain "$work" HEAD; cd "$work"
           mkdir -p tools/verification
@@ -117,16 +122,19 @@ jobs:
           install -m 0755 "$RUNNER_TEMP/complete.sh" tools/verification/private_retired_archive_complete_candidate_stage1.sh
           install -m 0644 "$RUNNER_TEMP/owner.py" tools/verification/private_retired_archive_owner_commit_host_materialize.py
           install -m 0755 "$RUNNER_TEMP/owner.sh" tools/verification/private_retired_archive_owner_commit_candidate_stage1.sh
-          git add tools/verification; git commit -q -m "Ephemeral exact archive chain verifier overlay"
+          install -m 0644 "$RUNNER_TEMP/reclaim.py" tools/verification/private_retired_archive_reclaim_materialize.py
+          install -m 0644 "$RUNNER_TEMP/reclaim-hygiene.py" tools/verification/private_retired_archive_reclaim_ownership_hygiene.py
+          install -m 0755 "$RUNNER_TEMP/reclaim.sh" tools/verification/private_retired_archive_reclaim_candidate_stage1.sh
+          git add tools/verification; git commit -q -m "Ephemeral exact archive reclaim chain verifier overlay"
 
           effect_base="$(git rev-parse HEAD)"; effect_pkg="$RUNNER_TEMP/effect-package"; mkdir -p "$effect_pkg"
           if LAS_EFFECT_BASE_SHA="$effect_base" LAS_EFFECT_PACKAGE_DIR="$effect_pkg" LAS_EFFECT_EXPECTED_BRANCH=verify-archive-chain \
              bash tools/verification/private_retired_effect_candidate_stage5.sh >"$RUNNER_TEMP/effect.log" 2>&1; then
             effect_tree="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate_tree"])' "$effect_pkg/manifest.json")"
             test "$effect_tree" = "$(git rev-parse 'HEAD^{tree}')"
-            echo "LAS_ARCHIVE_CHAIN_EFFECT_TREE=$effect_tree"
+            echo "LAS_ARCHIVE_RECLAIM_CHAIN_EFFECT_TREE=$effect_tree"
           else
-            echo "LAS_ARCHIVE_CHAIN_FAILED_STAGE=EFFECT"
+            echo "LAS_ARCHIVE_RECLAIM_CHAIN_FAILED_STAGE=EFFECT"
             exit 1
           fi
 
@@ -135,9 +143,9 @@ jobs:
              bash tools/verification/private_retired_archive_complete_candidate_stage1.sh >"$RUNNER_TEMP/complete.log" 2>&1; then
             complete_tree="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate_tree"])' "$complete_pkg/manifest.json")"
             test "$complete_tree" = "$(git rev-parse 'HEAD^{tree}')"
-            echo "LAS_ARCHIVE_CHAIN_COMPLETE_TREE=$complete_tree"
+            echo "LAS_ARCHIVE_RECLAIM_CHAIN_COMPLETE_TREE=$complete_tree"
           else
-            echo "LAS_ARCHIVE_CHAIN_FAILED_STAGE=COMPLETE"
+            echo "LAS_ARCHIVE_RECLAIM_CHAIN_FAILED_STAGE=COMPLETE"
             exit 1
           fi
 
@@ -146,9 +154,20 @@ jobs:
              bash tools/verification/private_retired_archive_owner_commit_candidate_stage1.sh >"$RUNNER_TEMP/owner.log" 2>&1; then
             owner_tree="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate_tree"])' "$owner_pkg/manifest.json")"
             test "$owner_tree" = "$(git rev-parse 'HEAD^{tree}')"
-            echo "LAS_ARCHIVE_CHAIN_OWNER_TREE=$owner_tree"
-            echo "LAS_RETIRED_ARCHIVE_CHAIN_THROUGH_OWNER=PASS"
+            echo "LAS_ARCHIVE_RECLAIM_CHAIN_OWNER_TREE=$owner_tree"
           else
-            echo "LAS_ARCHIVE_CHAIN_FAILED_STAGE=OWNER"
+            echo "LAS_ARCHIVE_RECLAIM_CHAIN_FAILED_STAGE=OWNER"
+            exit 1
+          fi
+
+          reclaim_base="$(git rev-parse HEAD)"; reclaim_pkg="$RUNNER_TEMP/reclaim-package"; mkdir -p "$reclaim_pkg"
+          if LAS_RECLAIM_BASE_SHA="$reclaim_base" LAS_RECLAIM_PACKAGE_DIR="$reclaim_pkg" LAS_RECLAIM_EXPECTED_BRANCH=verify-archive-chain \
+             bash tools/verification/private_retired_archive_reclaim_candidate_stage1.sh >"$RUNNER_TEMP/reclaim.log" 2>&1; then
+            reclaim_tree="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate_tree"])' "$reclaim_pkg/manifest.json")"
+            test "$reclaim_tree" = "$(git rev-parse 'HEAD^{tree}')"
+            echo "LAS_ARCHIVE_RECLAIM_CHAIN_RECLAIM_TREE=$reclaim_tree"
+            echo "LAS_RETIRED_ARCHIVE_CHAIN_THROUGH_RECLAIM=PASS"
+          else
+            echo "LAS_ARCHIVE_RECLAIM_CHAIN_FAILED_STAGE=RECLAIM"
             exit 1
           fi
