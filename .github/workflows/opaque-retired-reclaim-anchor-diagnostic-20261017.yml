@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Reconstruct through owner and identify exact current-lineage reclaim anchor
+      - name: Reconstruct exact owner base and prove current-lineage reclaim delta
         shell: bash
         env:
           PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
@@ -75,6 +75,11 @@ jobs:
           python3 "$RUNNER_TEMP/m5.py" >/dev/null 2>&1
           python3 "$RUNNER_TEMP/complete.py" >/dev/null 2>&1
           python3 "$RUNNER_TEMP/owner.py" >/dev/null 2>&1
+          git add src
+          git config user.name "LAS Reclaim Anchor Canonicalizer"
+          git config user.email "las-reclaim-anchor@users.noreply.github.com"
+          git commit -q -m "Ephemeral exact verified owner base"
+          test -z "$(git status --porcelain --untracked-files=all)"
           echo "LAS_RECLAIM_ANCHOR_OWNER_BASE=PASS"
           python3 - "$RUNNER_TEMP/reclaim.py" <<'PY'
           from pathlib import Path
