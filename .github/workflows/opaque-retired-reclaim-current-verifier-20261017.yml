@@ -1,0 +1,161 @@
+name: Opaque current-lineage retired reclaim verifier 20261017
+
+on:
+  push:
+    branches:
+      - "verify/reconciled-baseline-repair-v3-bd95-20261017"
+    paths:
+      - ".github/workflows/opaque-retired-reclaim-current-verifier-20261017.yml"
+
+permissions:
+  contents: read
+
+env:
+  BASE_REF_HASH: 060aa23045ded14f2e9984282456adce3cd5fa94bd92f21f4eeacae5d41abff2
+  BASE_SNAPSHOT_PROOF: bd4d73399dc34da2586900c270f6b33f2a1049e934472301f5546ad9973cc49e
+  EFFECT_REF_HASH: 57902b32c7dba883a89cd5a6e47dea395ab8a06b111c3dcdcd0487d67f010f58
+  EFFECT_SNAPSHOT_PROOF: 31cc9ba5b1d624a59d0bffb3ec563073178973d1d57aede5d876c428cabade96
+  M1_BLOB: bb4f6e5c803b7c64ea27e605659cf998fc942cc2
+  M2_BLOB: 6fb90f15a1194d596f420ebee9f0ed3e4ae2b112
+  M3_BLOB: 67746f8a4776b872b3878f6861eb3bb7658a9fbd
+  M4_BLOB: 13820e643e7d76cd087293429f6856183f4d9b07
+  M5_BLOB: ace99b29dcf1ab6041d602247158f07ab13d41eb
+  COMPLETE_BLOB: a35184cb70d931c34194e96192b208b8484b7ec9
+  OWNER_BLOB: 507c32cf7cebfa15b8ae77351ee74b4fed4c2782
+  RECLAIM_BLOB: ec01cef22533b33e3be9a8d07a65569e1bf8a14b
+  RECLAIM_SOURCE_BLOB: 82631c7e5fe87e7bb08baea527cc585e3537b486
+  CANONICAL_BLOB: 62e3e6dc0fad5dddc7fb0a453a3cd681d911e590
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - name: Recover exact private objects
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY" && test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/refs"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          base_ref=; base_sha=; effect_ref=; effect_sha=
+          while read -r sha ref; do
+            h="$(printf '%s' "$ref" | sha256sum | awk '{print $1}')"
+            if [[ "$h" = "$BASE_REF_HASH" ]]; then test -z "$base_ref"; base_ref="$ref"; base_sha="$sha"; fi
+            if [[ "$h" = "$EFFECT_REF_HASH" ]]; then test -z "$effect_ref"; effect_ref="$ref"; effect_sha="$sha"; fi
+          done <"$refs"
+          rm -f "$refs"
+          test -n "$base_ref" && test -n "$effect_ref" && test -n "$base_sha" && test -n "$effect_sha"
+          test "$(printf '%s' "$base_sha" | sha256sum | awk '{print $1}')" = "$BASE_SNAPSHOT_PROOF"
+          test "$(printf '%s' "$effect_sha" | sha256sum | awk '{print $1}')" = "$EFFECT_SNAPSHOT_PROOF"
+          echo "::add-mask::$base_ref"; echo "::add-mask::$effect_ref"; echo "::add-mask::$base_sha"; echo "::add-mask::$effect_sha"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=384 origin "$base_ref" "$effect_ref"
+          git checkout -q -B verify-reclaim-current "$base_sha"
+          for pair in \
+            "$M1_BLOB:m1.py" "$M2_BLOB:m2.py" "$M3_BLOB:m3.py" "$M4_BLOB:m4.py" "$M5_BLOB:m5.py" \
+            "$COMPLETE_BLOB:complete.py" "$OWNER_BLOB:owner.py" "$RECLAIM_BLOB:reclaim.py" "$CANONICAL_BLOB:canonical.sh"; do
+            blob="${pair%%:*}"; name="${pair##*:}"
+            git cat-file blob "$blob" >"$RUNNER_TEMP/$name"
+            test "$(git hash-object "$RUNNER_TEMP/$name")" = "$blob"
+          done
+          test "$(git cat-file -t "$RECLAIM_SOURCE_BLOB")" = blob
+          printf 'WORK_ROOT=%s\nBASE_SHA=%s\n' "$root" "$base_sha" >>"$GITHUB_ENV"
+          echo "LAS_RECLAIM_CURRENT_RECOVERY=PASS"
+
+      - name: Install exact toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          archive="$RUNNER_TEMP/alr.zip"; prefix="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --silent --show-error --output "$archive" "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip"
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $archive" | sha256sum --check --strict >/dev/null
+          mkdir -p "$prefix"; unzip -q "$archive" -d "$prefix"; export PATH="$prefix/bin:$PATH"; echo "$prefix/bin" >>"$GITHUB_PATH"
+          alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
+          workspace="$RUNNER_TEMP/alr-work"; mkdir -p "$workspace"; cd "$workspace"
+          alr -n init --in-place --no-skel --lib reclaim_current_verifier >/dev/null
+          alr_path="$(command -v alr)"; wrapper="$RUNNER_TEMP/gprbuild-via-alire"
+          printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' "cd \"$workspace\"" "exec \"$alr_path\" exec -- gprbuild \"\$@\"" >"$wrapper"
+          chmod 0755 "$wrapper"; printf 'GPRBUILD=%s\n' "$wrapper" >>"$GITHUB_ENV"
+          echo "LAS_RECLAIM_CURRENT_TOOLCHAINS=PASS"
+
+      - name: Materialize exact reclaim candidate and run production gates
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$WORK_ROOT"
+          python3 tools/verification/private_reconciled_baseline_repair.py >/dev/null 2>&1
+          python3 tools/verification/private_reconciled_baseline_visibility_repair.py >/dev/null 2>&1
+          python3 tools/verification/private_reconciled_baseline_clippy_contract_repair.py >/dev/null 2>&1
+          python3 "$RUNNER_TEMP/m1.py" >/dev/null 2>&1
+          python3 "$RUNNER_TEMP/m2.py" >/dev/null 2>&1
+          python3 "$RUNNER_TEMP/m3.py" >/dev/null 2>&1
+          python3 "$RUNNER_TEMP/m4.py" >/dev/null 2>&1
+          python3 "$RUNNER_TEMP/m5.py" >/dev/null 2>&1
+          python3 "$RUNNER_TEMP/complete.py" >/dev/null 2>&1
+          python3 "$RUNNER_TEMP/owner.py" >/dev/null 2>&1
+          git add src
+          git config user.name "LAS Reclaim Current Verifier"
+          git config user.email "las-reclaim-current@users.noreply.github.com"
+          git commit -q -m "Ephemeral exact verified owner base"
+          owner_base="$(git rev-parse HEAD)"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          python3 "$RUNNER_TEMP/reclaim.py" >/dev/null 2>&1
+          test "$(git hash-object src/effect_fabric/root_supervisor_linux_production_runtime/facade/retired_archive_reclaim.rs)" = "$RECLAIM_SOURCE_BLOB"
+          cargo +1.98.1 fmt --all >/dev/null 2>&1
+          git diff --check
+          mapfile -t changed < <(git status --porcelain=v1 --untracked-files=all | sed 's/^...//' | LC_ALL=C sort)
+          expected=(
+            src/effect_fabric/root_supervisor_linux_production_runtime/facade.rs
+            src/effect_fabric/root_supervisor_linux_production_runtime/facade/retired_archive.rs
+            src/effect_fabric/root_supervisor_linux_production_runtime/facade/retired_archive_binding.rs
+            src/effect_fabric/root_supervisor_linux_production_runtime/facade/retired_archive_receipt_binding.rs
+            src/effect_fabric/root_supervisor_linux_production_runtime/facade/retired_archive_reclaim.rs
+          )
+          printf '%s\n' "${changed[@]}" >"$RUNNER_TEMP/changed"
+          printf '%s\n' "${expected[@]}" | LC_ALL=C sort >"$RUNNER_TEMP/expected"
+          cmp --silent "$RUNNER_TEMP/expected" "$RUNNER_TEMP/changed"
+          gate() { name="$1"; shift; if "$@" >"$RUNNER_TEMP/${name}.log" 2>&1; then echo "LAS_RECLAIM_GATE_${name}=PASS"; else rc=$?; echo "LAS_RECLAIM_GATE_${name}=FAIL_RC_${rc}"; exit "$rc"; fi; }
+          gate FMT cargo +1.98.1 fmt --all -- --check
+          gate CHECK_DEFAULT cargo +1.98.1 check --locked --all-targets
+          gate CHECK_PROD cargo +1.98.1 check --locked --features "root-ffi linux-peer-credentials" --all-targets
+          gate CLIPPY_PROD cargo +1.98.1 clippy --locked --features "root-ffi linux-peer-credentials" --all-targets -- -D warnings
+          gate TEST_PROD cargo +1.98.1 test --locked --features "root-ffi linux-peer-credentials" --lib -- --test-threads=1
+          gate CHECK_ALL cargo +1.98.1 check --locked --all-features --all-targets
+          gate CLIPPY_ALL cargo +1.98.1 clippy --locked --all-features --all-targets -- -D warnings
+          git add src
+          git commit -q -m "Ephemeral current-lineage verified reclaim candidate"
+          candidate="$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD^)" = "$owner_base"
+          printf 'CANDIDATE_SHA=%s\n' "$candidate" >>"$GITHUB_ENV"
+          echo "LAS_RECLAIM_CURRENT_RUST_MATRIX=PASS"
+
+      - name: Run canonical verifier through pre-TLC boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$WORK_ROOT"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          staged="$RUNNER_TEMP/reclaim-pre-tlc.sh"
+          python3 - "$RUNNER_TEMP/canonical.sh" "$staged" <<'PY'
+          from pathlib import Path
+          import sys
+          src=Path(sys.argv[1]).read_text()
+          needle='TLC_MAP="$TMP/tlc-map.tsv"'
+          if src.count(needle) != 1: raise SystemExit('canonical TLC boundary not unique')
+          stop='''if test -z "$(git status --porcelain --untracked-files=no)"; then\n  echo "LAS_RECLAIM_CURRENT_TRACKED_TREE=PASS"\nelse\n  exit 97\nfi\necho "LAS_RECLAIM_CURRENT_PRE_TLC=PASS"\nexit 0\n\n'''
+          Path(sys.argv[2]).write_text(src.replace(needle,stop+needle,1))
+          PY
+          chmod 0700 "$staged"
+          LAS_VERIFY_EXPECTED_BRANCH=verify-reclaim-current GPRBUILD="$GPRBUILD" bash "$staged" >/dev/null
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "LAS_RECLAIM_CURRENT_RESULT=PASS"
