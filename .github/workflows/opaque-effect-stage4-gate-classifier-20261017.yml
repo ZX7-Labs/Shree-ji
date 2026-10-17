@@ -25,7 +25,7 @@ env:
 jobs:
   classify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - name: Recover exact private base and verifier blobs
         shell: bash
@@ -65,15 +65,25 @@ jobs:
           printf 'WORK_ROOT=%s\nBASE_SHA=%s\n' "$root" "$base_sha" >>"$GITHUB_ENV"
           echo "LAS_EFFECT_CLASSIFIER_RECOVERY=PASS"
 
-      - name: Install exact Rust toolchain
+      - name: Install exact Rust and Ada toolchains
         shell: bash
         run: |
           set -euo pipefail
           rustup toolchain install 1.98.1 --profile minimal >/dev/null
           rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
-          echo "LAS_EFFECT_CLASSIFIER_TOOLCHAIN=PASS"
+          archive="$RUNNER_TEMP/alr.zip"; prefix="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --silent --show-error --output "$archive" "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip"
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $archive" | sha256sum --check --strict >/dev/null
+          mkdir -p "$prefix"; unzip -q "$archive" -d "$prefix"; export PATH="$prefix/bin:$PATH"; echo "$prefix/bin" >>"$GITHUB_PATH"
+          alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
+          workspace="$RUNNER_TEMP/alr-work"; mkdir -p "$workspace"; cd "$workspace"
+          alr -n init --in-place --no-skel --lib effect_gate_classifier >/dev/null
+          alr_path="$(command -v alr)"; wrapper="$RUNNER_TEMP/gprbuild-via-alire"
+          printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' "cd \"$workspace\"" "exec \"$alr_path\" exec -- gprbuild \"\$@\"" >"$wrapper"
+          chmod 0755 "$wrapper"; printf 'GPRBUILD=%s\n' "$wrapper" >>"$GITHUB_ENV"
+          echo "LAS_EFFECT_CLASSIFIER_TOOLCHAINS=PASS"
 
-      - name: Classify private Rust gate
+      - name: Classify private focused gate
         shell: bash
         env:
           RUSTFLAGS: -Dwarnings
@@ -90,9 +100,7 @@ jobs:
           git config user.email "las-ephemeral-gate-classifier@users.noreply.github.com"
           git commit -q -m "Ephemeral exact verified green baseline"
 
-          work="$RUNNER_TEMP/effect-work"
-          git worktree add -q -b verify-effect-target "$work" HEAD
-          cd "$work"
+          work="$RUNNER_TEMP/effect-work"; git worktree add -q -b verify-effect-target "$work" HEAD; cd "$work"
           mkdir -p tools/verification
           install -m 0644 "$RUNNER_TEMP/effect-owner.py" tools/verification/private_retired_effect_owner_adapter_materialize.py
           install -m 0644 "$RUNNER_TEMP/effect-semantic.py" tools/verification/private_retired_effect_schema_semantic_repair.py
@@ -102,14 +110,8 @@ jobs:
 
           classify() {
             local label="$1"; shift
-            if "$@" >"$RUNNER_TEMP/classifier.log" 2>&1; then
-              echo "PASS:$label"
-            else
-              echo "FAIL:$label"
-              exit 1
-            fi
+            if "$@" >"$RUNNER_TEMP/classifier.log" 2>&1; then echo "PASS:$label"; else echo "FAIL:$label"; exit 1; fi
           }
-
           classify materialize python3 tools/verification/private_retired_effect_owner_adapter_materialize.py
           classify semantic python3 tools/verification/private_retired_effect_schema_semantic_repair.py
           classify recovery python3 tools/verification/private_retired_effect_recovery_congruence_hardening.py
@@ -123,4 +125,4 @@ jobs:
           classify all_check cargo +1.98.1 check --locked --all-features --all-targets
           classify all_clippy cargo +1.98.1 clippy --locked --all-features --all-targets -- -D warnings
           rm -f "$RUNNER_TEMP/classifier.log"
-          echo "LAS_EFFECT_FOCUSED_RUST_GATES=PASS"
+          echo "LAS_EFFECT_FOCUSED_GATES=PASS"
