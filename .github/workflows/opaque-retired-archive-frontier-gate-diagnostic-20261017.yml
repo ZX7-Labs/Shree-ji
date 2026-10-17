@@ -84,40 +84,44 @@ jobs:
         env:
           RUSTFLAGS: -Dwarnings
         run: |
-          set -u -o pipefail
+          set -euo pipefail
           cd "$WORK_ROOT"
           stage() {
             local label="$1"
+            local rc
             shift
-            if "$@" >"$RUNNER_TEMP/frontier-stage.log" 2>&1; then
+            set +e
+            "$@" >"$RUNNER_TEMP/frontier-stage.log" 2>&1
+            rc=$?
+            set -e
+            if [[ "$rc" -eq 0 ]]; then
               echo "LAS_FRONTIER_GATE_${label}=PASS"
               return 0
             fi
-            local rc=$?
             echo "LAS_FRONTIER_GATE_${label}=FAIL_RC_${rc}"
             return "$rc"
           }
 
-          stage BASELINE_M1 python3 tools/verification/private_reconciled_baseline_repair.py || exit $?
-          stage BASELINE_M2 python3 tools/verification/private_reconciled_baseline_visibility_repair.py || exit $?
-          stage BASELINE_M3 python3 tools/verification/private_reconciled_baseline_clippy_contract_repair.py || exit $?
-          stage EFFECT_M1 python3 "$RUNNER_TEMP/m1.py" || exit $?
-          stage EFFECT_M2 python3 "$RUNNER_TEMP/m2.py" || exit $?
-          stage EFFECT_M3 python3 "$RUNNER_TEMP/m3.py" || exit $?
-          stage EFFECT_M4 python3 "$RUNNER_TEMP/m4.py" || exit $?
-          stage EFFECT_M5 python3 "$RUNNER_TEMP/m5.py" || exit $?
-          stage COMPLETE python3 "$RUNNER_TEMP/complete.py" || exit $?
-          stage OWNER python3 "$RUNNER_TEMP/owner.py" || exit $?
-          stage RECLAIM python3 "$RUNNER_TEMP/reclaim.py" || exit $?
-          stage RECLAIM_HYGIENE python3 "$RUNNER_TEMP/reclaim-hygiene.py" || exit $?
-          stage FRONTIER python3 "$RUNNER_TEMP/frontier.py" || exit $?
-          stage FMT cargo +1.98.1 fmt --all || exit $?
-          stage FMT_CHECK cargo +1.98.1 fmt --all -- --check || exit $?
-          stage DIFF_CHECK git diff --check || exit $?
-          stage CHECK_DEFAULT cargo +1.98.1 check --locked --all-targets || exit $?
-          stage CHECK_PRODUCTION cargo +1.98.1 check --locked --features "root-ffi linux-peer-credentials" --all-targets || exit $?
-          stage CLIPPY_PRODUCTION cargo +1.98.1 clippy --locked --features "root-ffi linux-peer-credentials" --all-targets -- -D warnings || exit $?
-          stage TEST_PRODUCTION cargo +1.98.1 test --locked --features "root-ffi linux-peer-credentials" --lib -- --test-threads=1 || exit $?
-          stage CHECK_ALL cargo +1.98.1 check --locked --all-features --all-targets || exit $?
-          stage CLIPPY_ALL cargo +1.98.1 clippy --locked --all-features --all-targets -- -D warnings || exit $?
+          stage BASELINE_M1 python3 tools/verification/private_reconciled_baseline_repair.py
+          stage BASELINE_M2 python3 tools/verification/private_reconciled_baseline_visibility_repair.py
+          stage BASELINE_M3 python3 tools/verification/private_reconciled_baseline_clippy_contract_repair.py
+          stage EFFECT_M1 python3 "$RUNNER_TEMP/m1.py"
+          stage EFFECT_M2 python3 "$RUNNER_TEMP/m2.py"
+          stage EFFECT_M3 python3 "$RUNNER_TEMP/m3.py"
+          stage EFFECT_M4 python3 "$RUNNER_TEMP/m4.py"
+          stage EFFECT_M5 python3 "$RUNNER_TEMP/m5.py"
+          stage COMPLETE python3 "$RUNNER_TEMP/complete.py"
+          stage OWNER python3 "$RUNNER_TEMP/owner.py"
+          stage RECLAIM python3 "$RUNNER_TEMP/reclaim.py"
+          stage RECLAIM_HYGIENE python3 "$RUNNER_TEMP/reclaim-hygiene.py"
+          stage FRONTIER python3 "$RUNNER_TEMP/frontier.py"
+          stage FMT cargo +1.98.1 fmt --all
+          stage FMT_CHECK cargo +1.98.1 fmt --all -- --check
+          stage DIFF_CHECK git diff --check
+          stage CHECK_DEFAULT cargo +1.98.1 check --locked --all-targets
+          stage CHECK_PRODUCTION cargo +1.98.1 check --locked --features "root-ffi linux-peer-credentials" --all-targets
+          stage CLIPPY_PRODUCTION cargo +1.98.1 clippy --locked --features "root-ffi linux-peer-credentials" --all-targets -- -D warnings
+          stage TEST_PRODUCTION cargo +1.98.1 test --locked --features "root-ffi linux-peer-credentials" --lib -- --test-threads=1
+          stage CHECK_ALL cargo +1.98.1 check --locked --all-features --all-targets
+          stage CLIPPY_ALL cargo +1.98.1 clippy --locked --all-features --all-targets -- -D warnings
           echo "LAS_FRONTIER_GATE_DIAGNOSTIC=PASS"
