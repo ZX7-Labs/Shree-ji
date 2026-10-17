@@ -1,0 +1,112 @@
+name: Opaque retired archive frontier integrated preflight 20261017
+
+on:
+  push:
+    branches:
+      - "verify/reconciled-baseline-repair-v3-bd95-20261017"
+    paths:
+      - ".github/workflows/opaque-retired-archive-frontier-integrated-preflight-20261017.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opaque-retired-archive-frontier-integrated-preflight-20261017
+  cancel-in-progress: false
+
+env:
+  BASE_REF_HASH: 060aa23045ded14f2e9984282456adce3cd5fa94bd92f21f4eeacae5d41abff2
+  BASE_SNAPSHOT_PROOF: bd4d73399dc34da2586900c270f6b33f2a1049e934472301f5546ad9973cc49e
+  EFFECT_REF_HASH: 57902b32c7dba883a89cd5a6e47dea395ab8a06b111c3dcdcd0487d67f010f58
+  M1_BLOB: bb4f6e5c803b7c64ea27e605659cf998fc942cc2
+  M2_BLOB: 6fb90f15a1194d596f420ebee9f0ed3e4ae2b112
+  M3_BLOB: 67746f8a4776b872b3878f6861eb3bb7658a9fbd
+  M4_BLOB: 13820e643e7d76cd087293429f6856183f4d9b07
+  M5_BLOB: ace99b29dcf1ab6041d602247158f07ab13d41eb
+  COMPLETE_BLOB: a35184cb70d931c34194e96192b208b8484b7ec9
+  OWNER_BLOB: 507c32cf7cebfa15b8ae77351ee74b4fed4c2782
+  RECLAIM_BLOB: 0b65004b5ec67373ac53127de1193ecbecfba902
+  RECLAIM_HYGIENE_BLOB: 28ad68dd4153a2d1e76e7529afc1b31b8c8e251a
+  FRONTIER_BLOB: 5a1a20e7171d4e96cf6ab248baa0bbd6f7733511
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Recover exact private base and materializers
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY" && test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"; echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/refs"; git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          base_ref=; base_sha=; effect_ref=
+          while read -r sha ref; do
+            h="$(printf '%s' "$ref" | sha256sum | awk '{print $1}')"
+            if [[ "$h" = "$BASE_REF_HASH" ]]; then test -z "$base_ref"; base_ref="$ref"; base_sha="$sha"; fi
+            if [[ "$h" = "$EFFECT_REF_HASH" ]]; then test -z "$effect_ref"; effect_ref="$ref"; fi
+          done <"$refs"
+          rm -f "$refs"
+          test -n "$base_ref" && test -n "$effect_ref" && test -n "$base_sha"
+          test "$(printf '%s' "$base_sha" | sha256sum | awk '{print $1}')" = "$BASE_SNAPSHOT_PROOF"
+          echo "::add-mask::$base_ref"; echo "::add-mask::$effect_ref"; echo "::add-mask::$base_sha"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=320 origin "$base_ref" "$effect_ref"
+          git checkout -q -B verify-frontier-preflight "$base_sha"
+          for pair in \
+            "$M1_BLOB:m1.py" "$M2_BLOB:m2.py" "$M3_BLOB:m3.py" "$M4_BLOB:m4.py" "$M5_BLOB:m5.py" \
+            "$COMPLETE_BLOB:complete.py" "$OWNER_BLOB:owner.py" \
+            "$RECLAIM_BLOB:reclaim.py" "$RECLAIM_HYGIENE_BLOB:reclaim-hygiene.py" \
+            "$FRONTIER_BLOB:frontier.py"; do
+            blob="${pair%%:*}"; name="${pair##*:}"
+            git cat-file blob "$blob" >"$RUNNER_TEMP/$name"
+            test "$(git hash-object "$RUNNER_TEMP/$name")" = "$blob"
+          done
+          printf 'WORK_ROOT=%s\n' "$root" >>"$GITHUB_ENV"
+          echo "LAS_FRONTIER_PREFLIGHT_RECOVERY=PASS"
+
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          echo "LAS_FRONTIER_PREFLIGHT_TOOLCHAIN=PASS"
+
+      - name: Materialize through frontier and run integrated Rust gates
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$WORK_ROOT"
+          python3 tools/verification/private_reconciled_baseline_repair.py >/dev/null 2>&1
+          python3 tools/verification/private_reconciled_baseline_visibility_repair.py >/dev/null 2>&1
+          python3 tools/verification/private_reconciled_baseline_clippy_contract_repair.py >/dev/null 2>&1
+          python3 "$RUNNER_TEMP/m1.py" >/dev/null 2>&1
+          python3 "$RUNNER_TEMP/m2.py" >/dev/null 2>&1
+          python3 "$RUNNER_TEMP/m3.py" >/dev/null 2>&1
+          python3 "$RUNNER_TEMP/m4.py" >/dev/null 2>&1
+          python3 "$RUNNER_TEMP/m5.py" >/dev/null 2>&1
+          python3 "$RUNNER_TEMP/complete.py" >/dev/null 2>&1
+          python3 "$RUNNER_TEMP/owner.py" >/dev/null 2>&1
+          python3 "$RUNNER_TEMP/reclaim.py" >/dev/null 2>&1
+          python3 "$RUNNER_TEMP/reclaim-hygiene.py" >/dev/null 2>&1
+          python3 "$RUNNER_TEMP/frontier.py" >/dev/null 2>&1
+          cargo +1.98.1 fmt --all >/dev/null 2>&1
+          cargo +1.98.1 fmt --all -- --check >/dev/null 2>&1
+          git diff --check >/dev/null 2>&1
+          cargo +1.98.1 check --locked --all-targets >/dev/null 2>&1
+          cargo +1.98.1 check --locked --features "root-ffi linux-peer-credentials" --all-targets >/dev/null 2>&1
+          cargo +1.98.1 clippy --locked --features "root-ffi linux-peer-credentials" --all-targets -- -D warnings >/dev/null 2>&1
+          cargo +1.98.1 test --locked --features "root-ffi linux-peer-credentials" --lib -- --test-threads=1 >/dev/null 2>&1
+          cargo +1.98.1 check --locked --all-features --all-targets >/dev/null 2>&1
+          cargo +1.98.1 clippy --locked --all-features --all-targets -- -D warnings >/dev/null 2>&1
+          test -z "$(git status --porcelain=v1 --untracked-files=all | awk 'substr($0,4,4) != "src/" {print}')"
+          echo "LAS_RETIRED_ARCHIVE_FRONTIER_INTEGRATED_PREFLIGHT=PASS"
