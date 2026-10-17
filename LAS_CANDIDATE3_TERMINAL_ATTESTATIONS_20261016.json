@@ -1,0 +1,26 @@
+{
+  "attestor_workflow_blob": "21d41c8100bdc5f66c241208d51d8420e735563e",
+  "canonical_verifier_blob": "62e3e6dc0fad5dddc7fb0a453a3cd681d911e590",
+  "original_run_id": 38829095332,
+  "private_snapshot_proof": "269a9a8c7afae986f8065e93745c9017f848292a118b2b9d006d007cbdb6b1f8",
+  "private_tree_proof": "6998e8e80e6c8fb86fbac5e4c512af441f827b4536aa5448dfed6aa14568468e",
+  "profiles": {
+    "36": {
+      "mode": "generic",
+      "profile_binding_sha256": "000caa1d7431dce4c9d2db187c95be00446e30ff1ce44ccf0b16919a378ecf9e",
+      "result": "PASS",
+      "terminal_artifact_id": 12097376701,
+      "terminal_attestation_sha256": "a4047d3db7bc708fdf1054dad56cc65c7ee2464edb60812ff3ccdc782bda85f2",
+      "terminal_job_id": 117360950644,
+      "terminal_job_log_sha256": "fff1ac0f3c2e3511ada0f3b63dd598667e4e00f2e54189ea527fb154d9b8c2e7",
+      "terminal_run_id": 39020416619,
+      "terminal_segment": 6,
+      "validation_job_id": 117360935893
+    }
+  },
+  "runner_sha": "43bf26bf734f7b29aa5c8f32c6d2201c4020de7b",
+  "schema": "las-candidate3-terminal-registry-v1",
+  "slice_workflow_blob": "8c2d62cf3ef50b1d36ccbf337e38322b76900230",
+  "tlc_map_sha256": "da7bb51d531d0e5e5e6994c80be8f254a110cb8181e6121e3a557fdff9428cee",
+  "wrapper_workflow_blob": "3dc98da64be77f6e9e93bfb98ffda30c90f75894"
+}
