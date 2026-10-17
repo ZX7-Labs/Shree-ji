@@ -1,0 +1,174 @@
+name: Opaque retired effect stage2 from verified baseline 20261017
+
+on:
+  push:
+    branches:
+      - "verify/reconciled-baseline-repair-v3-bd95-20261017"
+    paths:
+      - ".github/workflows/opaque-effect-stage2-from-verified-baseline-20261017.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opaque-effect-stage2-from-verified-baseline-20261017
+  cancel-in-progress: false
+
+env:
+  BASE_REF_HASH: 060aa23045ded14f2e9984282456adce3cd5fa94bd92f21f4eeacae5d41abff2
+  BASE_SNAPSHOT_PROOF: bd4d73399dc34da2586900c270f6b33f2a1049e934472301f5546ad9973cc49e
+  BASE_TREE_PROOF: 93bcdc3d05cc578589d0600beb22d21dda366b5cd9fd81cc31f4f487d9e35981
+  BASELINE_HARNESS_BLOB: 31f2cf45cb2879e7e3527c411f93a17daa86f311
+  EXPECTED_GREEN_BASELINE_TREE: ffc6621866ec4353d070d74746e0a2de8a9a9d20
+  EFFECT_REF_HASH: 57902b32c7dba883a89cd5a6e47dea395ab8a06b111c3dcdcd0487d67f010f58
+  EFFECT_SNAPSHOT_PROOF: f5ab152fc0cbe347294afc3c6280fe79bda36f51780661b641147167d14294e4
+  EFFECT_TREE_PROOF: 9394ccc9b9aa1a54530f6574a492fdcc08d97cbaca3a408687cd3170a8b2a472
+  EFFECT_OWNER_BLOB: bb4f6e5c803b7c64ea27e605659cf998fc942cc2
+  EFFECT_SEMANTIC_BLOB: 6fb90f15a1194d596f420ebee9f0ed3e4ae2b112
+  EFFECT_RECOVERY_BLOB: 67746f8a4776b872b3878f6861eb3bb7658a9fbd
+  EFFECT_HARNESS_BLOB: a15e23ec5c7775905b161676bd2cae4b38a51426
+  BRIDGE_CERT_DER_B64: MIIFPzCCAyegAwIBAgIUP3W0jZxrOyup9DuyZI6/r//+pUkwDQYJKoZIhvcNAQELBQAwLzEtMCsGA1UEAwwkTEFTIFJlc3VtZSBDYW5kaWRhdGUgQnJpZGdlIDIwMjYxMDE3MB4XDTI2MTAxNzAyNDAyOVoXDTI2MTAxOTAyNDAyOVowLzEtMCsGA1UEAwwkTEFTIFJlc3VtZSBDYW5kaWRhdGUgQnJpZGdlIDIwMjYxMDE3MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEApw+2pn950GkAi5C+HL1My6inuc4+B2AOpK2RsNTVgYgm9mgfNfuXUofv7tykZ5SypAOsubN8UDnxom3pgvo4Ohk2T+ZURGHjacB854CKeXujJY1xR7LRnqlAXw5gs4AAwVP1B/4AZVcQm4Q89p02TBstFTqBeQwCM9eVeIxHXTX/FrXE7Cy/F/yLqTvFlNYo5RkqduD2PKtjNTZEBJVDFRE9pPkKvnzqf2sn/7mLs0Bv1ryRJuNnxGDuOj4IeZVpZv97nf4cMJ0dhNG8gy/62yNcqcy0QW+/KAzJq9THcWbsUTaT7EHhSSJkU7q7PlTUj0YsY2OoWu0Vo5ItyrM3Dvz89CN+l8Qy/Ur9FvNhB1UAyHOGjNFHUjSLHObB2rmc/jX20XoGUzl8EzXiJxuN9q5VJSaA2LeUpxUdPhFCdVXxqopJwgZlSsuAkwdxkTVo03dWD5Ca70ti5ggqIFaRJIjvBA+rW6XKxDf5C0OhGiOS9Ry2bRAX8+7DfCxYvARq+lafpzxwxMTGQxto9+xvJ4IJIrY9kDS1Z1IF21/Ykb/I/kUscpZcamWMhwq27D2SfvwQG62nj9BvJmNG1ZkUQ+nwXECcdg13WRDt934FY6If39Lc7gymV9UvN9WHxQbyGUgCKe3OZswICP4+AxdgR+azIY2rTWMKq9I3VEiNTvkCAwEAAaNTMFEwHQYDVR0OBBYEFAB8t3fgrEo7AXO0g6jcHKNI9XWMMB8GA1UdIwQYMBaAFAB8t3fgrEo7AXO0g6jcHKNI9XWMMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggIBAI8qyYs5XVBs05jnkPBWLBU8pjwSK3Nu5mhcPf6Xc8s24eXWQ766DyWqTshRZl5CKsrrY10mBB7A+rhOGBztKE923omvCoRacXa/xy+nzbsWhma/N2f5llAuH5Z1f7+P5gqFWMYLwnopvD6uLCU15npUXH+ZMLh1RRuEuhVRdOt2cWYdoTyNdsSkrswkKVauHuic4cRWyT/5tl4EZL945t3d3NWQ2kz7sZUvtnN6mpGwNA+I+1KOD5MFPjYcFuMKFZ8OQUbjynjIcLEPeqaAU/rftQ8tsKLO9fkv5rXsMdbfYpvsHrDnf/Qo7dYXPN+qBHWnCGcsW8SQ5KRxSvJIGV/Sdly8kIEV8tce47P96GbejgElUPEGmheuE8w8QMzltgEF6PAk84JJlaqAwdEwBIBH4SWE0Lap4CnIiXtyi8XhfhKVs4TJ9/SMF/jVwQxvuAYk95/UBTlnZKv1xM80t9YKbFgC7AQrudKhVwMrvYBDyKbhXptprAvK5vyZkQSm4gXVJrJ3R4DTu+gTvTXyqP9gagjZrUoCkykmPaUojR3AgyDJE33eHaOHx7NDuru0dOIwXAkQQbHxttinI8Mm4+a39AvUJ5Ea1rP2I/H6FlhDLF+1+5P8zZYs5LrFlmtzIZRQ3wf8FBKTsYkZ7uK28zz7zhjhYUhtKQpF3k3F8Ev2
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - name: Recover exact private base and effect verifier objects
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY" && test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+          root="$RUNNER_TEMP/private"; mkdir "$root"; cd "$root"; git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"; echo "::add-mask::$auth"
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          base_ref=""; base_sha=""; effect_ref=""; effect_sha=""
+          while read -r sha ref; do
+            ref_hash="$(printf '%s' "$ref" | sha256sum | awk '{print $1}')"
+            if [[ "$ref_hash" = "$BASE_REF_HASH" ]]; then test -z "$base_ref"; base_ref="$ref"; base_sha="$sha"; fi
+            if [[ "$ref_hash" = "$EFFECT_REF_HASH" ]]; then test -z "$effect_ref"; effect_ref="$ref"; effect_sha="$sha"; fi
+          done <"$refs"
+          rm -f "$refs"
+          test -n "$base_ref" && test -n "$effect_ref" && test -n "$base_sha" && test -n "$effect_sha"
+          echo "::add-mask::$base_ref"; echo "::add-mask::$effect_ref"; echo "::add-mask::$base_sha"; echo "::add-mask::$effect_sha"
+          test "$(printf '%s' "$base_sha" | sha256sum | awk '{print $1}')" = "$BASE_SNAPSHOT_PROOF"
+          test "$(printf '%s' "$effect_sha" | sha256sum | awk '{print $1}')" = "$EFFECT_SNAPSHOT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=96 origin "$base_ref" "$effect_ref"
+          git checkout -q -B verify-target "$base_sha"
+          base_tree="$(git rev-parse 'HEAD^{tree}')"; echo "::add-mask::$base_tree"
+          test "$(printf '%s' "$base_tree" | sha256sum | awk '{print $1}')" = "$BASE_TREE_PROOF"
+          effect_tree="$(git rev-parse "$effect_sha^{tree}")"; echo "::add-mask::$effect_tree"
+          test "$(printf '%s' "$effect_tree" | sha256sum | awk '{print $1}')" = "$EFFECT_TREE_PROOF"
+          git cat-file blob "$BASELINE_HARNESS_BLOB" >"$RUNNER_TEMP/baseline-v3.sh"
+          git cat-file blob "$EFFECT_OWNER_BLOB" >"$RUNNER_TEMP/effect-owner.py"
+          git cat-file blob "$EFFECT_SEMANTIC_BLOB" >"$RUNNER_TEMP/effect-semantic.py"
+          git cat-file blob "$EFFECT_RECOVERY_BLOB" >"$RUNNER_TEMP/effect-recovery.py"
+          git cat-file blob "$EFFECT_HARNESS_BLOB" >"$RUNNER_TEMP/effect-stage2.sh"
+          test "$(git hash-object "$RUNNER_TEMP/baseline-v3.sh")" = "$BASELINE_HARNESS_BLOB"
+          test "$(git hash-object "$RUNNER_TEMP/effect-owner.py")" = "$EFFECT_OWNER_BLOB"
+          test "$(git hash-object "$RUNNER_TEMP/effect-semantic.py")" = "$EFFECT_SEMANTIC_BLOB"
+          test "$(git hash-object "$RUNNER_TEMP/effect-recovery.py")" = "$EFFECT_RECOVERY_BLOB"
+          test "$(git hash-object "$RUNNER_TEMP/effect-stage2.sh")" = "$EFFECT_HARNESS_BLOB"
+          chmod 0700 "$RUNNER_TEMP/baseline-v3.sh" "$RUNNER_TEMP/effect-stage2.sh"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          printf 'WORK_ROOT=%s\nBASE_SHA=%s\n' "$root" "$base_sha" >> "$GITHUB_ENV"
+          echo "LAS_EFFECT_STAGE2_RECOVERY=PASS"
+
+      - name: Install exact build toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >/dev/null
+          rustup component add --toolchain 1.98.1 rustfmt clippy >/dev/null
+          archive="$RUNNER_TEMP/alr.zip"; prefix="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --silent --show-error --output "$archive" "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip"
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $archive" | sha256sum --check --strict >/dev/null
+          mkdir -p "$prefix"; unzip -q "$archive" -d "$prefix"; export PATH="$prefix/bin:$PATH"; echo "$prefix/bin" >> "$GITHUB_PATH"
+          alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
+          workspace="$RUNNER_TEMP/alr-work"; mkdir -p "$workspace"; cd "$workspace"
+          alr -n init --in-place --no-skel --lib retired_effect_stage2 >/dev/null
+          alr_path="$(command -v alr)"; wrapper="$RUNNER_TEMP/gprbuild-via-alire"
+          cat > "$wrapper" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$workspace"
+          exec "$alr_path" exec -- gprbuild "\$@"
+          EOF
+          chmod 0755 "$wrapper"; printf 'GPRBUILD=%s\n' "$wrapper" >> "$GITHUB_ENV"
+          echo "LAS_EFFECT_STAGE2_TOOLCHAINS=PASS"
+
+      - name: Reproduce green baseline then verify retired effect stage
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$WORK_ROOT"
+          baseline_package="$RUNNER_TEMP/baseline-package"; baseline_log="$RUNNER_TEMP/baseline.log"; mkdir -p "$baseline_package"
+          set +e
+          LAS_BASELINE_REPAIR_BASE_SHA="$BASE_SHA" LAS_BASELINE_REPAIR_PACKAGE_DIR="$baseline_package" LAS_BASELINE_REPAIR_EXPECTED_BRANCH=verify-target bash "$RUNNER_TEMP/baseline-v3.sh" >"$baseline_log" 2>&1
+          baseline_rc=$?
+          set -e
+          if [[ "$baseline_rc" -ne 0 ]]; then
+            mkdir -p "$RUNNER_TEMP/final-package"; cp "$baseline_log" "$RUNNER_TEMP/final-package/baseline-verification.log"
+            rc="$baseline_rc"
+          else
+            test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_GREEN_BASELINE_TREE"
+            green_commit="$(git rev-parse HEAD)"
+            mkdir -p tools/verification
+            install -m 0644 "$RUNNER_TEMP/effect-owner.py" tools/verification/private_retired_effect_owner_adapter_materialize.py
+            install -m 0644 "$RUNNER_TEMP/effect-semantic.py" tools/verification/private_retired_effect_schema_semantic_repair.py
+            install -m 0644 "$RUNNER_TEMP/effect-recovery.py" tools/verification/private_retired_effect_recovery_congruence_hardening.py
+            git add tools/verification/private_retired_effect_owner_adapter_materialize.py tools/verification/private_retired_effect_schema_semantic_repair.py tools/verification/private_retired_effect_recovery_congruence_hardening.py
+            git config user.name "LAS Ephemeral Verification Canonicalizer"
+            git config user.email "las-ephemeral-verifier@users.noreply.github.com"
+            git commit -q -m "Ephemeral retired effect verifier overlay"
+            effect_base="$(git rev-parse HEAD)"
+            test "$(git rev-parse "$green_commit^{tree}")" = "$EXPECTED_GREEN_BASELINE_TREE"
+            effect_package="$RUNNER_TEMP/effect-package"; effect_log="$RUNNER_TEMP/effect.log"; mkdir -p "$effect_package"
+            set +e
+            LAS_EFFECT_BASE_SHA="$effect_base" LAS_EFFECT_PACKAGE_DIR="$effect_package" LAS_EFFECT_EXPECTED_BRANCH=verify-target bash "$RUNNER_TEMP/effect-stage2.sh" >"$effect_log" 2>&1
+            rc=$?
+            set -e
+            mkdir -p "$RUNNER_TEMP/final-package"
+            cp "$baseline_log" "$RUNNER_TEMP/final-package/baseline-verification.log"
+            cp "$effect_log" "$RUNNER_TEMP/final-package/effect-verification.log"
+            if [[ -f "$effect_package/manifest.json" ]]; then cp "$effect_package/manifest.json" "$RUNNER_TEMP/final-package/manifest.json"; fi
+            if [[ -d "$effect_package/files" ]]; then cp -a "$effect_package/files" "$RUNNER_TEMP/final-package/files"; fi
+            if [[ "$rc" -eq 0 ]]; then
+              candidate_tree="$(python3 - "$effect_package/manifest.json" <<'PY'
+          import json, sys
+          with open(sys.argv[1], encoding='utf-8') as handle:
+              print(json.load(handle)['candidate_tree'])
+          PY
+          )"
+              test "$candidate_tree" = "$(git rev-parse 'HEAD^{tree}')"
+              echo "LAS_VERIFIED_EFFECT_STAGE2_CANDIDATE_TREE=$candidate_tree"
+            fi
+          fi
+          package="$RUNNER_TEMP/final-package"; tarball="$RUNNER_TEMP/effect-stage2.tar.gz"; tar -C "$package" -czf "$tarball" .
+          cert_der="$RUNNER_TEMP/bridge-cert.der"; cert_pem="$RUNNER_TEMP/bridge-cert.pem"
+          printf '%s' "$BRIDGE_CERT_DER_B64" | base64 -d >"$cert_der"; openssl x509 -inform DER -in "$cert_der" -out "$cert_pem"
+          ciphertext="$RUNNER_TEMP/opaque-effect-stage2.p7m"
+          openssl cms -encrypt -binary -aes256 -outform DER -recip "$cert_pem" -in "$tarball" -out "$ciphertext"
+          rm -rf "$package" "$tarball" "$cert_der" "$cert_pem" "$baseline_package" "$baseline_log"
+          echo "LAS_EFFECT_STAGE2_CIPHERTEXT_SHA256=$(sha256sum "$ciphertext" | awk '{print $1}')"
+          if [[ "$rc" -eq 0 ]]; then echo "LAS_EFFECT_STAGE2_RESULT=PASS"; else echo "LAS_EFFECT_STAGE2_RESULT=FAIL"; fi
+          exit "$rc"
+
+      - name: Upload encrypted diagnostics or candidate only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: opaque-effect-stage2-from-verified-baseline-20261017
+          path: ${{ runner.temp }}/opaque-effect-stage2.p7m
+          if-no-files-found: error
+          retention-days: 1
