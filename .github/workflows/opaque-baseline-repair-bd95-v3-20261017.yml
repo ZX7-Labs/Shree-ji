@@ -1,4 +1,4 @@
-name: Opaque baseline repair bd95 v3 20261017
+name: Opaque baseline repair bd95 v3 tree attestation 20261017
 
 on:
   push:
@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: opaque-baseline-repair-bd95-v3-20261017
+  group: opaque-baseline-repair-bd95-v3-tree-attest-20261017
   cancel-in-progress: false
 
 env:
@@ -20,10 +20,9 @@ env:
   EXPECTED_PRIVATE_SNAPSHOT_PROOF: bd4d73399dc34da2586900c270f6b33f2a1049e934472301f5546ad9973cc49e
   EXPECTED_PRIVATE_TREE_PROOF: 93bcdc3d05cc578589d0600beb22d21dda366b5cd9fd81cc31f4f487d9e35981
   STAGE_HARNESS_BLOB: 31f2cf45cb2879e7e3527c411f93a17daa86f311
-  BRIDGE_CERT_DER_B64: MIIFRTCCAy2gAwIBAgIUbf8Af+JSdaKNeFxcDDAXDjF6w1cwDQYJKoZIhvcNAQELBQAwMjEwMC4GA1UEAwwnTEFTIEVwaGVtZXJhbCBDYW5kaWRhdGUgQnJpZGdlIDIwMjYxMDE3MB4XDTI2MTAxNjIxMzAzN1oXDTI2MTAxODIxMzAzN1owMjEwMC4GA1UEAwwnTEFTIEVwaGVtZXJhbCBDYW5kaWRhdGUgQnJpZGdlIDIwMjYxMDE3MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAoAoX0iFO910aPP7lR22/nnRN3gmrzLwNWIOUcZEAnMF52niiOegaSrlnQmmlDNAdIuaDaGmFO1JQ95S3GNTv+u7HOdjki3n9+POiD4lVksh5jr0tLXaK1Zvtliu0NAXvee/Xx1RrDmAEPNZYPMoVCra7PePDYQhqL1uclcxCYbWEHX+Kz+doisNrsM2SMo+UaqYOTXQtALY98eQTsTGX/ea8ta5AFbUhHc4pti99m+I1Ncnbp4720B5C1ZJlRa8Ri/npEWfXnH9D6E1s73yTTdngKGn3mZGzdyNrdOcqphTXJpy4Max+Np18S1lPQRY6aBvSCJ3D8DpT8ucanVoHeGIK+q4ABFW+tDqClK7BaZgxlUtL/fdqmjr2CfvqST14uZ2DNZEwSW8KlOGxKPCzcc47X6TzNd++Eo299WEPQ/5J8vUa8fIOUXJ4m1i+CojlckcrpErW+HXN+kS22r28ovYBX6Uh94wc6nBfg1QlZRlnkVJQ2uAX59QcAibjU0g9l/DdnO2sOOkumBS9RoRQU4GUkJRir/fHGNWhpsT2SBYIifiCZEmPY0+O/S99Y3SJQ0cvu4HlYfl3VKwwwS2CH9+X5PzBEjaKWU2ETnnCHoxyVx94s8ff8KlA2CSUGPb+CtuFhh4pu6rFSsUVo4meUcHr563SjOGOrXsA+RQrmXkCAwEAAaNTMFEwHQYDVR0OBBYEFKQ0piYI3GslAoskNmA+X7RJrNoqMB8GA1UdIwQYMBaAFKQ0piYI3GslAoskNmA+X7RJrNoqMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggIBAHCeH6LepS8Y5rHV+Jye2EjmaiI+Tywj9o+rC71nkhHR2MPSj1ZdTmdn0Mp5VYfr77FuLAqyr6j2lJOngqd34qdgFjB4MWwj3bh/LTU9Om/DcCKFopg+IE7lAU+dpZrHNdjRQh7cm+qQVffcdJA2yn2/RUSbmbWoxvIYVBUiHTwXJpPd3ToH5CmUa9D9xCqI7C1rqHFvJe6r3PKSSPyg8mW67aJs/L2iYD7zrwoo5zDeTlL5/iaeKsErWsQBanTTqI8JrO3S9hjWZapJUTM0GO78/GsErJKnnmO1SlVZn24CWE0908YSDoEAE7gOKoIDz3PWnxJohfregMBiuDu8LZcF+VV3CbV21K47zJj4c1emSSWExShiDT4yg6LVX4V1MGAcqbmsSVcC2UWHaq1pizps8UVgNtBLhHl2WF0rvbW0GKmh0Xp26IXiY0u+OgTmycYZ9MMNm7Qt0F4HgXHvmvwGnHUDeTHMktCGCj15yjC3aCeJL0WQt5xVG9IDretl9wWyMvBLGonBtbs1tG1IQyK0FYuiaANuvHOS5jxvlQHbHJ10W8dU/EA1hGtP7QBVglJMWApDpcYn06qktwUjEz4C3ZPTIUqVhSrku24jq4OGnUHvVD7Or96f5ZL7Toq11mDxXyJdA9dBMx8mxj8nuDJZY8DSIo8cR3D4BPcShjDj
 
 jobs:
-  verify:
+  attest:
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     steps:
@@ -61,7 +60,7 @@ jobs:
           chmod 0700 "$RUNNER_TEMP/private-baseline-repair-v3.sh"
           test -z "$(git status --porcelain --untracked-files=all)"
           printf 'WORK_ROOT=%s\nBASE_SHA=%s\n' "$root" "$actual" >> "$GITHUB_ENV"
-          echo "LAS_BASELINE_REPAIR_V3_BASE_RECOVERY=PASS"
+          echo "LAS_TREE_ATTEST_BASE_RECOVERY=PASS"
 
       - name: Install exact build toolchains
         shell: bash
@@ -75,7 +74,7 @@ jobs:
           mkdir -p "$prefix"; unzip -q "$archive" -d "$prefix"; export PATH="$prefix/bin:$PATH"; echo "$prefix/bin" >> "$GITHUB_PATH"
           alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null
           workspace="$RUNNER_TEMP/alr-work"; mkdir -p "$workspace"; cd "$workspace"
-          alr -n init --in-place --no-skel --lib baseline_repair_bd95_v3 >/dev/null
+          alr -n init --in-place --no-skel --lib baseline_repair_tree_attest >/dev/null
           alr_path="$(command -v alr)"; wrapper="$RUNNER_TEMP/gprbuild-via-alire"
           cat > "$wrapper" <<EOF
           #!/usr/bin/env bash
@@ -84,35 +83,32 @@ jobs:
           exec "$alr_path" exec -- gprbuild "\$@"
           EOF
           chmod 0755 "$wrapper"; printf 'GPRBUILD=%s\n' "$wrapper" >> "$GITHUB_ENV"
-          echo "LAS_BASELINE_REPAIR_V3_TOOLCHAINS=PASS"
+          echo "LAS_TREE_ATTEST_TOOLCHAINS=PASS"
 
-      - name: Execute fail-closed private repair candidate and encrypt output
+      - name: Reproduce verified candidate and attest tree hash only
         shell: bash
         env:
           RUSTFLAGS: -Dwarnings
         run: |
           set -euo pipefail
-          package="$RUNNER_TEMP/package"; log="$RUNNER_TEMP/private-repair-v3.log"; mkdir -p "$package"; cd "$WORK_ROOT"
+          package="$RUNNER_TEMP/package"; log="$RUNNER_TEMP/private-attest.log"; mkdir -p "$package"; cd "$WORK_ROOT"
           set +e
           LAS_BASELINE_REPAIR_BASE_SHA="$BASE_SHA" LAS_BASELINE_REPAIR_PACKAGE_DIR="$package" LAS_BASELINE_REPAIR_EXPECTED_BRANCH=verify-target bash "$RUNNER_TEMP/private-baseline-repair-v3.sh" >"$log" 2>&1
           rc=$?
           set -e
-          cp "$log" "$package/verification.log"
-          tarball="$RUNNER_TEMP/private-repair-v3.tar.gz"; tar -C "$package" -czf "$tarball" .
-          cert_der="$RUNNER_TEMP/bridge-cert.der"; cert_pem="$RUNNER_TEMP/bridge-cert.pem"
-          printf '%s' "$BRIDGE_CERT_DER_B64" | base64 -d >"$cert_der"; openssl x509 -inform DER -in "$cert_der" -out "$cert_pem"
-          ciphertext="$RUNNER_TEMP/opaque-baseline-repair-bd95-v3.p7m"
-          openssl cms -encrypt -binary -aes256 -outform DER -recip "$cert_pem" -in "$tarball" -out "$ciphertext"
-          rm -rf "$package" "$tarball" "$cert_der" "$cert_pem" "$log"
-          echo "LAS_BASELINE_REPAIR_V3_CIPHERTEXT_SHA256=$(sha256sum "$ciphertext" | awk '{print $1}')"
-          if [[ "$rc" -eq 0 ]]; then echo "LAS_BASELINE_REPAIR_V3_RUN_RESULT=PASS"; else echo "LAS_BASELINE_REPAIR_V3_RUN_RESULT=FAIL"; fi
-          exit "$rc"
-
-      - name: Upload encrypted diagnostics only
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: opaque-baseline-repair-bd95-v3-20261017
-          path: ${{ runner.temp }}/opaque-baseline-repair-bd95-v3.p7m
-          if-no-files-found: error
-          retention-days: 1
+          if [[ "$rc" -ne 0 ]]; then
+            rm -rf "$package" "$log"
+            echo "LAS_TREE_ATTEST_RESULT=FAIL"
+            exit "$rc"
+          fi
+          candidate_tree="$(git rev-parse 'HEAD^{tree}')"
+          manifest_tree="$(python3 - "$package/manifest.json" <<'PY'
+          import json, sys
+          with open(sys.argv[1], encoding='utf-8') as handle:
+              print(json.load(handle)['candidate_tree'])
+          PY
+          )"
+          test "$candidate_tree" = "$manifest_tree"
+          echo "LAS_VERIFIED_BASELINE_CANDIDATE_TREE=$candidate_tree"
+          echo "LAS_TREE_ATTEST_RESULT=PASS"
+          rm -rf "$package" "$log"
