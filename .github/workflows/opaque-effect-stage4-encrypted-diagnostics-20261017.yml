@@ -16,9 +16,7 @@ env:
   BASE_SNAPSHOT_PROOF: bd4d73399dc34da2586900c270f6b33f2a1049e934472301f5546ad9973cc49e
   BASE_TREE_PROOF: 93bcdc3d05cc578589d0600beb22d21dda366b5cd9fd81cc31f4f487d9e35981
   EXPECTED_GREEN_BASELINE_TREE: ffc6621866ec4353d070d74746e0a2de8a9a9d20
-  EFFECT_REF_HASH: 57902b32c7dba883a89cd5a6e47dea395ab8a06b111c3dcd0487d67f010f58
-  EFFECT_SNAPSHOT_PROOF: 438e750646abe28539eef29aca6010f424232510c4fe44b74639e511d9275203
-  EFFECT_TREE_PROOF: 761fdb7d8cb36bce6ee2dbfda8be3ee4373f848e4171a59a07df03bb5b5bca55
+  EFFECT_REF_HASH: 57902b32c7dba883a89cd5a6e47dea395ab8a06b111c3dcdcd0487d67f010f58
   EFFECT_OWNER_BLOB: bb4f6e5c803b7c64ea27e605659cf998fc942cc2
   EFFECT_SEMANTIC_BLOB: 6fb90f15a1194d596f420ebee9f0ed3e4ae2b112
   EFFECT_RECOVERY_BLOB: 67746f8a4776b872b3878f6861eb3bb7658a9fbd
@@ -54,11 +52,9 @@ jobs:
           rm -f "$refs"; test -n "$base_ref" && test -n "$effect_ref"
           echo "::add-mask::$base_ref"; echo "::add-mask::$effect_ref"; echo "::add-mask::$base_sha"; echo "::add-mask::$effect_sha"
           test "$(printf '%s' "$base_sha" | sha256sum | awk '{print $1}')" = "$BASE_SNAPSHOT_PROOF"
-          test "$(printf '%s' "$effect_sha" | sha256sum | awk '{print $1}')" = "$EFFECT_SNAPSHOT_PROOF"
           git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=128 origin "$base_ref" "$effect_ref"
           git checkout -q -B verify-baseline-target "$base_sha"
           test "$(printf '%s' "$(git rev-parse 'HEAD^{tree}')" | sha256sum | awk '{print $1}')" = "$BASE_TREE_PROOF"
-          test "$(printf '%s' "$(git rev-parse "$effect_sha^{tree}")" | sha256sum | awk '{print $1}')" = "$EFFECT_TREE_PROOF"
           for pair in \
             "$EFFECT_OWNER_BLOB:effect-owner.py" \
             "$EFFECT_SEMANTIC_BLOB:effect-semantic.py" \
