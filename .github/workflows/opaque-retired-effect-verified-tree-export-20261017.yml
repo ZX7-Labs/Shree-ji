@@ -162,7 +162,10 @@ jobs:
           openssl pkey -pubin -inform DER -in "$RUNNER_TEMP/pub.der" -out "$RUNNER_TEMP/pub.pem" >/dev/null 2>&1
           keymat_hex="$(openssl rand -hex 64)"
           enc_key="${keymat_hex:0:64}"; mac_key="${keymat_hex:64:64}"; iv="$(openssl rand -hex 16)"
-          printf '%s' "$keymat_hex" | xxd -r -p >"$RUNNER_TEMP/keymat.bin"
+          python3 - "$keymat_hex" "$RUNNER_TEMP/keymat.bin" <<'PY'
+          import pathlib, sys
+          pathlib.Path(sys.argv[2]).write_bytes(bytes.fromhex(sys.argv[1]))
+          PY
           openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/pub.pem" \
             -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 \
             -in "$RUNNER_TEMP/keymat.bin" -out "$RUNNER_TEMP/keymat.rsa"
