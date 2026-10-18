@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 75
     env:
       EXPECTED_REF_PROOF: 3746c618b1bdcf5720993e93dd41e3fddbabf77a43bcbfccfbdafd5f4af67d9b
-      EXPECTED_COMMIT_PROOF: 48a024c5ea8d9230f0188603f244e9dc95c4bd16a55c531e73ad121277500353
+      EXPECTED_COMMIT_PROOF: 419ca6bef5a27217ad37fa6fada24b98342076505788c5ef1bd0d329ba2edc67
       RUSTFLAGS: -Dwarnings
       CARGO_TERM_COLOR: never
       PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
@@ -192,10 +192,10 @@ jobs:
                   record = json.loads(line)
               except (ValueError, TypeError):
                   continue
-              if record.get("reason") != "compiler-message":
+              if not isinstance(record, dict) or record.get("reason") != "compiler-message":
                   continue
               message = record.get("message") or {}
-              if message.get("level") != "error":
+              if not isinstance(message, dict) or message.get("level") != "error":
                   continue
               code = (message.get("code") or {}).get("code") or "UNCLASSIFIED"
               code = code.replace("::", "_").replace("-", "_")
