@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 75
     env:
       EXPECTED_REF_PROOF: e68bd23d60258be9ea6f2a679c7bfb74d6a7d323c99ddd2c5e07012fb410294c
-      EXPECTED_COMMIT_PROOF: d0821da4f25ecf1d0846d8de449e6cfc73499405f196d458ab47604084465334
+      EXPECTED_COMMIT_PROOF: d741f968b02d431b134231bddf1331e64b1202974a6ceb55d01727c87edbb16d
       RUSTFLAGS: -Dwarnings
       CARGO_TERM_COLOR: never
       PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
@@ -200,7 +200,13 @@ jobs:
                               if v.get("is_primary")), None)
               file_name = (primary or {}).get("file_name", "")
               bucket = int((primary or {}).get("line_start") or 0) // 16
-              emitted.add((indices.get(file_name, 0), code, bucket))
+              normalized = file_name.replace("\\\\", "/").lstrip("./")
+              owner = indices.get(normalized, 0)
+              if owner == 0:
+                  matches = [i for p, i in indices.items()
+                             if normalized.endswith("/" + p)]
+                  owner = matches[0] if len(matches) == 1 else 0
+              emitted.add((owner, code, bucket))
           for ordinal, code, bucket in sorted(emitted)[:100]:
               print(f"LAS_RUST_DIAG_{label}_OWNER_ORDINAL={ordinal};CODE={code};BUCKET16={bucket}")
           PY
