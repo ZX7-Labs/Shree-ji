@@ -126,6 +126,11 @@ jobs:
         run: |
           set -euo pipefail
           set +x
+          if [ "${PRIVATE_TOKEN+x}" ] || [ "${PRIVATE_REPOSITORY+x}" ]; then
+            echo 'LAS_TLC_EXEC_SECRET_SCOPE=VIOLATED'
+            exit 95
+          fi
+          echo 'LAS_TLC_EXEC_SECRET_SCOPE=ISOLATED'
           cd "$RUNNER_TEMP/private-archive-frontier-formal"
           source_file="$(cat "$RUNNER_TEMP/modulepath")"
           positive_file="$(cat "$RUNNER_TEMP/positivepath")"
