@@ -3,7 +3,7 @@ name: Exact private retired-evidence Rust diagnostic (quarantined)
 on:
   push:
     branches:
-      - verify/retired-receipt-revocation-fence-20261018
+      - verify/retired-reclaim-current-verifier-fence-20261018
     paths:
       - .github/workflows/private-retired-evidence-rust-diagnostic.yml
 
@@ -19,8 +19,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     env:
-      EXPECTED_REF_PROOF: 3cb2cd26fe33d170e38bb7baefc8e29f52c421e5afe9cc0c7a7939a672b119ab
-      EXPECTED_COMMIT_PROOF: c540d31825bbf5d5433f7a0af75e47406110f3573fb4aa72dbe486268829fdd4
+      EXPECTED_REF_PROOF: f1f56043250299b1e246ccc1740e1dd2d967ee1b50749a13d4fb37dea18c80ca
+      EXPECTED_COMMIT_PROOF: 32430a283e05fab75d575238706e7c09e09079517b0761829690cd21c73b5a7e
       RUSTFLAGS: -Dwarnings
       CARGO_TERM_COLOR: never
       PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
