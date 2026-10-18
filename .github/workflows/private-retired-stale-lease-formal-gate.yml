@@ -19,8 +19,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
-      PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
-      PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
       EXACT_REF_SHA256: de8517c0ff90a4666f887679cd6b0c77bb50ee4e29bcb98cf134904632fb80fb
       EXACT_COMMIT_SHA256: aa066eff095e9e4c3fa6025ab5b3b17994b0c2aa82b89f37c0a9c2ace51f76fd
       MODULE_PATH_SHA256: 71201baa4c7970fb2bbe8c8756355cbba326bd032f6072be536bcbbbc614a433
@@ -29,6 +27,11 @@ jobs:
       STALE_NEGATIVE_CONFIG_SHA256: c3f89bed50aa4c19e2d03669348cec7d2f49f0489c50ff11622a77b3faa558ac
     steps:
       - name: Bind exact private source and source-free model identities
+        # Only this checkout step receives the private read token; neither
+        # pinned binary download nor private TLA parser/model execution does.
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
