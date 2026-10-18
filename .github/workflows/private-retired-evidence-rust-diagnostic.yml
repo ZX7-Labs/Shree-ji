@@ -109,6 +109,7 @@ jobs:
           set +x
           cd "$RUNNER_TEMP/las-private"
           gate_failure=0
+          git ls-files -- '*.rs' | LC_ALL=C sort > "$RUNNER_TEMP/private-owner-ordinals"
           run_private_gate() {
             local label="$1"
             shift
@@ -126,19 +127,47 @@ jobs:
               echo "LAS_RUST_DIAG_${label}_RC=$rc"
               echo "LAS_RUST_DIAG_${label}_ERROR_COUNT=$error_count"
               echo "LAS_RUST_DIAG_${label}_LOG_SHA256=$log_proof"
-              # Public surface is restricted to compiler diagnostic *identifiers*.
-              # Never print the line, private filename, symbol or source excerpt.
-              sed -n 's/^error\(\[E[0-9][0-9][0-9][0-9]\]\).*/\1/p' "$output" | sort -u |                 while read -r code; do
-                  echo "LAS_RUST_DIAG_${label}_CODE=$code"
-                done
+              # The public surface contains only exact deterministic owner ordinals
+              # and compiler diagnostic identifier, never a private source path,
+              # source fragment, symbol, compiler message, or raw diagnostic.
+              python3 - "$output" "$RUNNER_TEMP/private-owner-ordinals" "$label" <<'PY'
+              import json, pathlib, re, sys
+              log_path, list_path, label = sys.argv[1:]
+              owners = pathlib.Path(list_path).read_text().splitlines()
+              indices = {path: index for index, path in enumerate(owners, 1)}
+              emitted = set()
+              for line in pathlib.Path(log_path).read_text(errors="replace").splitlines():
+                  if line.startswith("Diff in "):
+                      match = re.search(r"/las-private/([^:]+):", line)
+                      if match and match.group(1) in indices:
+                          emitted.add((indices[match.group(1)], "RUSTFMT", 0))
+                  try:
+                      record = json.loads(line)
+                  except (ValueError, TypeError):
+                      continue
+                  if record.get("reason") != "compiler-message":
+                      continue
+                  message = record.get("message") or {}
+                  if message.get("level") != "error":
+                      continue
+                  code = (message.get("code") or {}).get("code") or "UNCLASSIFIED"
+                  if not re.fullmatch(r"[A-Za-z_0-9]{1,80}", code):
+                      code = "UNCLASSIFIED"
+                  primary = next((v for v in message.get("spans", [])
+                                  if v.get("is_primary")), None)
+                  file_name = (primary or {}).get("file_name", "")
+                  emitted.add((indices.get(file_name, 0), code, 0))
+              for ordinal, code, _ in sorted(emitted)[:80]:
+                  print(f"LAS_RUST_DIAG_{label}_OWNER_ORDINAL={ordinal};CODE={code}")
+              PY
             fi
           }
 
           run_private_gate FORMAT cargo +1.98.1 fmt --all -- --check
-          run_private_gate CHECK_DEFAULT cargo +1.98.1 check --locked --all-targets
-          run_private_gate CHECK_LINUX cargo +1.98.1 check --locked --features linux-peer-credentials --all-targets
-          run_private_gate CHECK_ALL_FEATURES cargo +1.98.1 check --locked --all-features --all-targets
-          run_private_gate CLIPPY_DEFAULT cargo +1.98.1 clippy --locked --all-targets -- -D warnings
+          run_private_gate CHECK_DEFAULT cargo +1.98.1 check --message-format=json --locked --all-targets
+          run_private_gate CHECK_LINUX cargo +1.98.1 check --message-format=json --locked --features linux-peer-credentials --all-targets
+          run_private_gate CHECK_ALL_FEATURES cargo +1.98.1 check --message-format=json --locked --all-features --all-targets
+          run_private_gate CLIPPY_DEFAULT cargo +1.98.1 clippy --message-format=json --locked --all-targets -- -D warnings
           run_private_gate TEST_RETIRED rustup run 1.98.1 cargo test --locked --lib retired_archive_effect_ -- --test-threads=1
 
           if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
