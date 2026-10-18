@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 75
     env:
       EXPECTED_REF_PROOF: e68bd23d60258be9ea6f2a679c7bfb74d6a7d323c99ddd2c5e07012fb410294c
-      EXPECTED_COMMIT_PROOF: 36447d4b1f0be51fabcd8837647caa36079cdd64ac9491d54a279e441102cbc5
+      EXPECTED_COMMIT_PROOF: 3c8f08eb74f5ceb30e2d8c94ad009f0c01d17a4827720a3e86c420fa25e7e254
       RUSTFLAGS: -Dwarnings
       CARGO_TERM_COLOR: never
       PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
@@ -102,6 +102,37 @@ jobs:
           fi
           echo 'LAS_RUST_TOOLCHAIN=PINNED_1_98_1'
 
+      - name: Install exact pinned Ada toolchain for concrete Root FFI tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          ALR_ZIP="$RUNNER_TEMP/alr-2.1.1.zip"
+          ALR_PREFIX="$RUNNER_TEMP/alire"
+          if ! curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --output "$ALR_ZIP" "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip" >"$RUNNER_TEMP/alire-fetch.log" 2>&1; then
+            echo 'LAS_PINNED_ADA_TOOLCHAIN=DOWNLOAD_FAILED'
+            exit 78
+          fi
+          echo '09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  '"$ALR_ZIP" | sha256sum --check --strict >/dev/null
+          mkdir -p "$ALR_PREFIX"
+          unzip -q "$ALR_ZIP" -d "$ALR_PREFIX"
+          if ! "$ALR_PREFIX/bin/alr" -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >"$RUNNER_TEMP/alire-toolchain.log" 2>&1; then
+            echo 'LAS_PINNED_ADA_TOOLCHAIN=INSTALL_FAILED'
+            exit 79
+          fi
+          ALR_WS="$RUNNER_TEMP/alire-workspace"
+          mkdir -p "$ALR_WS"
+          if ! (cd "$ALR_WS" && "$ALR_PREFIX/bin/alr" -n init --in-place --no-skel --lib las_verify_toolchain) >"$RUNNER_TEMP/alire-init.log" 2>&1; then
+            echo 'LAS_PINNED_ADA_TOOLCHAIN=WORKSPACE_FAILED'
+            exit 80
+          fi
+          WRAP="$RUNNER_TEMP/gprbuild-via-alire"
+          printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'cd "$LAS_ALIRE_WS"' 'exec "$LAS_ALR_BIN" exec -- gprbuild "$@"' >"$WRAP"
+          chmod 0755 "$WRAP"
+          echo "LAS_ALIRE_WS=$ALR_WS" >>"$GITHUB_ENV"
+          echo "LAS_ALR_BIN=$ALR_PREFIX/bin/alr" >>"$GITHUB_ENV"
+          echo "GPRBUILD=$WRAP" >>"$GITHUB_ENV"
+          echo 'LAS_PINNED_ADA_TOOLCHAIN=GNAT_16_1_GPRBUILD_26_0_1'
+
       - name: Exercise complete source Rust diagnostics without publishing private logs
         shell: bash
         run: |
@@ -115,7 +146,19 @@ jobs:
             shift
             local output="$RUNNER_TEMP/private-rust-$label.log"
             if "$@" > "$output" 2>&1; then
-              echo "LAS_RUST_DIAG_${label}=PASS"
+              if [ "$label" = "TEST_RETIRED_ALL_FEATURES" ]; then
+                local cases
+                cases="$(sed -nE 's/^running ([0-9]+) tests?$/\1/p' "$output" | tail -n 1)"
+                if [ -z "$cases" ] || [ "$cases" -le 0 ]; then
+                  echo "LAS_RUST_DIAG_${label}=ZERO_TESTS_NOT_PASS"
+                  gate_failure=1
+                else
+                  echo "LAS_RUST_DIAG_${label}_COUNT=$cases"
+                  echo "LAS_RUST_DIAG_${label}=PASS"
+                fi
+              else
+                echo "LAS_RUST_DIAG_${label}=PASS"
+              fi
             else
               local rc="$?"
               gate_failure=1
@@ -168,7 +211,7 @@ jobs:
           run_private_gate CHECK_LINUX cargo +1.98.1 check --message-format=json --locked --features linux-peer-credentials --all-targets
           run_private_gate CHECK_ALL_FEATURES cargo +1.98.1 check --message-format=json --locked --all-features --all-targets
           run_private_gate CLIPPY_DEFAULT cargo +1.98.1 clippy --message-format=json --locked --all-targets -- -D warnings
-          run_private_gate TEST_RETIRED rustup run 1.98.1 cargo test --locked --lib retired_archive_effect_ -- --test-threads=1
+          run_private_gate TEST_RETIRED_ALL_FEATURES cargo +1.98.1 test --locked --all-features --lib retired_archive_effect_ -- --test-threads=1
 
           if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
             echo 'LAS_RUST_DIAG_TREE=CHANGED'
