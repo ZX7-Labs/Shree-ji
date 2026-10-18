@@ -91,6 +91,62 @@ jobs:
           echo 'LAS_PRIVATE_EXACT_REVISION=BOUND'
           echo 'LAS_PUBLIC_RUNNER_SOURCE_POLICY=EPHEMERAL_READ_ONLY'
 
+      - name: Verify complete private TLC-negative classifications without executing source
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          test -z "${PRIVATE_TOKEN+x}"
+          test -z "${PRIVATE_REPOSITORY+x}"
+          cd "$RUNNER_TEMP/las-private"
+          python3 - <<'PY'
+          import ast
+          import hashlib
+          import pathlib
+          import sys
+
+          expected_path_hash = "eda997b8a2ccb18cfbd02765b607d3bc2f792a4a1fdfca1e2972f62468e45e66"
+          matches = [
+              p for p in pathlib.Path(".").rglob("*.sh")
+              if hashlib.sha256(p.as_posix().encode()).hexdigest() == expected_path_hash
+          ]
+          # The private path is never written to a public log.
+          if len(matches) != 1:
+              print("LAS_CANONICAL_MAP_SOURCE=INVALID")
+              sys.exit(1)
+          script = matches[0].read_text()
+          marker = 'python3 - "$ROOT" > "$TLC_MAP" <<' + "'PY'\n"
+          if script.count(marker) != 1:
+              print("LAS_CANONICAL_MAP_EMBED=INVALID")
+              sys.exit(1)
+          start = script.index(marker) + len(marker)
+          end = script.find("\nPY\n", start)
+          if end < 0:
+              print("LAS_CANONICAL_MAP_END=INVALID")
+              sys.exit(1)
+          tree = ast.parse(script[start:end])
+          declarations = [
+              node.value for node in tree.body
+              if isinstance(node, ast.Assign)
+              and any(isinstance(t, ast.Name) and t.id == "NEGATIVE_EXPECTATIONS"
+                      for t in node.targets)
+          ]
+          if len(declarations) != 1:
+              print("LAS_CANONICAL_NEGATIVE_MANIFEST=INVALID")
+              sys.exit(1)
+          declared = set(ast.literal_eval(declarations[0]))
+          cfgs = sorted(pathlib.Path("spec").rglob("*.cfg"))
+          actual = {
+              p.as_posix() for p in cfgs if p.name.endswith("Negative.cfg")
+          }
+          if len(cfgs) != 205 or len(actual) != 12 or actual != declared:
+              print("LAS_CANONICAL_NEGATIVE_MANIFEST=MISMATCH")
+              sys.exit(1)
+          print("LAS_CANONICAL_MODEL_PROFILE_COUNT=205")
+          print("LAS_CANONICAL_NEGATIVE_COUNT=12")
+          print("LAS_CANONICAL_NEGATIVE_MANIFEST=PASS")
+          PY
+
       - name: Install pinned Rust diagnostic toolchain
         shell: bash
         run: |
