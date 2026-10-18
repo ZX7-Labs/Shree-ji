@@ -3,7 +3,7 @@ name: Exact private archive frontier stale-lease and unsafe release negative con
 on:
   push:
     branches:
-      - verify/retired-frontier-stale-lease-mutation-20261018
+      - verify/retired-archive-frontier-nonforgeable-20261018
     paths:
       - .github/workflows/private-retired-stale-lease-formal-gate.yml
 
@@ -21,8 +21,8 @@ jobs:
     env:
       PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
       PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
-      EXACT_REF_SHA256: 6376da37b6870d9c72b3f5df8b5de2f576df871e87762d08bc8c702c28bee6ea
-      EXACT_COMMIT_SHA256: 4e1fd5b69a9a9c4201d6837203a9b2942c9432f989ae3002f489a6d8c944dd29
+      EXACT_REF_SHA256: 9b88dc648e0d416e95b9dd505dc7071a546275729d40873477826f49259bc5ab
+      EXACT_COMMIT_SHA256: 90a9d6e05994589d9b68ab111b2d7891c4b048bce5f5b19d39a31e6134c92796
       MODULE_PATH_SHA256: 71201baa4c7970fb2bbe8c8756355cbba326bd032f6072be536bcbbbc614a433
       POSITIVE_CONFIG_SHA256: ca0cf8bff49574d4e5fe9516bb48efa84f270b2dd81dc8cd96bc061a2bea6453
       NEGATIVE_CONFIG_SHA256: 534988471b4be93f2073979a1d6fb56f0dba41df428e23138e4925cf40a28f43
