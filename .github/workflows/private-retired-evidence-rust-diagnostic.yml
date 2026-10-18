@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 75
     env:
       EXPECTED_REF_PROOF: e68bd23d60258be9ea6f2a679c7bfb74d6a7d323c99ddd2c5e07012fb410294c
-      EXPECTED_COMMIT_PROOF: 9d94de86fd568c14c5cb5aeb7fd733bbe85d432a399bf6c165c7703da0d37291
+      EXPECTED_COMMIT_PROOF: 7e67092e70c0cc16333516d466ad5d22215755e4827d02e1e9c7e819e5c07739
       RUSTFLAGS: -Dwarnings
       CARGO_TERM_COLOR: never
       PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
@@ -185,9 +185,9 @@ jobs:
           emitted = set()
           for line in pathlib.Path(log_path).read_text(errors="replace").splitlines():
               if line.startswith("Diff in "):
-                  match = re.search(r"/las-private/([^:]+):", line)
+                  match = re.search(r"/las-private/([^:]+):([0-9]+):", line)
                   if match and match.group(1) in indices:
-                      emitted.add((indices[match.group(1)], "RUSTFMT", 0))
+                      emitted.add((indices[match.group(1)], "RUSTFMT", int(match.group(2)) // 16))
               try:
                   record = json.loads(line)
               except (ValueError, TypeError):
@@ -198,6 +198,7 @@ jobs:
               if message.get("level") != "error":
                   continue
               code = (message.get("code") or {}).get("code") or "UNCLASSIFIED"
+              code = code.replace("::", "_").replace("-", "_")
               if not re.fullmatch(r"[A-Za-z_0-9]{1,80}", code):
                   code = "UNCLASSIFIED"
               primary = next((v for v in message.get("spans", [])
@@ -222,8 +223,29 @@ jobs:
           run_private_gate CHECK_LINUX cargo +1.98.1 check --message-format=json --locked --features linux-peer-credentials --all-targets
           run_private_gate CHECK_ALL_FEATURES cargo +1.98.1 check --message-format=json --locked --all-features --all-targets
           run_private_gate CLIPPY_DEFAULT cargo +1.98.1 clippy --message-format=json --locked --all-targets -- -D warnings
+          # Production archival modules are behind the full Linux/Root feature set.
+          # Default-only Clippy is not sufficient to accept their lint safety.
+          run_private_gate CLIPPY_ALL_FEATURES cargo +1.98.1 clippy --message-format=json --locked --all-features --all-targets -- -D warnings
           # Strict, non-vacuous acceptance for all library and integration targets; no private target names are published.
           run_private_gate TEST_ALL_TARGETS_ALL_FEATURES cargo +1.98.1 test --message-format=json --locked --all-features --all-targets -- --test-threads=1
+          # If any full-target test fails, resolve its index from an exact private case list.
+          # Neither case IDs nor failure text may be printed to this public runner.
+          if grep -Eq "^test .+ \.\.\. FAILED$" "$RUNNER_TEMP/private-rust-TEST_ALL_TARGETS_ALL_FEATURES.log"; then
+            if env RUSTFLAGS= cargo +1.98.1 test --locked --all-features --all-targets -- --list > "$RUNNER_TEMP/private-all-case-list" 2>&1; then
+              python3 - "$RUNNER_TEMP/private-all-case-list" "$RUNNER_TEMP/private-rust-TEST_ALL_TARGETS_ALL_FEATURES.log" <<'PY'
+          import pathlib, re, sys
+          listed = [s[:-6] for s in pathlib.Path(sys.argv[1]).read_text(errors='replace').splitlines() if s.endswith(': test')]
+          failed = {m.group(1) for row in pathlib.Path(sys.argv[2]).read_text(errors='replace').splitlines() if (m := re.fullmatch(r'test (.+) \.\.\. FAILED', row))}
+          print(f'LAS_PRIVATE_ALL_CASE_CATALOG_COUNT={len(listed)}')
+          for ordinal, name in enumerate(listed, 1):
+              if name in failed:
+                  print(f'LAS_PRIVATE_ALL_FAILED_ORDINAL={ordinal}')
+          print(f'LAS_PRIVATE_ALL_FAILED_COUNT={len(failed)}')
+          PY
+            else
+              echo 'LAS_PRIVATE_ALL_CASE_CATALOG=FAILED'
+            fi
+          fi
           run_private_gate TEST_RETIRED_ALL_FEATURES cargo +1.98.1 test --message-format=json --locked --all-features --lib retired_archive_effect_ -- --test-threads=1
           # Independent diagnostic only: warning policy remains strict in every
           # acceptance gate. This executes behavioral tests even if inherited
@@ -258,6 +280,32 @@ jobs:
             echo 'LAS_WIRE_CASE_DISCOVERY=FAILED'
             gate_failure=1
           fi
+
+          for suite in retired_archive_protocol retired_archive_receipt; do
+            if [ "$suite" = retired_archive_protocol ]; then label=PROTO; else label=RECEIPT; fi
+            if env RUSTFLAGS= cargo +1.98.1 test --locked --all-features --lib "$suite" -- --list > "$RUNNER_TEMP/list-$label" 2>&1; then
+              mapfile -t chosen < <(sed -n 's/: test$//p' "$RUNNER_TEMP/list-$label")
+              echo "LAS_${label}_CASE_COUNT=${#chosen[@]}"
+              if [ "${#chosen[@]}" -eq 0 ] || [ "${#chosen[@]}" -gt 64 ]; then
+                echo "LAS_${label}_CASE_DISCOVERY=INVALID"
+                gate_failure=1
+              else
+                ordinal=0
+                for exact_id in "${chosen[@]}"; do
+                  ordinal=$((ordinal + 1))
+                  if env RUSTFLAGS= cargo +1.98.1 test --locked --all-features --lib "$exact_id" -- --exact --test-threads=1 > "$RUNNER_TEMP/case-$label-$ordinal" 2>&1; then
+                    echo "LAS_${label}_ORDINAL_$ordinal=PASS"
+                  else
+                    echo "LAS_${label}_ORDINAL_$ordinal=FAIL"
+                    gate_failure=1
+                  fi
+                done
+              fi
+            else
+              echo "LAS_${label}_CASE_DISCOVERY=FAILED"
+              gate_failure=1
+            fi
+          done
 
           if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
             echo 'LAS_RUST_DIAG_TREE=CHANGED'
