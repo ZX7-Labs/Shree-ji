@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 75
     env:
       EXPECTED_REF_PROOF: e68bd23d60258be9ea6f2a679c7bfb74d6a7d323c99ddd2c5e07012fb410294c
-      EXPECTED_COMMIT_PROOF: 5151def547235815ef11cdb24dc06c4f44dd257a4970fd53b311adaafa46b149
+      EXPECTED_COMMIT_PROOF: c2934b061d0e59bd8da5accce47b1eefdcf62e142e09ea3e3a7e56c8110e5325
       RUSTFLAGS: -Dwarnings
       CARGO_TERM_COLOR: never
       PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
@@ -146,7 +146,7 @@ jobs:
             shift
             local output="$RUNNER_TEMP/private-rust-$label.log"
             if "$@" > "$output" 2>&1; then
-              if [ "$label" = "TEST_RETIRED_ALL_FEATURES" ] || [ "$label" = "TEST_RETIRED_DIAGNOSTIC" ] || [ "$label" = "TEST_OWNER_BOUND_DIAGNOSTIC" ] || [ "$label" = "TEST_WIRE_VALIDATOR_DIAGNOSTIC" ]; then
+              if [ "$label" = "TEST_RETIRED_ALL_FEATURES" ] || [ "$label" = "TEST_RETIRED_DIAGNOSTIC" ] || [ "$label" = "TEST_OWNER_BOUND_DIAGNOSTIC" ] || [ "$label" = "TEST_WIRE_VALIDATOR_DIAGNOSTIC" ] || [ "$label" = "TEST_CROSS_OWNER_DIAGNOSTIC" ]; then
                 local cases
                 cases="$(sed -nE 's/^running ([0-9]+) tests?$/\1/p' "$output" | tail -n 1)"
                 if [ -z "$cases" ] || [ "$cases" -le 0 ]; then
@@ -154,7 +154,7 @@ jobs:
                   gate_failure=1
                 else
                   echo "LAS_RUST_DIAG_${label}_COUNT=$cases"
-                  if [ "$label" = "TEST_RETIRED_DIAGNOSTIC" ] || [ "$label" = "TEST_OWNER_BOUND_DIAGNOSTIC" ] || [ "$label" = "TEST_WIRE_VALIDATOR_DIAGNOSTIC" ]; then
+                  if [ "$label" = "TEST_RETIRED_DIAGNOSTIC" ] || [ "$label" = "TEST_OWNER_BOUND_DIAGNOSTIC" ] || [ "$label" = "TEST_WIRE_VALIDATOR_DIAGNOSTIC" ] || [ "$label" = "TEST_CROSS_OWNER_DIAGNOSTIC" ]; then
                     echo "LAS_RUST_DIAG_${label}=PASS_WITH_WARNINGS_NOT_ACCEPTANCE"
                   else
                     echo "LAS_RUST_DIAG_${label}=PASS"
@@ -229,6 +229,7 @@ jobs:
           run_private_gate TEST_RETIRED_DIAGNOSTIC env RUSTFLAGS= cargo +1.98.1 test --message-format=json --locked --all-features --lib retired_archive_effect_ -- --test-threads=1
           run_private_gate TEST_OWNER_BOUND_DIAGNOSTIC env RUSTFLAGS= cargo +1.98.1 test --message-format=json --locked --all-features --lib owner_bound_ -- --test-threads=1
           run_private_gate TEST_WIRE_VALIDATOR_DIAGNOSTIC env RUSTFLAGS= cargo +1.98.1 test --message-format=json --locked --all-features --lib retired_archive_validate -- --test-threads=1
+          run_private_gate TEST_CROSS_OWNER_DIAGNOSTIC env RUSTFLAGS= cargo +1.98.1 test --message-format=json --locked --all-features --lib retired_cross_owner_ -- --test-threads=1
           # Classify failing tests as numeric ordinals only. Private test names,
           # paths, stdout and source are never exposed on the public runner.
           if env RUSTFLAGS= cargo +1.98.1 test --locked --all-features --lib retired_archive_validate -- --list > "$RUNNER_TEMP/private-wire-list" 2>&1; then
