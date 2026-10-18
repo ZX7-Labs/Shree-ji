@@ -1,0 +1,111 @@
+name: Encrypted exact private Rustfmt export 20261018
+
+on:
+  push:
+    branches:
+      - verify/retired-evidence-rust-20261018
+    paths:
+      - .github/workflows/private-retired-evidence-format-encrypted-20261018.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: las-retired-formatter-encrypted-exact-20261018
+  cancel-in-progress: false
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      REF_PROOF: e68bd23d60258be9ea6f2a679c7bfb74d6a7d323c99ddd2c5e07012fb410294c
+      COMMIT_PROOF: 838380ad3c90ff371a712d15b5b48f28f93c4b2059687843d5e43cec036c4ad0
+      PRIVATE_REPO: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+      READ_ONLY_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+
+    steps:
+      - name: Checkout public certificate only
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Validate recipient certificate and exact private immutable source
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          test -n "$PRIVATE_REPO" && test -n "$READ_ONLY_TOKEN"
+          echo "::add-mask::$PRIVATE_REPO"
+          echo "::add-mask::$READ_ONLY_TOKEN"
+          cert="$GITHUB_WORKSPACE/.github/retired-evidence-format-recipient-20261018.pem"
+          openssl x509 -in "$cert" -noout >/dev/null
+          root="$RUNNER_TEMP/exact-private"
+          mkdir -p "$root"
+          cd "$root"
+          git init -q
+          git remote add origin "https://github.com/$PRIVATE_REPO.git"
+          auth="$(printf 'x-access-token:%s' "$READ_ONLY_TOKEN" | base64 -w0)"
+          refs="$RUNNER_TEMP/refs-private"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin > "$refs" 2>/dev/null
+          chosen_ref=""
+          chosen_sha=""
+          while read -r sha ref; do
+            fingerprint="$(printf %s "$ref" | sha256sum | cut -d' ' -f1)"
+            if [ "$fingerprint" = "$REF_PROOF" ]; then
+              test -z "$chosen_ref"
+              chosen_ref="$ref"
+              chosen_sha="$sha"
+            fi
+          done < "$refs"
+          rm -f "$refs"
+          test -n "$chosen_sha"
+          echo "::add-mask::$chosen_ref"
+          echo "::add-mask::$chosen_sha"
+          test "$(printf %s "$chosen_sha" | sha256sum | cut -d' ' -f1)" = "$COMMIT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --no-tags --depth=1 origin "$chosen_ref" >"$RUNNER_TEMP/fetch-private.log" 2>&1
+          git checkout -q --detach FETCH_HEAD
+          actual="$(git rev-parse HEAD)"
+          echo "::add-mask::$actual"
+          test "$actual" = "$chosen_sha"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo LAS_FORMAT_EXPORT_PRIVATE_IDENTITY=BOUND
+
+      - name: Generate deterministic Rustfmt archive and encrypt before artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          umask 077
+          cd "$RUNNER_TEMP/exact-private"
+          rustup toolchain install 1.98.1 --profile minimal >"$RUNNER_TEMP/toolchain.log" 2>&1
+          rustup component add --toolchain 1.98.1 rustfmt >>"$RUNNER_TEMP/toolchain.log" 2>&1
+          cargo +1.98.1 fmt --all >"$RUNNER_TEMP/format.log" 2>&1
+          cargo +1.98.1 fmt --all -- --check >>"$RUNNER_TEMP/format.log" 2>&1
+          git diff --check >"$RUNNER_TEMP/diff-check.log" 2>&1
+          git diff --name-only -z -- '*.rs' >"$RUNNER_TEMP/changed-paths0"
+          test -s "$RUNNER_TEMP/changed-paths0"
+          count="$(tr -cd '\0' < "$RUNNER_TEMP/changed-paths0" | wc -c)"
+          test "$count" -gt 0
+          tar --null -czf "$RUNNER_TEMP/private-formatted.tgz" -T "$RUNNER_TEMP/changed-paths0"
+          test -s "$RUNNER_TEMP/private-formatted.tgz"
+          test -f "$GITHUB_WORKSPACE/.github/retired-evidence-format-recipient-20261018.pem"
+          openssl cms -encrypt -binary -aes-256-gcm -outform DER \
+            -in "$RUNNER_TEMP/private-formatted.tgz" \
+            -out "$RUNNER_TEMP/private-formatted.cms" \
+            "$GITHUB_WORKSPACE/.github/retired-evidence-format-recipient-20261018.pem"
+          test -s "$RUNNER_TEMP/private-formatted.cms"
+          echo "LAS_FORMAT_EXPORT_CHANGED_COUNT=$count"
+          echo "LAS_FORMAT_EXPORT_CIPHERTEXT_SHA256=$(sha256sum "$RUNNER_TEMP/private-formatted.cms" | cut -d' ' -f1)"
+          echo LAS_FORMAT_EXPORT_RESULT=ENCRYPTED_ONLY
+          rm -f "$RUNNER_TEMP/private-formatted.tgz" "$RUNNER_TEMP/changed-paths0"
+          test -z "$(git diff --name-only -- ':!*.rs')"
+
+      - name: Upload ciphertext only with one-day retention
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: retired-evidence-rustfmt-20261018-ciphertext-only
+          path: ${{ runner.temp }}/private-formatted.cms
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 0
