@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     env:
-      EXPECTED_REF_PROOF: d9c82ea17412094c446fe6a2ec30f06a2fd2dcd2e799182128b3df1263513ca3
+      EXPECTED_REF_PROOF: 3746c618b1bdcf5720993e93dd41e3fddbabf77a43bcbfccfbdafd5f4af67d9b
       EXPECTED_COMMIT_PROOF: 48a024c5ea8d9230f0188603f244e9dc95c4bd16a55c531e73ad121277500353
       RUSTFLAGS: -Dwarnings
       CARGO_TERM_COLOR: never
