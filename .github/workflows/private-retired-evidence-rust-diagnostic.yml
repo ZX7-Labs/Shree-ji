@@ -263,6 +263,32 @@ jobs:
             gate_failure=1
           fi
 
+          for suite in retired_archive_protocol retired_archive_receipt; do
+            if [ "$suite" = retired_archive_protocol ]; then label=PROTO; else label=RECEIPT; fi
+            if env RUSTFLAGS= cargo +1.98.1 test --locked --all-features --lib "$suite" -- --list > "$RUNNER_TEMP/list-$label" 2>&1; then
+              mapfile -t chosen < <(sed -n 's/: test$//p' "$RUNNER_TEMP/list-$label")
+              echo "LAS_${label}_CASE_COUNT=${#chosen[@]}"
+              if [ "${#chosen[@]}" -eq 0 ] || [ "${#chosen[@]}" -gt 64 ]; then
+                echo "LAS_${label}_CASE_DISCOVERY=INVALID"
+                gate_failure=1
+              else
+                ordinal=0
+                for exact_id in "${chosen[@]}"; do
+                  ordinal=$((ordinal + 1))
+                  if env RUSTFLAGS= cargo +1.98.1 test --locked --all-features --lib "$exact_id" -- --exact --test-threads=1 > "$RUNNER_TEMP/case-$label-$ordinal" 2>&1; then
+                    echo "LAS_${label}_ORDINAL_$ordinal=PASS"
+                  else
+                    echo "LAS_${label}_ORDINAL_$ordinal=FAIL"
+                    gate_failure=1
+                  fi
+                done
+              fi
+            else
+              echo "LAS_${label}_CASE_DISCOVERY=FAILED"
+              gate_failure=1
+            fi
+          done
+
           if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
             echo 'LAS_RUST_DIAG_TREE=CHANGED'
             gate_failure=1
