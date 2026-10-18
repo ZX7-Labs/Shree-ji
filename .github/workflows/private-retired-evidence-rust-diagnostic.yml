@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 75
     env:
       EXPECTED_REF_PROOF: e68bd23d60258be9ea6f2a679c7bfb74d6a7d323c99ddd2c5e07012fb410294c
-      EXPECTED_COMMIT_PROOF: 1e868f5267abfe7327b77ab334748fe6cd3a7700ff744a2498197f8553fcb98e
+      EXPECTED_COMMIT_PROOF: 9d94de86fd568c14c5cb5aeb7fd733bbe85d432a399bf6c165c7703da0d37291
       RUSTFLAGS: -Dwarnings
       CARGO_TERM_COLOR: never
       PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
@@ -146,9 +146,9 @@ jobs:
             shift
             local output="$RUNNER_TEMP/private-rust-$label.log"
             if "$@" > "$output" 2>&1; then
-              if [ "$label" = "TEST_RETIRED_ALL_FEATURES" ] || [ "$label" = "TEST_RETIRED_DIAGNOSTIC" ] || [ "$label" = "TEST_OWNER_BOUND_DIAGNOSTIC" ] || [ "$label" = "TEST_WIRE_VALIDATOR_DIAGNOSTIC" ] || [ "$label" = "TEST_CROSS_OWNER_DIAGNOSTIC" ] || [ "$label" = "TEST_ARCHIVED_CORRELATION_DIAGNOSTIC" ] || [ "$label" = "TEST_FULL_RUST_DIAGNOSTIC" ]; then
+              if [ "$label" = "TEST_ALL_TARGETS_ALL_FEATURES" ] || [ "$label" = "TEST_RETIRED_ALL_FEATURES" ] || [ "$label" = "TEST_RETIRED_DIAGNOSTIC" ] || [ "$label" = "TEST_OWNER_BOUND_DIAGNOSTIC" ] || [ "$label" = "TEST_WIRE_VALIDATOR_DIAGNOSTIC" ] || [ "$label" = "TEST_CROSS_OWNER_DIAGNOSTIC" ] || [ "$label" = "TEST_ARCHIVED_CORRELATION_DIAGNOSTIC" ] || [ "$label" = "TEST_FULL_RUST_DIAGNOSTIC" ]; then
                 local cases
-                cases="$(sed -nE 's/^running ([0-9]+) tests?$/\1/p' "$output" | tail -n 1)"
+                cases="$(awk '/^running [0-9]+ tests?$/ { sum += $2; seen++ } END { if (seen > 0) print sum }' "$output")"
                 if [ -z "$cases" ] || [ "$cases" -le 0 ]; then
                   echo "LAS_RUST_DIAG_${label}=ZERO_TESTS_NOT_PASS"
                   gate_failure=1
@@ -222,6 +222,8 @@ jobs:
           run_private_gate CHECK_LINUX cargo +1.98.1 check --message-format=json --locked --features linux-peer-credentials --all-targets
           run_private_gate CHECK_ALL_FEATURES cargo +1.98.1 check --message-format=json --locked --all-features --all-targets
           run_private_gate CLIPPY_DEFAULT cargo +1.98.1 clippy --message-format=json --locked --all-targets -- -D warnings
+          # Strict, non-vacuous acceptance for all library and integration targets; no private target names are published.
+          run_private_gate TEST_ALL_TARGETS_ALL_FEATURES cargo +1.98.1 test --message-format=json --locked --all-features --all-targets -- --test-threads=1
           run_private_gate TEST_RETIRED_ALL_FEATURES cargo +1.98.1 test --message-format=json --locked --all-features --lib retired_archive_effect_ -- --test-threads=1
           # Independent diagnostic only: warning policy remains strict in every
           # acceptance gate. This executes behavioral tests even if inherited
