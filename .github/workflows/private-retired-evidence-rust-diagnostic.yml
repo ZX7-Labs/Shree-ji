@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 75
     env:
       EXPECTED_REF_PROOF: e68bd23d60258be9ea6f2a679c7bfb74d6a7d323c99ddd2c5e07012fb410294c
-      EXPECTED_COMMIT_PROOF: 3c8f08eb74f5ceb30e2d8c94ad009f0c01d17a4827720a3e86c420fa25e7e254
+      EXPECTED_COMMIT_PROOF: d0821da4f25ecf1d0846d8de449e6cfc73499405f196d458ab47604084465334
       RUSTFLAGS: -Dwarnings
       CARGO_TERM_COLOR: never
       PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
@@ -199,9 +199,10 @@ jobs:
               primary = next((v for v in message.get("spans", [])
                               if v.get("is_primary")), None)
               file_name = (primary or {}).get("file_name", "")
-              emitted.add((indices.get(file_name, 0), code, 0))
-          for ordinal, code, _ in sorted(emitted)[:80]:
-              print(f"LAS_RUST_DIAG_{label}_OWNER_ORDINAL={ordinal};CODE={code}")
+              bucket = int((primary or {}).get("line_start") or 0) // 16
+              emitted.add((indices.get(file_name, 0), code, bucket))
+          for ordinal, code, bucket in sorted(emitted)[:100]:
+              print(f"LAS_RUST_DIAG_{label}_OWNER_ORDINAL={ordinal};CODE={code};BUCKET16={bucket}")
           PY
             fi
           }
@@ -211,7 +212,7 @@ jobs:
           run_private_gate CHECK_LINUX cargo +1.98.1 check --message-format=json --locked --features linux-peer-credentials --all-targets
           run_private_gate CHECK_ALL_FEATURES cargo +1.98.1 check --message-format=json --locked --all-features --all-targets
           run_private_gate CLIPPY_DEFAULT cargo +1.98.1 clippy --message-format=json --locked --all-targets -- -D warnings
-          run_private_gate TEST_RETIRED_ALL_FEATURES cargo +1.98.1 test --locked --all-features --lib retired_archive_effect_ -- --test-threads=1
+          run_private_gate TEST_RETIRED_ALL_FEATURES cargo +1.98.1 test --message-format=json --locked --all-features --lib retired_archive_effect_ -- --test-threads=1
 
           if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
             echo 'LAS_RUST_DIAG_TREE=CHANGED'
