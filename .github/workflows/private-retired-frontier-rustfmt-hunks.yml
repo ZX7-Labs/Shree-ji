@@ -18,7 +18,7 @@ jobs:
       PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
       PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
       EXPECTED_REF_PROOF: 3746c618b1bdcf5720993e93dd41e3fddbabf77a43bcbfccfbdafd5f4af67d9b
-      EXPECTED_COMMIT_PROOF: 419ca6bef5a27217ad37fa6fada24b98342076505788c5ef1bd0d329ba2edc67
+      EXPECTED_COMMIT_PROOF: e4e41c8b5ddf8e57776243d40bd0c8e100225953ca2e04fb98f750df2095ca85
     steps:
       - name: Bind exact opaque private revision
         shell: bash
