@@ -185,9 +185,9 @@ jobs:
           emitted = set()
           for line in pathlib.Path(log_path).read_text(errors="replace").splitlines():
               if line.startswith("Diff in "):
-                  match = re.search(r"/las-private/([^:]+):", line)
+                  match = re.search(r"/las-private/([^:]+):([0-9]+):", line)
                   if match and match.group(1) in indices:
-                      emitted.add((indices[match.group(1)], "RUSTFMT", 0))
+                      emitted.add((indices[match.group(1)], "RUSTFMT", int(match.group(2)) // 16))
               try:
                   record = json.loads(line)
               except (ValueError, TypeError):
