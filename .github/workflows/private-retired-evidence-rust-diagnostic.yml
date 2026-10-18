@@ -23,11 +23,14 @@ jobs:
       EXPECTED_COMMIT_PROOF: aa066eff095e9e4c3fa6025ab5b3b17994b0c2aa82b89f37c0a9c2ace51f76fd
       RUSTFLAGS: -Dwarnings
       CARGO_TERM_COLOR: never
-      PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
-      PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
 
     steps:
       - name: Validate exact private identity without publishing it
+        # Secrets are scoped to checkout: cargo build scripts, tests, Ada and
+        # TLC never inherit the GitHub private read token.
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
