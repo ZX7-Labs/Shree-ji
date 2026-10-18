@@ -3,7 +3,7 @@ name: Exact private retired-evidence Rust diagnostic (quarantined)
 on:
   push:
     branches:
-      - verify/shadow-restore-chronology-20261018
+      - verify/retired-observation-semantics-20261018
     paths:
       - .github/workflows/private-retired-evidence-rust-diagnostic.yml
 
@@ -19,8 +19,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     env:
-      EXPECTED_REF_PROOF: 20b592f8aef2dc4b1c61315789ba11b64c206c35e0cd10ad2b07ca7049691780
-      EXPECTED_COMMIT_PROOF: a94f6804efe7cf341a8b1099442fdab99ba01f74d894fd8d3e8dbbbcd43f1da6
+      EXPECTED_REF_PROOF: 902cf63b9074171528c83a9916fd2faa1d58b7e0838ecf1d49799706bdab1c23
+      EXPECTED_COMMIT_PROOF: 5bba2c12d8ea5c6933438dc809783d0bccf4b8f32caec312775e667e7f1e0337
       RUSTFLAGS: -Dwarnings
       CARGO_TERM_COLOR: never
       PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
