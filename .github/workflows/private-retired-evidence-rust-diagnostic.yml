@@ -222,6 +222,9 @@ jobs:
           run_private_gate CHECK_LINUX cargo +1.98.1 check --message-format=json --locked --features linux-peer-credentials --all-targets
           run_private_gate CHECK_ALL_FEATURES cargo +1.98.1 check --message-format=json --locked --all-features --all-targets
           run_private_gate CLIPPY_DEFAULT cargo +1.98.1 clippy --message-format=json --locked --all-targets -- -D warnings
+          # Production archival modules are behind the full Linux/Root feature set.
+          # Default-only Clippy is not sufficient to accept their lint safety.
+          run_private_gate CLIPPY_ALL_FEATURES cargo +1.98.1 clippy --message-format=json --locked --all-features --all-targets -- -D warnings
           # Strict, non-vacuous acceptance for all library and integration targets; no private target names are published.
           run_private_gate TEST_ALL_TARGETS_ALL_FEATURES cargo +1.98.1 test --message-format=json --locked --all-features --all-targets -- --test-threads=1
           run_private_gate TEST_RETIRED_ALL_FEATURES cargo +1.98.1 test --message-format=json --locked --all-features --lib retired_archive_effect_ -- --test-threads=1
