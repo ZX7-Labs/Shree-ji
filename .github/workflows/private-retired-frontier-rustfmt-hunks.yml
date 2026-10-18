@@ -67,15 +67,22 @@ jobs:
           else
             echo "PRIVATE_STRICT_FORMAT=FAIL"
             python3 - "$RUNNER_TEMP/private-diff" <<'PY'
-          import pathlib, re, sys
+          import pathlib, re, subprocess, sys
+          names = sorted(subprocess.check_output(
+              ["git", "ls-files", "--", "*.rs"], text=True
+          ).splitlines())
+          owner_ordinals = {name: ordinal for ordinal, name in enumerate(names, 1)}
           hunks = []
           current = None
           for line in pathlib.Path(sys.argv[1]).read_text(errors="replace").splitlines():
               if line.startswith("Diff in "):
                   if current is not None:
                       hunks.append(current)
-                  matched = re.search(r":([0-9]+):", line)
-                  current = {"bucket": int(matched.group(1)) // 16 if matched else 0, "minus": [], "plus": []}
+                  matched = re.search(r"Diff in (.+?):([0-9]+):", line)
+                  normalized = matched.group(1).split("/private-format/")[-1] if matched else ""
+                  current = {"owner": owner_ordinals.get(normalized, 0),
+                             "bucket": int(matched.group(2)) // 16 if matched else 0,
+                             "minus": [], "plus": []}
               elif current is not None and line.startswith("-") and not line.startswith("---"):
                   current["minus"].append(line[1:])
               elif current is not None and line.startswith("+") and not line.startswith("+++"):
@@ -86,7 +93,7 @@ jobs:
           for i, hunk in enumerate(hunks[:32], 1):
               old = "".join(x.strip() for x in hunk["minus"])
               new = "".join(x.strip() for x in hunk["plus"])
-              print(f"PRIVATE_FORMAT_HUNK_{i}=BUCKET16:{hunk['bucket']};REMOVE:{len(hunk['minus'])};ADD:{len(hunk['plus'])};TOKEN_EQUIV:{int(old == new)}")
+              print(f"PRIVATE_FORMAT_HUNK_{i}=OWNER_ORDINAL:{hunk[\'owner\']};BUCKET16:{hunk['bucket']};REMOVE:{len(hunk['minus'])};ADD:{len(hunk['plus'])};TOKEN_EQUIV:{int(old == new)}")
           PY
             exit 1
           fi
