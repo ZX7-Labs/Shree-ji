@@ -198,6 +198,7 @@ jobs:
               if message.get("level") != "error":
                   continue
               code = (message.get("code") or {}).get("code") or "UNCLASSIFIED"
+              code = code.replace("::", "_").replace("-", "_")
               if not re.fullmatch(r"[A-Za-z_0-9]{1,80}", code):
                   code = "UNCLASSIFIED"
               primary = next((v for v in message.get("spans", [])
