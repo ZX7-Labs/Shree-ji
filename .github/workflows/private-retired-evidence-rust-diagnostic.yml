@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 75
     env:
       EXPECTED_REF_PROOF: e68bd23d60258be9ea6f2a679c7bfb74d6a7d323c99ddd2c5e07012fb410294c
-      EXPECTED_COMMIT_PROOF: d264a61034422e49b3aa4d87110daf34a5488eaa6d79e389725fee7ac14dabea
+      EXPECTED_COMMIT_PROOF: 49fb3da76fc5ec9bdb5297af208791df84f7b31acfb6fa407c782cc4ed10a1c9
       RUSTFLAGS: -Dwarnings
       CARGO_TERM_COLOR: never
       PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
