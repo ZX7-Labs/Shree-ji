@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 75
     env:
       EXPECTED_REF_PROOF: e68bd23d60258be9ea6f2a679c7bfb74d6a7d323c99ddd2c5e07012fb410294c
-      EXPECTED_COMMIT_PROOF: 49fb3da76fc5ec9bdb5297af208791df84f7b31acfb6fa407c782cc4ed10a1c9
+      EXPECTED_COMMIT_PROOF: 8138c2d7cd69a1cc09d0d7c3b76903a9ac8ba569f0e30a22faa4ebcd4ebd168e
       RUSTFLAGS: -Dwarnings
       CARGO_TERM_COLOR: never
       PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
@@ -146,7 +146,7 @@ jobs:
             shift
             local output="$RUNNER_TEMP/private-rust-$label.log"
             if "$@" > "$output" 2>&1; then
-              if [ "$label" = "TEST_RETIRED_ALL_FEATURES" ] || [ "$label" = "TEST_RETIRED_DIAGNOSTIC" ] || [ "$label" = "TEST_OWNER_BOUND_DIAGNOSTIC" ]; then
+              if [ "$label" = "TEST_RETIRED_ALL_FEATURES" ] || [ "$label" = "TEST_RETIRED_DIAGNOSTIC" ] || [ "$label" = "TEST_OWNER_BOUND_DIAGNOSTIC" ] || [ "$label" = "TEST_WIRE_VALIDATOR_DIAGNOSTIC" ]; then
                 local cases
                 cases="$(sed -nE 's/^running ([0-9]+) tests?$/\1/p' "$output" | tail -n 1)"
                 if [ -z "$cases" ] || [ "$cases" -le 0 ]; then
@@ -154,7 +154,7 @@ jobs:
                   gate_failure=1
                 else
                   echo "LAS_RUST_DIAG_${label}_COUNT=$cases"
-                  if [ "$label" = "TEST_RETIRED_DIAGNOSTIC" ] || [ "$label" = "TEST_OWNER_BOUND_DIAGNOSTIC" ]; then
+                  if [ "$label" = "TEST_RETIRED_DIAGNOSTIC" ] || [ "$label" = "TEST_OWNER_BOUND_DIAGNOSTIC" ] || [ "$label" = "TEST_WIRE_VALIDATOR_DIAGNOSTIC" ]; then
                     echo "LAS_RUST_DIAG_${label}=PASS_WITH_WARNINGS_NOT_ACCEPTANCE"
                   else
                     echo "LAS_RUST_DIAG_${label}=PASS"
@@ -228,6 +228,7 @@ jobs:
           # warning debt blocks strict compilation; never treat it as promotion.
           run_private_gate TEST_RETIRED_DIAGNOSTIC env RUSTFLAGS= cargo +1.98.1 test --message-format=json --locked --all-features --lib retired_archive_effect_ -- --test-threads=1
           run_private_gate TEST_OWNER_BOUND_DIAGNOSTIC env RUSTFLAGS= cargo +1.98.1 test --message-format=json --locked --all-features --lib owner_bound_ -- --test-threads=1
+          run_private_gate TEST_WIRE_VALIDATOR_DIAGNOSTIC env RUSTFLAGS= cargo +1.98.1 test --message-format=json --locked --all-features --lib retired_archive_validate -- --test-threads=1
 
           if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
             echo 'LAS_RUST_DIAG_TREE=CHANGED'
