@@ -229,6 +229,29 @@ jobs:
           run_private_gate TEST_RETIRED_DIAGNOSTIC env RUSTFLAGS= cargo +1.98.1 test --message-format=json --locked --all-features --lib retired_archive_effect_ -- --test-threads=1
           run_private_gate TEST_OWNER_BOUND_DIAGNOSTIC env RUSTFLAGS= cargo +1.98.1 test --message-format=json --locked --all-features --lib owner_bound_ -- --test-threads=1
           run_private_gate TEST_WIRE_VALIDATOR_DIAGNOSTIC env RUSTFLAGS= cargo +1.98.1 test --message-format=json --locked --all-features --lib retired_archive_validate -- --test-threads=1
+          # Classify failing tests as numeric ordinals only. Private test names,
+          # paths, stdout and source are never exposed on the public runner.
+          if env RUSTFLAGS= cargo +1.98.1 test --locked --all-features --lib retired_archive_validate -- --list > "$RUNNER_TEMP/private-wire-list" 2>&1; then
+            mapfile -t wire_tests < <(sed -n 's/: test$//p' "$RUNNER_TEMP/private-wire-list")
+            echo "LAS_WIRE_TEST_COUNT=${#wire_tests[@]}"
+            if [ "${#wire_tests[@]}" -gt 0 ] && [ "${#wire_tests[@]}" -le 64 ]; then
+              index=0
+              for test_id in "${wire_tests[@]}"; do
+                index=$((index+1))
+                if env RUSTFLAGS= cargo +1.98.1 test --locked --all-features --lib "$test_id" -- --exact --test-threads=1 > "$RUNNER_TEMP/private-wire-case-$index" 2>&1; then
+                  echo "LAS_WIRE_TEST_ORDINAL_$index=PASS"
+                else
+                  echo "LAS_WIRE_TEST_ORDINAL_$index=FAIL"
+                fi
+              done
+            else
+              echo 'LAS_WIRE_CASE_DISCOVERY=INVALID'
+              gate_failure=1
+            fi
+          else
+            echo 'LAS_WIRE_CASE_DISCOVERY=FAILED'
+            gate_failure=1
+          fi
 
           if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
             echo 'LAS_RUST_DIAG_TREE=CHANGED'
