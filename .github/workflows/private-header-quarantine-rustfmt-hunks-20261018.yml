@@ -1,0 +1,92 @@
+name: Private archive header-quarantine Rustfmt hunk diagnosis
+
+on:
+  push:
+    branches:
+      - verify/retired-header-retry-quarantine-20261018
+    paths:
+      - .github/workflows/private-header-quarantine-rustfmt-hunks-20261018.yml
+
+permissions:
+  contents: read
+
+jobs:
+  exact_source_private_format:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    env:
+      PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+      PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+      EXPECTED_REF_PROOF: ad1a150b8c553fb5b14b91a8e0d9c48a3364d22ebadf4d25a2a839a53f58731a
+      EXPECTED_COMMIT_PROOF: bc549ae3e0b48fd06c17fcb0cd1b57c8e63bc7017db124f5058c27a8298328da
+    steps:
+      - name: Bind exact opaque private revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+          private="$RUNNER_TEMP/private-format"
+          mkdir -p "$private"
+          cd "$private"
+          git init -q
+          git remote add origin "https://github.com/$PRIVATE_REPOSITORY.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$RUNNER_TEMP/refs" 2>/dev/null
+          matched_ref=""
+          matched_sha=""
+          while read -r sha ref; do
+            if [ "$(printf '%s' "$ref" | sha256sum | cut -d' ' -f1)" = "$EXPECTED_REF_PROOF" ]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+              matched_sha="$sha"
+            fi
+          done <"$RUNNER_TEMP/refs"
+          rm -f "$RUNNER_TEMP/refs"
+          test -n "$matched_ref"
+          echo "::add-mask::$matched_ref"
+          echo "::add-mask::$matched_sha"
+          test "$(printf '%s' "$matched_sha" | sha256sum | cut -d' ' -f1)" = "$EXPECTED_COMMIT_PROOF"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch --quiet --no-tags --depth=1 origin "$matched_ref" >"$RUNNER_TEMP/fetch" 2>&1
+          git checkout -q --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$matched_sha"
+          echo "PRIVATE_EXACT_BINDING=PASS"
+      - name: Pinned formatting with source-free hunk classification
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          rustup toolchain install 1.98.1 --profile minimal >"$RUNNER_TEMP/toolchain" 2>&1
+          rustup component add --toolchain 1.98.1 rustfmt >>"$RUNNER_TEMP/toolchain" 2>&1
+          cd "$RUNNER_TEMP/private-format"
+          if cargo +1.98.1 fmt --all -- --check >"$RUNNER_TEMP/private-diff" 2>&1; then
+            echo "PRIVATE_STRICT_FORMAT=PASS"
+          else
+            echo "PRIVATE_STRICT_FORMAT=FAIL"
+            python3 - "$RUNNER_TEMP/private-diff" <<'PY'
+          import pathlib, re, sys
+          hunks = []
+          current = None
+          for line in pathlib.Path(sys.argv[1]).read_text(errors="replace").splitlines():
+              if line.startswith("Diff in "):
+                  if current is not None:
+                      hunks.append(current)
+                  matched = re.search(r":([0-9]+):", line)
+                  current = {"bucket": int(matched.group(1)) // 16 if matched else 0, "minus": [], "plus": []}
+              elif current is not None and line.startswith("-") and not line.startswith("---"):
+                  current["minus"].append(line[1:])
+              elif current is not None and line.startswith("+") and not line.startswith("+++"):
+                  current["plus"].append(line[1:])
+          if current is not None:
+              hunks.append(current)
+          print(f"PRIVATE_FORMAT_HUNK_COUNT={len(hunks)}")
+          for i, hunk in enumerate(hunks[:32], 1):
+              old = "".join(x.strip() for x in hunk["minus"])
+              new = "".join(x.strip() for x in hunk["plus"])
+              print(f"PRIVATE_FORMAT_HUNK_{i}=BUCKET16:{hunk['bucket']};REMOVE:{len(hunk['minus'])};ADD:{len(hunk['plus'])};TOKEN_EQUIV:{int(old == new)}")
+          PY
+            exit 1
+          fi
