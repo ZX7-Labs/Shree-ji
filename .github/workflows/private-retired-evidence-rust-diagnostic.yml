@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 75
     env:
       EXPECTED_REF_PROOF: 36e650596d422832be17d49f0f68d549f7a2b40affc93bb6c7379605dfaceab7
-      EXPECTED_COMMIT_PROOF: 66290518e688e1e03518bb237ab64316ccbe7f6ba76f05e912a0b9c446aae98e
+      EXPECTED_COMMIT_PROOF: 0d41fd79721f094d400fed8c2a4a39ba1bf22b8499fd3371c6c93ce568c97774
       RUSTFLAGS: -Dwarnings
       CARGO_TERM_COLOR: never
       PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
@@ -241,6 +241,21 @@ jobs:
               if name in failed:
                   print(f'LAS_PRIVATE_ALL_FAILED_ORDINAL={ordinal}')
           print(f'LAS_PRIVATE_ALL_FAILED_COUNT={len(failed)}')
+          # Translate test panic coordinates to source-free numeric evidence.
+          # Never print private file names, panic descriptions or test IDs.
+          import subprocess
+          source_names = sorted(subprocess.check_output(
+              ['git', 'ls-files', '--', '*.rs'], text=True
+          ).splitlines())
+          owners = {name: i for i, name in enumerate(source_names, 1)}
+          raw_log = pathlib.Path(sys.argv[2]).read_text(errors='replace')
+          coordinates = set()
+          for name, line in re.findall(r'panicked at ([^:\\s]+):(\\d+):\\d+', raw_log):
+              normalized = name.split('/las-private/')[-1]
+              if normalized in owners:
+                  coordinates.add((owners[normalized], int(line) // 16))
+          for owner, bucket in sorted(coordinates)[:5]:
+              print(f'LAS_PRIVATE_ALL_PANIC=OWNER_ORDINAL:{owner};BUCKET16:{bucket}')
           PY
             else
               echo 'LAS_PRIVATE_ALL_CASE_CATALOG=FAILED'
