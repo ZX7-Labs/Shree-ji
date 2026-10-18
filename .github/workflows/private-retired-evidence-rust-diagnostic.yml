@@ -141,6 +141,11 @@ jobs:
         run: |
           set -euo pipefail
           set +x
+          if [ "${PRIVATE_TOKEN+x}" ] || [ "${PRIVATE_REPOSITORY+x}" ]; then
+            echo 'LAS_RUST_BUILD_SECRET_SCOPE=VIOLATED'
+            exit 95
+          fi
+          echo 'LAS_RUST_BUILD_SECRET_SCOPE=ISOLATED'
           cd "$RUNNER_TEMP/las-private"
           gate_failure=0
           git ls-files -- '*.rs' | LC_ALL=C sort > "$RUNNER_TEMP/private-owner-ordinals"
