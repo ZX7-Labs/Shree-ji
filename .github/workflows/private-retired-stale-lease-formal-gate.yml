@@ -3,7 +3,7 @@ name: Exact private archive frontier stale-lease and unsafe release negative con
 on:
   push:
     branches:
-      - verify/retired-archive-frontier-nonforgeable-20261018
+      - verify/retired-frontier-move-only-20261018
     paths:
       - .github/workflows/private-retired-stale-lease-formal-gate.yml
 
