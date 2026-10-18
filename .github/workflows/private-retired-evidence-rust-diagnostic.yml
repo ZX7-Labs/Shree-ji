@@ -227,7 +227,7 @@ jobs:
           # acceptance gate. This executes behavioral tests even if inherited
           # warning debt blocks strict compilation; never treat it as promotion.
           run_private_gate TEST_RETIRED_DIAGNOSTIC env RUSTFLAGS= cargo +1.98.1 test --message-format=json --locked --all-features --lib retired_archive_effect_ -- --test-threads=1
-          run_private_gate TEST_OWNER_BOUND_DIAGNOSTIC env RUSTFLAGS= cargo +1.98.1 test --message-format=json --locked --all-features --lib owner_bound_projection_failure_is_redacted_and_retains_exact_owner_and_writer -- --test-threads=1
+          run_private_gate TEST_OWNER_BOUND_DIAGNOSTIC env RUSTFLAGS= cargo +1.98.1 test --message-format=json --locked --all-features --lib owner_bound_ -- --test-threads=1
 
           if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
             echo 'LAS_RUST_DIAG_TREE=CHANGED'
