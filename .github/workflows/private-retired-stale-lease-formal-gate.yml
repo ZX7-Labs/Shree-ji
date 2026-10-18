@@ -75,8 +75,8 @@ jobs:
           set +x
           curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
             --output "$RUNNER_TEMP/tla2tools.jar" \
-            "https://github.com/tlaplus/tlaplus/releases/download/v1.7.2/tla2tools.jar" >"$RUNNER_TEMP/tla-fetch" 2>&1
-          printf '%s  %s\n' '7f21faa2cdae3189e7d5fadb4488f0dfcc658407' "$RUNNER_TEMP/tla2tools.jar" | sha1sum --check --strict >"$RUNNER_TEMP/tla-pin" 2>&1
+            "https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar" >"$RUNNER_TEMP/tla-fetch" 2>&1
+          printf '%s  %s\n' 'bee4a54f3ee3d4afc347c3240ec2d9e93b075104' "$RUNNER_TEMP/tla2tools.jar" | sha1sum --check --strict >"$RUNNER_TEMP/tla-pin" 2>&1
           echo "LAS_TLC_JAR_SHA256=$(sha256sum "$RUNNER_TEMP/tla2tools.jar" | cut -d' ' -f1)"
           cd "$RUNNER_TEMP/private-archive-frontier-formal"
           source_file=""
