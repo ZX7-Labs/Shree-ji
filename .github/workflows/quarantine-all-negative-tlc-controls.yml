@@ -49,6 +49,14 @@ jobs:
           unset PRIVATE_REPOSITORY PRIVATE_READ_TOKEN
           bash "$out/setup1.sh"
           rm -rf -- "$out"
+          # Public official tool artifact; output only its cryptographic digest.
+          # This hash can subsequently be independently reviewed and promoted
+          # into the main scoped-controller pin, without exposing private bytes.
+          archive="$RUNNER_TEMP/las-tlc-tools.jar"
+          [[ -s "$archive" ]] || { echo 'LAS_TLC_PIN=FAIL:EMPTY_TOOL'; exit 1; }
+          tool_sha256="$(sha256sum "$archive" | awk '{print $1}')"
+          [[ "$tool_sha256" =~ ^[0-9a-f]{64}$ ]] || { echo 'LAS_TLC_PIN=FAIL:INVALID_HASH'; exit 1; }
+          echo "LAS_TLC_TOOL_V174_SHA256=$tool_sha256"
           echo 'LAS_NATIVE_TLC_SMOKE=SOURCE_AND_TOOL_PINNED'
       - name: Verify all 12 expected-negative native TLC controls without leaking private identities
         shell: bash
