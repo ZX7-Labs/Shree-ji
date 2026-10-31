@@ -19,9 +19,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      TARGET_BRANCH_PROOF: eb7c5aae89fe45f8372d3906fd20ae64b757e61a7f3b43b93e49c8db6ccb68f4
-      EXPECTED_PRIVATE_COMMIT_PROOF: 79c8698e31c3aface56a36dba37a73b9f830a92d3864d8192581c5813ba5aac2
-      CANDIDATE_TARGET_REF: refs/heads/quarantine/rustfmt-1-98-1-candidate-20261031
+      TARGET_BRANCH_PROOF: 0a9d756901b297941bbaf17509c374fcbbbf6e38862e10a80ec265fc97ce52df
+      EXPECTED_PRIVATE_COMMIT_PROOF: 8311dec6d88a023c3b047d6516e63a4facc212f3bde0c3ce3f25d4fc78fc5b49
+      CANDIDATE_TARGET_REF: refs/heads/quarantine/reality-authenticated-rustfmt-candidate-20261031
     steps:
       - name: Clone exact source read-only and verify proof
         shell: bash
