@@ -1,0 +1,393 @@
+name: Source-pinned encrypted TLC checkpoint cross-job custody (research only)
+
+on:
+  push:
+    branches:
+      - quarantine/tlc-expected-negative-audit-repair-20261031
+    paths:
+      - .github/workflows/quarantine-crossjob-checkpoint.yml
+
+permissions:
+  contents: read
+
+env:
+  TARGET_BRANCH_PROOF: 0a9d756901b297941bbaf17509c374fcbbbf6e38862e10a80ec265fc97ce52df
+  EXPECTED_PRIVATE_COMMIT_PROOF: 1adce8a16b15daa5022b11634ffccb7c21785e6ccb449a6055acf2e2d5514e43
+  EXPECTED_PRIVATE_TEST_RUNNER_SHA256: 529de5130fd7f8cb9331fb535e8c762ec75afae6143fbe879c3917bd926495df
+
+jobs:
+  producer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout pinned public controller
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - name: Recover the exact private source and canonical TLA tool
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          out="$(mktemp -d "$RUNNER_TEMP/las-pinned-setup.XXXXXXXX")"
+          trap 'rm -rf -- "$out"' EXIT
+          ruby -ryaml - "$out" <<'RUBY'
+          out = ARGV.fetch(0)
+          current = YAML.safe_load_file('.github/workflows/quarantine-crossjob-checkpoint.yml', aliases: false)
+          previous = YAML.safe_load_file('.github/workflows/quarantine-two-case-tlc-smoke.yml', aliases: false)
+          envkeys = %w[TARGET_BRANCH_PROOF EXPECTED_PRIVATE_COMMIT_PROOF EXPECTED_PRIVATE_TEST_RUNNER_SHA256]
+          envkeys.each do |key|
+            raise 'source-bound proof drift' unless current.fetch('env').fetch(key) == previous.fetch('jobs').fetch('smoke').fetch('env').fetch(key)
+          end
+          setup = previous.fetch('jobs').fetch('smoke').fetch('steps').fetch(1).fetch('run')
+          raise 'unreviewed private recovery code' unless setup.include?('setup0.sh') && setup.include?('setup1.sh')
+          File.write(File.join(out, 'setup.sh'), setup)
+          RUBY
+          bash -n "$out/setup.sh"
+          bash "$out/setup.sh"
+          echo 'LAS_CROSS_JOB=PRODUCER_SOURCE_PINNED'
+      - name: Execute real canonical slow profile and encrypt checkpoint
+        shell: bash
+        env:
+          JAVA_TOOL_OPTIONS: -Xmx5g
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          cd "$RUNNER_TEMP/private-source"
+          logdir="$(mktemp -d "$RUNNER_TEMP/las-producer-private.XXXXXXXX")"
+          chmod 700 "$logdir"
+          trap 'rm -rf -- "$logdir"' EXIT
+          if ! python3 -I -B - "$PWD" "$logdir" > "$logdir/map-log" 2>&1 <<'PY'
+          import contextlib, io, os, pathlib, sys
+          root, temp = map(pathlib.Path, sys.argv[1:3])
+          shell = (root / 'tools/verify_codespaces_all.sh').read_text()
+          begin = """if ! python3 - "$ROOT" > "$TLC_MAP.pending" <<'PY'\n"""
+          closing = "\nPY\nthen"
+          assert shell.count(begin) == shell.split(begin, 1)[1].count(closing) == 1
+          out = io.StringIO()
+          sys.argv = ['source', str(root)]
+          with contextlib.redirect_stdout(out):
+              exec(compile(shell.split(begin, 1)[1].split(closing, 1)[0],
+                           '<exact-canonical-map>', 'exec'), {'__name__': '__main__'})
+          rows = [s.split('\t', 3) for s in out.getvalue().splitlines()]
+          if len(rows) != 207 or any(len(row) != 4 for row in rows):
+              raise SystemExit(2)
+          positive = [row for row in rows if not row[3] and not row[0].endswith('Negative.cfg')]
+          negative = [row for row in rows if row[3] and row[0].endswith('Negative.cfg')]
+          if len(positive) != 195 or len(negative) != 12:
+              raise SystemExit(2)
+          choice = min(positive, key=lambda row: (os.stat(root / row[1]).st_size, row[0]))
+          for path in choice[:2]:
+              p = pathlib.PurePosixPath(path)
+              if not path.startswith('spec/') or p.is_absolute() or '..' in p.parts:
+                  raise SystemExit(2)
+              if not (root / path).is_file() or (root / path).is_symlink():
+                  raise SystemExit(2)
+          (temp / 'case.tsv').write_text('\t'.join(choice) + '\n')
+          PY
+          then
+            echo 'LAS_CROSS_JOB=FAIL:PRIVATE_CASE_PLAN'; exit 1
+          fi
+          IFS=$'\t' read -r cfg model deadlock expectation < "$logdir/case.tsv"
+          [[ -n "$cfg" && -n "$model" && -z "$expectation" && "$deadlock" =~ ^[01]$ ]] || {
+            echo 'LAS_CROSS_JOB=FAIL:INVALID_POSITIVE'; exit 1
+          }
+          git -c core.fsmonitor=false ls-files --error-unmatch "$cfg" "$model" >/dev/null 2>&1 || {
+            echo 'LAS_CROSS_JOB=FAIL:SOURCE_CUSTODY'; exit 1
+          }
+          meta="$logdir/meta"
+          mkdir -m 700 "$meta"
+          args=(-workers auto -lncheck final -fp 0 -checkpoint 1 -metadir "$meta")
+          if [[ "$deadlock" == 1 ]]; then args+=(-deadlock); fi
+          args+=(-config "$(basename "$cfg")" "$(basename "$model")")
+          if (cd "$(dirname "$cfg")" && timeout --signal=TERM --kill-after=15s 150s \
+               java -XX:+UseParallelGC -jar "$RUNNER_TEMP/las-tlc-tools.jar" "${args[@]}") > "$logdir/tlc-private" 2>&1; then
+            echo 'LAS_CROSS_JOB=FAIL:UNEXPECTED_COMPLETE_MODEL'; exit 1
+          else
+            rc=$?
+          fi
+          (( rc == 124 )) || { echo 'LAS_CROSS_JOB=FAIL:FIRST_SLICE'; exit 1; }
+          grep -Fq 'Checkpointing completed at (' "$logdir/tlc-private" || {
+            echo 'LAS_CROSS_JOB=FAIL:NO_CHECKPOINT_BARRIER'; exit 1
+          }
+          mapfile -t dirs < <(find "$meta" -type f -name vars.chkpt -printf '%h\n' | sort -u)
+          (( ${#dirs[@]} == 1 )) || { echo 'LAS_CROSS_JOB=FAIL:CHECKPOINT_SET'; exit 1; }
+          [[ -f "${dirs[0]}/queue.chkpt" ]] || { echo 'LAS_CROSS_JOB=FAIL:QUEUE'; exit 1; }
+          size="$(du -sb "$meta" | awk '{print $1}')"
+          (( size > 0 && size <= 268435456 )) || {
+            echo 'LAS_CROSS_JOB=INCOMPLETE:CHECKPOINT_STORAGE_BOUND'; exit 1
+          }
+          jar_sha="$(sha256sum "$RUNNER_TEMP/las-tlc-tools.jar" | awk '{print $1}')"
+          case_sha="$(printf '%s\t%s\t%s\n' "$cfg" "$model" "$deadlock" | sha256sum | awk '{print $1}')"
+          java_sha="$(java -version 2>&1 | sha256sum | awk '{print $1}')"
+          printf 'version=1\nrunner=%s\nrun=%s\nrevision=%s\njar=%s\njava=%s\nnproc=%s\ncase=%s\n' \
+             "$GITHUB_SHA" "$GITHUB_RUN_ID" "$EXPECTED_PRIVATE_COMMIT_PROOF" "$jar_sha" "$java_sha" "$(nproc)" "$case_sha" > "$meta/las-identity"
+          tar -C "$logdir" -czf "$logdir/metadata.tar.gz" meta
+          if [[ -z "$PRIVATE_READ_TOKEN" ]]; then
+            echo 'LAS_CROSS_JOB=FAIL:NO_PROTECTED_CUSTODY'; exit 1
+          fi
+          export LAS_CHECKPOINT_ENC_PASSWORD
+          LAS_CHECKPOINT_ENC_PASSWORD="$(printf '%s\0%s\0%s\0%s' \
+            'LAS_PROBE_ENC_V1' "$PRIVATE_READ_TOKEN" "$GITHUB_SHA" "$GITHUB_RUN_ID" | sha256sum | awk '{print $1}')"
+          export LAS_CHECKPOINT_HMAC_KEY
+          LAS_CHECKPOINT_HMAC_KEY="$(printf '%s\0%s\0%s\0%s' \
+            'LAS_PROBE_MAC_V1' "$PRIVATE_READ_TOKEN" "$GITHUB_SHA" "$GITHUB_RUN_ID" | sha256sum | awk '{print $1}')"
+          public="$RUNNER_TEMP/las-cryptographic-artifact"
+          mkdir -m 700 "$public"
+          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 \
+             -pass env:LAS_CHECKPOINT_ENC_PASSWORD -in "$logdir/metadata.tar.gz" -out "$public/metadata.enc"
+          python3 -I -B - "$public/metadata.enc" "$public/metadata.mac" <<'PY'
+          import hashlib, hmac, os, pathlib, sys
+          encrypted, mac = map(pathlib.Path, sys.argv[1:3])
+          secret = bytes.fromhex(os.environ['LAS_CHECKPOINT_HMAC_KEY'])
+          identity = (os.environ['GITHUB_SHA'] + '\0' + os.environ['GITHUB_RUN_ID'] +
+                      '\0' + os.environ['EXPECTED_PRIVATE_COMMIT_PROOF']).encode()
+          digest = hmac.new(secret, identity + b'\0', hashlib.sha256)
+          with encrypted.open('rb') as f:
+              for block in iter(lambda: f.read(1048576), b''):
+                  digest.update(block)
+          fd = os.open(mac, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+          with os.fdopen(fd, 'w') as f:
+              f.write(digest.hexdigest() + '\n')
+          PY
+          unset PRIVATE_READ_TOKEN LAS_CHECKPOINT_ENC_PASSWORD LAS_CHECKPOINT_HMAC_KEY
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_CROSS_JOB=FAIL:CHECKOUT_CHANGED'; exit 1
+          }
+          echo 'LAS_CROSS_JOB=ENCRYPTED_CHECKPOINT_CREATED_NOT_MODEL_PASS'
+      - name: Publish only ciphertext and HMAC
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: las-quarantine-checkpoint-ciphertext
+          path: ${{ runner.temp }}/las-cryptographic-artifact/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  consumer:
+    needs: producer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout pinned public controller
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - name: Download ciphertext without private source
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: las-quarantine-checkpoint-ciphertext
+          path: ${{ runner.temp }}/las-received-artifact
+      - name: Recover independent exact source and pinned model checker
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          out="$(mktemp -d "$RUNNER_TEMP/las-consumer-setup.XXXXXXXX")"
+          trap 'rm -rf -- "$out"' EXIT
+          ruby -ryaml - "$out" <<'RUBY'
+          out = ARGV.fetch(0)
+          current = YAML.safe_load_file('.github/workflows/quarantine-crossjob-checkpoint.yml', aliases: false)
+          source = YAML.safe_load_file('.github/workflows/quarantine-two-case-tlc-smoke.yml', aliases: false)
+          %w[TARGET_BRANCH_PROOF EXPECTED_PRIVATE_COMMIT_PROOF EXPECTED_PRIVATE_TEST_RUNNER_SHA256].each do |key|
+            raise 'pin mismatch' unless current.fetch('env').fetch(key) == source.fetch('jobs').fetch('smoke').fetch('env').fetch(key)
+          end
+          code = source.fetch('jobs').fetch('smoke').fetch('steps').fetch(1).fetch('run')
+          raise 'missing verified recovery' unless code.include?('setup0.sh') && code.include?('setup1.sh')
+          File.write(File.join(out,'setup.sh'), code)
+          RUBY
+          bash -n "$out/setup.sh"
+          bash "$out/setup.sh"
+          echo 'LAS_CROSS_JOB=CONSUMER_EXACT_SOURCE_PINNED'
+      - name: Authenticate, decrypt and resume one verified checkpoint
+        shell: bash
+        env:
+          JAVA_TOOL_OPTIONS: -Xmx5g
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          cd "$RUNNER_TEMP/private-source"
+          private="$(mktemp -d "$RUNNER_TEMP/las-consumer-private.XXXXXXXX")"
+          chmod 700 "$private"
+          trap 'rm -rf -- "$private"' EXIT
+          encrypted="$RUNNER_TEMP/las-received-artifact/metadata.enc"
+          mac="$RUNNER_TEMP/las-received-artifact/metadata.mac"
+          [[ -f "$encrypted" && -f "$mac" && ! -L "$encrypted" && ! -L "$mac" && -n "$PRIVATE_READ_TOKEN" ]] || {
+            echo 'LAS_CROSS_JOB=FAIL:UNTRUSTED_ARTIFACT'; exit 1
+          }
+          export LAS_CHECKPOINT_ENC_PASSWORD
+          LAS_CHECKPOINT_ENC_PASSWORD="$(printf '%s\0%s\0%s\0%s' \
+            'LAS_PROBE_ENC_V1' "$PRIVATE_READ_TOKEN" "$GITHUB_SHA" "$GITHUB_RUN_ID" | sha256sum | awk '{print $1}')"
+          export LAS_CHECKPOINT_HMAC_KEY
+          LAS_CHECKPOINT_HMAC_KEY="$(printf '%s\0%s\0%s\0%s' \
+            'LAS_PROBE_MAC_V1' "$PRIVATE_READ_TOKEN" "$GITHUB_SHA" "$GITHUB_RUN_ID" | sha256sum | awk '{print $1}')"
+          if ! python3 -I -B - "$encrypted" "$mac" > "$private/auth-private" 2>&1 <<'PY'
+          import hashlib, hmac, os, pathlib, re, sys
+          cipher, signature = map(pathlib.Path, sys.argv[1:3])
+          provided = signature.read_text(encoding='ascii').strip()
+          if not re.fullmatch(r'[0-9a-f]{64}', provided):
+              raise SystemExit(2)
+          identity = (os.environ['GITHUB_SHA'] + '\0' + os.environ['GITHUB_RUN_ID'] +
+                      '\0' + os.environ['EXPECTED_PRIVATE_COMMIT_PROOF']).encode()
+          actual = hmac.new(bytes.fromhex(os.environ['LAS_CHECKPOINT_HMAC_KEY']),
+                            identity + b'\0', hashlib.sha256)
+          with cipher.open('rb') as f:
+              for block in iter(lambda: f.read(1048576), b''):
+                  actual.update(block)
+          if not hmac.compare_digest(actual.hexdigest(), provided):
+              raise SystemExit(3)
+          PY
+          then
+            echo 'LAS_CROSS_JOB=FAIL:ARTIFACT_AUTHENTICATION'; exit 1
+          fi
+          # Wrong-key and ciphertext bit-flip mutations MUST fail the same
+          # verifier; this does not substitute for an independent code review.
+          cp -- "$encrypted" "$private/mutant.enc"
+          python3 -I -B - "$private/mutant.enc" <<'PY'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1])
+          b = bytearray(p.read_bytes())
+          if len(b) < 32: raise SystemExit(2)
+          b[len(b)//2] ^= 1
+          p.write_bytes(b)
+          PY
+          if python3 -I -B - "$private/mutant.enc" "$mac" > "$private/mutation" 2>&1 <<'PY'
+          import hashlib, hmac, os, pathlib, sys
+          cipher, signature = map(pathlib.Path, sys.argv[1:3])
+          identity = (os.environ['GITHUB_SHA'] + '\0' + os.environ['GITHUB_RUN_ID'] +
+                      '\0' + os.environ['EXPECTED_PRIVATE_COMMIT_PROOF']).encode()
+          actual = hmac.new(bytes.fromhex(os.environ['LAS_CHECKPOINT_HMAC_KEY']), identity+b'\0',hashlib.sha256)
+          with cipher.open('rb') as f:
+              for block in iter(lambda: f.read(1048576), b''): actual.update(block)
+          if not hmac.compare_digest(actual.hexdigest(), signature.read_text().strip()): raise SystemExit(3)
+          PY
+          then
+            echo 'LAS_CROSS_JOB=FAIL:MUTATION_ACCEPTED'; exit 1
+          fi
+          echo 'LAS_CROSS_JOB=AUTHENTICATION_AND_TAMPER_REJECTION_PASS'
+          if ! openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+                -pass env:LAS_CHECKPOINT_ENC_PASSWORD -in "$encrypted" -out "$private/metadata.tar.gz" > "$private/decrypt" 2>&1; then
+            echo 'LAS_CROSS_JOB=FAIL:DECRYPTION'; exit 1
+          fi
+          if ! python3 -I -B - "$private/metadata.tar.gz" "$private" > "$private/extract" 2>&1 <<'PY'
+          import pathlib, sys, tarfile
+          archive, root = map(pathlib.Path, sys.argv[1:3])
+          with tarfile.open(archive, 'r:gz') as tf:
+              entries = tf.getmembers()
+              if not entries or len(entries) > 50000: raise SystemExit(2)
+              total = 0
+              seen = set()
+              for e in entries:
+                  name = pathlib.PurePosixPath(e.name)
+                  if (name.is_absolute() or '..' in name.parts or not name.parts or name.parts[0] != 'meta'
+                          or e.name in seen or not (e.isfile() or e.isdir())):
+                      raise SystemExit(2)
+                  seen.add(e.name)
+                  total += e.size
+                  if total > 268435456: raise SystemExit(2)
+              for e in entries:
+                  out = root.joinpath(*pathlib.PurePosixPath(e.name).parts)
+                  if e.isdir():
+                      out.mkdir(mode=0o700, parents=True, exist_ok=True)
+                  else:
+                      out.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                      with tf.extractfile(e) as reader, out.open('xb') as writer:
+                          for block in iter(lambda: reader.read(1048576), b''): writer.write(block)
+                      out.chmod(0o600)
+          PY
+          then
+            echo 'LAS_CROSS_JOB=FAIL:ARCHIVE_SHAPE'; exit 1
+          fi
+          unset PRIVATE_READ_TOKEN LAS_CHECKPOINT_ENC_PASSWORD LAS_CHECKPOINT_HMAC_KEY
+          manifest="$private/meta/las-identity"
+          [[ -f "$manifest" ]] || { echo 'LAS_CROSS_JOB=FAIL:NO_MANIFEST'; exit 1; }
+          grep -Fxq 'version=1' "$manifest" &&
+          grep -Fxq "runner=$GITHUB_SHA" "$manifest" &&
+          grep -Fxq "run=$GITHUB_RUN_ID" "$manifest" &&
+          grep -Fxq "revision=$EXPECTED_PRIVATE_COMMIT_PROOF" "$manifest" &&
+          grep -Fxq "jar=$(sha256sum "$RUNNER_TEMP/las-tlc-tools.jar" | awk '{print $1}')" "$manifest" &&
+          grep -Fxq "java=$(java -version 2>&1 | sha256sum | awk '{print $1}')" "$manifest" &&
+          grep -Fxq "nproc=$(nproc)" "$manifest" || {
+            echo 'LAS_CROSS_JOB=FAIL:MANIFEST_IDENTITY'; exit 1
+          }
+          # Model identity rederived from the source-controlled exact map, not
+          # solely taken from the encrypted producer manifest.
+          if ! python3 -I -B - "$PWD" "$private" > "$private/plan-private" 2>&1 <<'PY'
+          import contextlib, hashlib, io, os, pathlib, sys
+          root, temp = map(pathlib.Path,sys.argv[1:3])
+          source=(root/'tools/verify_codespaces_all.sh').read_text()
+          marker="""if ! python3 - "$ROOT" > "$TLC_MAP.pending" <<'PY'\n"""
+          closing="\nPY\nthen"
+          if source.count(marker)!=1 or source.split(marker,1)[1].count(closing)!=1: raise SystemExit(2)
+          buffer=io.StringIO()
+          sys.argv=['canonical',str(root)]
+          with contextlib.redirect_stdout(buffer):
+              exec(compile(source.split(marker,1)[1].split(closing,1)[0],'<source>', 'exec'), {'__name__':'__main__'})
+          rows=[r.split('\t',3) for r in buffer.getvalue().splitlines()]
+          if len(rows)!=207 or any(len(r)!=4 for r in rows): raise SystemExit(2)
+          pos=[r for r in rows if not r[3] and not r[0].endswith('Negative.cfg')]
+          neg=[r for r in rows if r[3] and r[0].endswith('Negative.cfg')]
+          if len(pos)!=195 or len(neg)!=12: raise SystemExit(2)
+          chosen=min(pos,key=lambda r:(os.stat(root/r[1]).st_size,r[0]))
+          expected=hashlib.sha256(('%s\t%s\t%s\n'%tuple(chosen[:3])).encode()).hexdigest()
+          manifest=(temp/'meta/las-identity').read_text()
+          if ('case='+expected) not in manifest.splitlines(): raise SystemExit(2)
+          for path in chosen[:2]:
+              p=pathlib.PurePosixPath(path)
+              if not path.startswith('spec/') or p.is_absolute() or '..' in p.parts: raise SystemExit(2)
+              if not (root/path).is_file() or (root/path).is_symlink(): raise SystemExit(2)
+          (temp/'case.tsv').write_text('\t'.join(chosen)+'\n')
+          PY
+          then
+            echo 'LAS_CROSS_JOB=FAIL:INDEPENDENT_SOURCE_REBIND'; exit 1
+          fi
+          mapfile -t chkpts < <(find "$private/meta" -type f -name vars.chkpt -printf '%h\n' | sort -u)
+          (( ${#chkpts[@]} == 1 )) || { echo 'LAS_CROSS_JOB=FAIL:CHECKPOINT_INTEGRITY'; exit 1; }
+          [[ -f "${chkpts[0]}/queue.chkpt" ]] || { echo 'LAS_CROSS_JOB=FAIL:NO_QUEUE'; exit 1; }
+          source_state="$(sha256sum "${chkpts[0]}/queue.chkpt" "${chkpts[0]}/vars.chkpt" | sha256sum | awk '{print $1}')"
+          IFS=$'\t' read -r cfg model deadlock expectation < "$private/case.tsv"
+          [[ -z "$expectation" ]] || { echo 'LAS_CROSS_JOB=FAIL:POSITIVE_EXPECTATION'; exit 1; }
+          args=(-workers auto -lncheck final -fp 0 -checkpoint 1 -metadir "$private/meta" -recover "${chkpts[0]}")
+          if [[ "$deadlock" == "1" ]]; then args+=(-deadlock); fi
+          args+=(-config "$(basename "$cfg")" "$(basename "$model")")
+          if (cd "$(dirname "$cfg")" && timeout --signal=TERM --kill-after=15s 150s \
+               java -XX:+UseParallelGC -jar "$RUNNER_TEMP/las-tlc-tools.jar" "${args[@]}") > "$private/tlc-restored" 2>&1; then
+            java_rc=0
+          else
+            java_rc=$?
+          fi
+          if (( java_rc == 0 )); then
+            python3 -I -B tools/verification/canonical_tlc_result_evidence.py \
+              "$private/tlc-restored" 0 0 > "$private/receipt" 2>&1 || {
+                echo 'LAS_CROSS_JOB=FAIL:INVALID_COMPLETED_MODEL'; exit 1
+              }
+            echo 'LAS_CROSS_JOB=COMPLETED_MODEL_AFTER_SEALED_HANDOFF'
+          elif (( java_rc == 124 )); then
+            grep -Fq 'Checkpointing completed at (' "$private/tlc-restored" || {
+              echo 'LAS_CROSS_JOB=FAIL:NO_NEW_BARRIER'; exit 1
+            }
+            mapfile -t new_dirs < <(find "$private/meta" -type f -name vars.chkpt -printf '%h\n' | sort -u)
+            (( ${#new_dirs[@]} == 1 )) || {
+              echo 'LAS_CROSS_JOB=FAIL:RECOVERED_META_AMBIGUOUS'; exit 1
+            }
+            after_state="$(sha256sum "${new_dirs[0]}/queue.chkpt" "${new_dirs[0]}/vars.chkpt" | sha256sum | awk '{print $1}')"
+            [[ "$source_state" != "$after_state" ]] || {
+              echo 'LAS_CROSS_JOB=FAIL:NO_CHECKPOINT_ADVANCE'; exit 1
+            }
+            echo 'LAS_CROSS_JOB=SEALED_DIFFERENT_JOB_RECOVERY_ADVANCED_NOT_MODEL_PASS'
+          else
+            echo 'LAS_CROSS_JOB=FAIL:RECOVERY_MODEL_ERROR'; exit 1
+          fi
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_CROSS_JOB=FAIL:SOURCE_DRIFT'; exit 1
+          }
+          echo 'LAS_CROSS_JOB=SCOPED_ARTIFACT_CUSTODY_FEASIBILITY_NOT_RELEASE'
