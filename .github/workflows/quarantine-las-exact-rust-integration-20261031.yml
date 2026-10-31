@@ -122,6 +122,34 @@ jobs:
           fi
           echo 'LAS_RUST_INTEGRATION=EXACT_SCOPED_RUST_PASS_NOT_RELEASE_APPROVAL'
 
+      - name: Run full default and Linux-feature Rust target tests
+        shell: bash
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.1
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-source"
+          logs="$(mktemp -d "$RUNNER_TEMP/las-rust-alltargets.XXXXXXXX")"
+          chmod 700 "$logs"
+          trap 'rm -rf -- "$logs"' EXIT
+          if ! RUSTFLAGS=-Dwarnings cargo +1.98.1 test --locked --all-targets -- --test-threads=1 > "$logs/default.private" 2>&1; then
+            echo 'LAS_RUST_INTEGRATION=FAIL:DEFAULT_ALL_TARGET_TESTS'; exit 1
+          fi
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$logs/default.private" || {
+            echo 'LAS_RUST_INTEGRATION=FAIL:DEFAULT_VACUOUS'; exit 1
+          }
+          echo 'LAS_RUST_INTEGRATION=DEFAULT_ALL_TARGET_TESTS_PASS'
+          if ! RUSTFLAGS=-Dwarnings cargo +1.98.1 test --locked --features linux-peer-credentials --all-targets -- --test-threads=1 > "$logs/linux.private" 2>&1; then
+            echo 'LAS_RUST_INTEGRATION=FAIL:LINUX_ALL_TARGET_TESTS'; exit 1
+          fi
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$logs/linux.private" || {
+            echo 'LAS_RUST_INTEGRATION=FAIL:LINUX_VACUOUS'; exit 1
+          }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_RUST_INTEGRATION=FAIL:SOURCE_DRIFT'; exit 1
+          }
+          echo 'LAS_RUST_INTEGRATION=LINUX_ALL_TARGET_TESTS_PASS_NOT_RELEASE_APPROVAL'
+
       - name: Scrub private checkout and temporary diagnostics
         if: always()
         shell: bash
