@@ -160,7 +160,35 @@ jobs:
           if ! RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --features linux-peer-credentials --all-targets >"$diagnostics/linux-check" 2>&1; then
             echo 'LAS_RUST_SCOPE=FAIL:LINUX_CHECK'; exit 1
           fi
-          if ! cargo +1.98.1 clippy --locked --all-targets -- -D warnings >"$diagnostics/clippy" 2>&1; then
+          if ! cargo +1.98.1 clippy --locked --all-targets --message-format=json -- -D warnings >"$diagnostics/clippy" 2>&1; then
+            # Native diagnostic code + one-way private path fingerprint only.
+            python3 -I -B - "$diagnostics/clippy" <<'PY'
+          import hashlib, json, re, sys
+          count = 0
+          with open(sys.argv[1], encoding='utf-8', errors='replace') as source:
+              for raw in source:
+                  try:
+                      record = json.loads(raw)
+                  except (ValueError, TypeError):
+                      continue
+                  if record.get('reason') != 'compiler-message':
+                      continue
+                  msg = record.get('message', {})
+                  if msg.get('level') != 'error':
+                      continue
+                  code = (msg.get('code') or {}).get('code') or 'UNKNOWN'
+                  if not re.fullmatch(r'(?:E[0-9]{4}|clippy::[a-z0-9_]{1,60}|[a-z][a-z0-9_]{0,47})', code):
+                      code = 'UNKNOWN'
+                  spans = msg.get('spans') or []
+                  span = next((v for v in spans if v.get('is_primary')), spans[0] if spans else {})
+                  file = str(span.get('file_name', 'UNKNOWN')).replace('\\', '/')
+                  if file.startswith('/') or '..' in file.split('/'):
+                      file = 'UNKNOWN'
+                  count += 1
+                  if count <= 30:
+                      print(f'LAS_CLIPPY_OPAQUE_ERROR={code}:{hashlib.sha256(file.encode()).hexdigest()[:16]}:{int(span.get("line_start",0))}')
+          print(f'LAS_CLIPPY_OPAQUE_ERROR_COUNT={count}')
+          PY
             echo 'LAS_RUST_SCOPE=FAIL:CLIPPY'; exit 1
           fi
           if ! RUSTFLAGS=-Dwarnings cargo +1.98.1 test --locked --all-targets -- --test-threads=1 >"$diagnostics/tests" 2>&1; then
