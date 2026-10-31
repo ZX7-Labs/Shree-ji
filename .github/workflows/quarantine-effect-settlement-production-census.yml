@@ -1,0 +1,89 @@
+name: QUARANTINE expected RED — production settlement driver reachability
+
+on:
+  push:
+    branches:
+      - quarantine/tlc-expected-negative-audit-repair-20261031
+    paths:
+      - .github/workflows/quarantine-effect-settlement-production-census.yml
+      - tools/verification/guarded_effect_settlement_reachability.py
+
+permissions:
+  contents: read
+
+jobs:
+  source-scoped-reachability:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      TARGET_BRANCH_PROOF: 0a9d756901b297941bbaf17509c374fcbbbf6e38862e10a80ec265fc97ce52df
+      EXPECTED_PRIVATE_COMMIT_PROOF: 1adce8a16b15daa5022b11634ffccb7c21785e6ccb449a6055acf2e2d5514e43
+      EXPECTED_PRIVATE_TEST_RUNNER_SHA256: 529de5130fd7f8cb9331fb535e8c762ec75afae6143fbe879c3917bd926495df
+    steps:
+      - name: Checkout exact public census and pinned controller without retained credentials
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - name: Run source-independent fail-closed census unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I -B tools/verification/guarded_effect_settlement_reachability.py --self-test
+      - name: Read exact private source by the existing pinned source-only trust step
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          out="$(mktemp -d "$RUNNER_TEMP/settlement-source.XXXXXXXX")"
+          trap 'rm -rf -- "$out"' EXIT
+          ruby -ryaml - "$out" <<'RUBY'
+          out = ARGV.fetch(0)
+          controller = YAML.safe_load_file('.github/workflows/assurance-all-tlc-audit-022.yml', aliases: false)
+          pinned = controller.fetch('jobs').fetch('tlc-full-audit')
+          %w[TARGET_BRANCH_PROOF EXPECTED_PRIVATE_COMMIT_PROOF EXPECTED_PRIVATE_TEST_RUNNER_SHA256].each do |key|
+            raise 'source proof contract drift' unless ENV.fetch(key) == pinned.fetch('env').fetch(key)
+          end
+          source_step = pinned.fetch('steps').fetch(0).fetch('run')
+          raise 'missing canonical exact source proof' unless
+            source_step.include?('LAS_BRIDGE=EXACT_SOURCE_READY') &&
+            source_step.include?('EXPECTED_PRIVATE_COMMIT_PROOF') &&
+            source_step.include?('RUNNER_SOURCE')
+          File.write(File.join(out, 'recover.sh'), source_step)
+          RUBY
+          bash -n "$out/recover.sh"
+          bash "$out/recover.sh"
+          unset PRIVATE_REPOSITORY PRIVATE_READ_TOKEN
+          echo 'LAS_SETTLEMENT_REACHABILITY=SOURCE_CUSTODY_PINNED'
+      - name: Identify actual non-forwarding production settlement driver
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/private-source"
+          [[ -d "$root/.git" ]] || { echo 'LAS_SETTLEMENT_REACHABILITY=FAIL:SOURCE_MISSING'; exit 1; }
+          cd "$root"
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_SETTLEMENT_REACHABILITY=FAIL:SOURCE_DIRTY'; exit 1
+          }
+          private="$(mktemp -d "$RUNNER_TEMP/settlement-result.XXXXXXXX")"
+          chmod 700 "$private"
+          trap 'rm -rf -- "$private"' EXIT
+          set +e
+          python3 -I -B "$GITHUB_WORKSPACE/tools/verification/guarded_effect_settlement_reachability.py" \
+            --source-root "$root" >"$private/census" 2>&1
+          rc=$?
+          set -e
+          if (( rc == 17 )) && grep -Fxq 'LAS_SETTLEMENT_REACHABILITY=FAIL:NO_NONFORWARDING_PRODUCTION_DRIVER' "$private/census"; then
+            echo 'LAS_SETTLEMENT_REACHABILITY=BLOCKED:NO_NONFORWARDING_PRODUCTION_DRIVER'
+            exit 17
+          elif (( rc == 0 )); then
+            grep -Fxq 'LAS_SETTLEMENT_REACHABILITY=CANDIDATE_FOUND_INDEPENDENT_REVIEW_REQUIRED' "$private/census" || {
+              echo 'LAS_SETTLEMENT_REACHABILITY=FAIL:UNEXPECTED_RECEIPT'; exit 1
+            }
+            echo 'LAS_SETTLEMENT_REACHABILITY=SCOPED_CALLSITE_CANDIDATE_ONLY_NOT_DEPLOYMENT_PASS'
+          else
+            echo 'LAS_SETTLEMENT_REACHABILITY=FAIL:CENSUS_SOURCE_OR_PARSER'
+            exit 1
+          fi
