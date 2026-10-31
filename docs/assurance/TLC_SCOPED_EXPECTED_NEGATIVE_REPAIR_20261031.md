@@ -87,3 +87,8 @@ Added the public-source, runner-private `tools/verification/native_tlc_receipt_m
 
 **Adversarial limits:** these seven mutations do not cover every possible JVM/OS failure or model-checker bug; the classifier is still source-owned, and a passing self-test is not independent release approval.
 
+
+## Strengthened recovery witness (not model completion)
+
+The checkpoint/restart feasibility workflow was additionally hardened to require TLC's **own recovery-start message in the private second-slice log**, not only a changed checkpoint-file hash. Private Python planner errors are no longer echoed into the public Actions console. **Run 41183266981 completed SUCCESS:** source/tool admission, first genuine checkpoint barrier, native TLC recovery startup evidence, and distinct later checkpoint all passed. The output still explicitly says `RESTARTED_AND_ADVANCED_CHECKPOINT_NOT_MODEL_PASS`. This proves same-run recovery on one slow case; it does not authorize cross-run upload or establish that the positive model completed.
+
