@@ -13,8 +13,8 @@ import subprocess
 import sys
 import tempfile
 
-FINISH = re.compile(r"^Finished in .+ at \\([^)]+\\)$", re.MULTILINE)
-POSITIVE = "Model checking completed. No error has been found.\\n"
+FINISH = re.compile(r"^Finished in .+ at \([^)]+\)$", re.MULTILINE)
+POSITIVE = "Model checking completed. No error has been found.\n"
 WRONG_EXPECTATION = r"Invariant DefinitelyAbsentNegativeControl is violated"
 
 
@@ -51,10 +51,10 @@ def verify(classifier: Path, log: Path, original_rc: int, expectation: str) -> b
                 ("wrong-java-exit", body, 0, 0, expectation),
                 ("failed-log-writer", body, 12, 1, expectation),
                 ("wrong-invariant", body, 12, 0, WRONG_EXPECTATION),
-                ("injected-positive", body + "\\n" + POSITIVE, 12, 0, expectation),
-                ("duplicate-finish", body + "\\n" + finished[0] + "\\n", 12, 0, expectation),
+                ("injected-positive", body + "\n" + POSITIVE, 12, 0, expectation),
+                ("duplicate-finish", body + "\n" + finished[0] + "\n", 12, 0, expectation),
                 ("missing-finish", body.replace(finished[0], "", 1), 12, 0, expectation),
-                ("foreign-error", body + "\\nError: Synthetic unrelated error\\n", 12, 0, expectation),
+                ("foreign-error", body + "\nError: Synthetic unrelated error\n", 12, 0, expectation),
             ]
             for name, altered, java_rc, tee_rc, rule in corruptions:
                 if classify(altered, java_rc, tee_rc, rule) == 0:
