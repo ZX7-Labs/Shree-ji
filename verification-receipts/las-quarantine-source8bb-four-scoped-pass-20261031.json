@@ -1,0 +1,147 @@
+{
+  "schema": "las-exact-private-final-candidate-scoped-assurance-v1",
+  "source_repository_kind": "private",
+  "private_source_sha256": "5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f",
+  "source_sha_custody": "source commit only verified in authenticated private app; SHA-256 proof used in public runner",
+  "candidate_source_revision": "8bb24925e84d541e9d9266d1e26c89a8d9aafd22",
+  "public_control_branch": "quarantine/las-native-python-98-exact-20261031",
+  "scope": "SCOPED_EVIDENCE_ONLY_NOT_GLOBAL_PROOF",
+  "validated_runs": [
+    {
+      "label": "rust_default_and_linux_all_targets",
+      "run_id": 41228566025,
+      "job_id": 124617760741,
+      "head_sha": "731545c62b80a3150b5729bfffe8e9bb1c56661c",
+      "conclusion": "success",
+      "completed_at": "2026-10-31T18:18:04Z",
+      "checked_markers": [
+        "LAS_PRIVATE_SOURCE_PROOF=5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f",
+        "LAS_SETTLEMENT_RUST=FORMAT_PINNED_PASS",
+        "LAS_SETTLEMENT_RUST=DEFAULT_COMPILE_PASS",
+        "LAS_SETTLEMENT_RUST=CLIPPY_PASS",
+        "LAS_SETTLEMENT_RUST=LIB_TESTS_PASS",
+        "LAS_RUST_INTEGRATION=DEFAULT_ALL_TARGET_TESTS_PASS",
+        "LAS_RUST_INTEGRATION=LINUX_ALL_TARGET_TESTS_PASS_NOT_RELEASE_APPROVAL",
+        "LAS_RUST_INTEGRATION=EPHEMERAL_CLEANUP"
+      ],
+      "nontrivial_steps": [
+        {
+          "name": "Recover one privately pinned source revision",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify pinned Rust 1.98.1 crate, source policy and unit tests",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run full default and Linux-feature Rust target tests",
+          "conclusion": "success"
+        },
+        {
+          "name": "Scrub private checkout and temporary diagnostics",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "label": "root_ffi_ada_gprbuild_rust_scoped",
+      "run_id": 41228570150,
+      "job_id": 124617772648,
+      "head_sha": "e0184f00b37e57c7e01dcc26a6c52f119a67421f",
+      "conclusion": "success",
+      "completed_at": "2026-10-31T18:17:26Z",
+      "checked_markers": [
+        "LAS_NATIVE_BRIDGE=SOURCE_PINNED:5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f",
+        "LAS_ROOT_FFI=COMPILE_PASS",
+        "LAS_ROOT_FFI=CLIPPY_PASS",
+        "LAS_ROOT_FFI=EXACT_SCOPED_RUST_FFI_PASS_NOT_RELEASE_APPROVAL",
+        "LAS_ROOT_FFI=EPHEMERAL_CLEANUP"
+      ],
+      "nontrivial_steps": [
+        {
+          "name": "Install pinned Rust and Ada GPRBuild toolchains",
+          "conclusion": "success"
+        },
+        {
+          "name": "Recover exact read-only private source without publishing code",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify exact Root FFI Linux compilation, Clippy and nonvacuous Rust tests",
+          "conclusion": "success"
+        },
+        {
+          "name": "Scrub private checkout and Ada toolchain diagnostic files",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "label": "source_owned_python_12_stages_316_cases",
+      "run_id": 41228584499,
+      "job_id": 124617814933,
+      "head_sha": "de3bb7a3d4b7174795a2b8a8315ecad18120be65",
+      "conclusion": "success",
+      "completed_at": "2026-10-31T18:16:59Z",
+      "checked_markers": [
+        "LAS_NATIVE_BRIDGE=SOURCE_PINNED:5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f",
+        "LAS_NATIVE_BRIDGE=SCOPED_PRIVATE_PYTHON_PASS_NOT_PRODUCT_RELEASE",
+        "LAS_NATIVE_BRIDGE=EPHEMERAL_CLEANUP"
+      ],
+      "nontrivial_steps": [
+        {
+          "name": "Recover exact read-only private source without publishing code",
+          "conclusion": "success"
+        },
+        {
+          "name": "Execute source-owned non-vacuous 12-stage native suite",
+          "conclusion": "success"
+        },
+        {
+          "name": "Scrub ephemeral checkout",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "label": "root_nine_model_sany_semantic_level_not_tlc",
+      "run_id": 41228588983,
+      "job_id": 124617827858,
+      "head_sha": "0c920d2e79ed0435008c43d195ba286278aa4cdb",
+      "conclusion": "success",
+      "completed_at": "2026-10-31T18:16:38Z",
+      "checked_markers": [
+        "LAS_NATIVE_BRIDGE=SOURCE_PINNED:5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f",
+        "LAS_ROOT_SANY=9_PINNED_MODELS_PARSED_SEMANTIC_LEVEL_PASS_NOT_TLC",
+        "LAS_ROOT_SANY=EPHEMERAL_CLEANUP"
+      ],
+      "nontrivial_steps": [
+        {
+          "name": "Recover exact read-only private source without publishing code",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify exactly nine source-owned Root TLA models with checked SANY API 1.7.4",
+          "conclusion": "success"
+        },
+        {
+          "name": "Scrub private source and SANY logs",
+          "conclusion": "success"
+        }
+      ]
+    }
+  ],
+  "python_case_executions": 316,
+  "python_native_stages": 12,
+  "root_sany_model_count": 9,
+  "not_yet_verified": [
+    "Root SPARK exact final SHA if pending",
+    "TLC full formal coverage",
+    "independent sensor provider physical authentication",
+    "physical actuator end-to-end",
+    "full canonical bench/performance",
+    "release governance"
+  ],
+  "no_public_private_source_mirror_claim": true,
+  "release_authorized": false
+}
