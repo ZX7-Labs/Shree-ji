@@ -124,18 +124,18 @@ jobs:
           jar_sha="$(sha256sum "$RUNNER_TEMP/las-tlc-tools.jar" | awk '{print $1}')"
           case_sha="$(printf '%s\t%s\t%s\n' "$cfg" "$model" "$deadlock" | sha256sum | awk '{print $1}')"
           java_sha="$(java -version 2>&1 | sha256sum | awk '{print $1}')"
-          printf 'version=1\nrunner=%s\nrun=%s\nrevision=%s\njar=%s\njava=%s\nnproc=%s\ncase=%s\n' \
-             "$GITHUB_SHA" "$GITHUB_RUN_ID" "$EXPECTED_PRIVATE_COMMIT_PROOF" "$jar_sha" "$java_sha" "$(nproc)" "$case_sha" > "$meta/las-identity"
+          printf 'version=1\nrunner=%s\nrun=%s\nattempt=%s\nrevision=%s\njar=%s\njava=%s\nnproc=%s\ncase=%s\n' \
+             "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$EXPECTED_PRIVATE_COMMIT_PROOF" "$jar_sha" "$java_sha" "$(nproc)" "$case_sha" > "$meta/las-identity"
           tar -C "$logdir" -czf "$logdir/metadata.tar.gz" meta
           if [[ -z "$PRIVATE_READ_TOKEN" ]]; then
             echo 'LAS_CROSS_JOB=FAIL:NO_PROTECTED_CUSTODY'; exit 1
           fi
           export LAS_CHECKPOINT_ENC_PASSWORD
-          LAS_CHECKPOINT_ENC_PASSWORD="$(printf '%s\0%s\0%s\0%s' \
-            'LAS_PROBE_ENC_V1' "$PRIVATE_READ_TOKEN" "$GITHUB_SHA" "$GITHUB_RUN_ID" | sha256sum | awk '{print $1}')"
+          LAS_CHECKPOINT_ENC_PASSWORD="$(printf '%s\0%s\0%s\0%s\0%s' \
+            'LAS_PROBE_ENC_V1' "$PRIVATE_READ_TOKEN" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" | sha256sum | awk '{print $1}')"
           export LAS_CHECKPOINT_HMAC_KEY
-          LAS_CHECKPOINT_HMAC_KEY="$(printf '%s\0%s\0%s\0%s' \
-            'LAS_PROBE_MAC_V1' "$PRIVATE_READ_TOKEN" "$GITHUB_SHA" "$GITHUB_RUN_ID" | sha256sum | awk '{print $1}')"
+          LAS_CHECKPOINT_HMAC_KEY="$(printf '%s\0%s\0%s\0%s\0%s' \
+            'LAS_PROBE_MAC_V1' "$PRIVATE_READ_TOKEN" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" | sha256sum | awk '{print $1}')"
           public="$RUNNER_TEMP/las-cryptographic-artifact"
           mkdir -m 700 "$public"
           openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 \
@@ -145,6 +145,7 @@ jobs:
           encrypted, mac = map(pathlib.Path, sys.argv[1:3])
           secret = bytes.fromhex(os.environ['LAS_CHECKPOINT_HMAC_KEY'])
           identity = (os.environ['GITHUB_SHA'] + '\0' + os.environ['GITHUB_RUN_ID'] +
+                      '\0' + os.environ['GITHUB_RUN_ATTEMPT'] +
                       '\0' + os.environ['EXPECTED_PRIVATE_COMMIT_PROOF']).encode()
           digest = hmac.new(secret, identity + b'\0', hashlib.sha256)
           with encrypted.open('rb') as f:
@@ -224,11 +225,11 @@ jobs:
             echo 'LAS_CROSS_JOB=FAIL:UNTRUSTED_ARTIFACT'; exit 1
           }
           export LAS_CHECKPOINT_ENC_PASSWORD
-          LAS_CHECKPOINT_ENC_PASSWORD="$(printf '%s\0%s\0%s\0%s' \
-            'LAS_PROBE_ENC_V1' "$PRIVATE_READ_TOKEN" "$GITHUB_SHA" "$GITHUB_RUN_ID" | sha256sum | awk '{print $1}')"
+          LAS_CHECKPOINT_ENC_PASSWORD="$(printf '%s\0%s\0%s\0%s\0%s' \
+            'LAS_PROBE_ENC_V1' "$PRIVATE_READ_TOKEN" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" | sha256sum | awk '{print $1}')"
           export LAS_CHECKPOINT_HMAC_KEY
-          LAS_CHECKPOINT_HMAC_KEY="$(printf '%s\0%s\0%s\0%s' \
-            'LAS_PROBE_MAC_V1' "$PRIVATE_READ_TOKEN" "$GITHUB_SHA" "$GITHUB_RUN_ID" | sha256sum | awk '{print $1}')"
+          LAS_CHECKPOINT_HMAC_KEY="$(printf '%s\0%s\0%s\0%s\0%s' \
+            'LAS_PROBE_MAC_V1' "$PRIVATE_READ_TOKEN" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" | sha256sum | awk '{print $1}')"
           if ! python3 -I -B - "$encrypted" "$mac" > "$private/auth-private" 2>&1 <<'PY'
           import hashlib, hmac, os, pathlib, re, sys
           cipher, signature = map(pathlib.Path, sys.argv[1:3])
@@ -236,6 +237,7 @@ jobs:
           if not re.fullmatch(r'[0-9a-f]{64}', provided):
               raise SystemExit(2)
           identity = (os.environ['GITHUB_SHA'] + '\0' + os.environ['GITHUB_RUN_ID'] +
+                      '\0' + os.environ['GITHUB_RUN_ATTEMPT'] +
                       '\0' + os.environ['EXPECTED_PRIVATE_COMMIT_PROOF']).encode()
           actual = hmac.new(bytes.fromhex(os.environ['LAS_CHECKPOINT_HMAC_KEY']),
                             identity + b'\0', hashlib.sha256)
@@ -264,6 +266,7 @@ jobs:
           import hashlib, hmac, os, pathlib, sys
           cipher, signature = map(pathlib.Path, sys.argv[1:3])
           identity = (os.environ['GITHUB_SHA'] + '\0' + os.environ['GITHUB_RUN_ID'] +
+                      '\0' + os.environ['GITHUB_RUN_ATTEMPT'] +
                       '\0' + os.environ['EXPECTED_PRIVATE_COMMIT_PROOF']).encode()
           actual = hmac.new(bytes.fromhex(os.environ['LAS_CHECKPOINT_HMAC_KEY']), identity+b'\0',hashlib.sha256)
           with cipher.open('rb') as f:
@@ -313,6 +316,7 @@ jobs:
           grep -Fxq 'version=1' "$manifest" &&
           grep -Fxq "runner=$GITHUB_SHA" "$manifest" &&
           grep -Fxq "run=$GITHUB_RUN_ID" "$manifest" &&
+          grep -Fxq "attempt=$GITHUB_RUN_ATTEMPT" "$manifest" &&
           grep -Fxq "revision=$EXPECTED_PRIVATE_COMMIT_PROOF" "$manifest" &&
           grep -Fxq "jar=$(sha256sum "$RUNNER_TEMP/las-tlc-tools.jar" | awk '{print $1}')" "$manifest" &&
           grep -Fxq "java=$(java -version 2>&1 | sha256sum | awk '{print $1}')" "$manifest" &&
