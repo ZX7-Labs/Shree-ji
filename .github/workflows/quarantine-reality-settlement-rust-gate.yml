@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 42
     env:
       TARGET_BRANCH_PROOF: bfef81c13787a130d485ec445be47cddd779df8fff141805a4c663fdd6034b8c
-      EXPECTED_PRIVATE_COMMIT_PROOF: ca31cd300de5c26506153b6018dc68c00ebbae8b2dca98afd880e87e5b372387
+      EXPECTED_PRIVATE_COMMIT_PROOF: 82a5da61d6c2977e590e9e1f3ef835a54cf0dac9e85a38166eca7046a8dd7550
       EXPECTED_PRIVATE_TEST_RUNNER_SHA256: 529de5130fd7f8cb9331fb535e8c762ec75afae6143fbe879c3917bd926495df
     steps:
       - name: Recover one privately pinned source revision
