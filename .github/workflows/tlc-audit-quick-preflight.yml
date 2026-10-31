@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/tlc-audit-quick-preflight.yml
       - .github/workflows/assurance-all-tlc-audit-022.yml
+      - .github/workflows/quarantine-crossjob-checkpoint.yml
   workflow_dispatch:
 
 permissions:
@@ -69,4 +70,50 @@ jobs:
               raise SystemExit('missing canonical-map-extraction heredoc')
           compile(match.group(1), '<embedded-canonical-map-extractor>', 'exec')
           print('LAS_TLC_AUDIT_PREFLIGHT=SOURCE_YAML_BASH_PYTHON_SCOPED_PASS')
+          PY
+
+      - name: Cross-job checkpoint YAML/Bash/Python only (no private data or artifact)
+        shell: bash
+        run: |
+          set -euo pipefail
+          source=".github/workflows/quarantine-crossjob-checkpoint.yml"
+          out="$(mktemp -d "$RUNNER_TEMP/crossjob-syntax.XXXXXXXX")"
+          chmod 700 "$out"
+          trap 'rm -rf -- "$out"' EXIT
+          ruby -ryaml - "$source" "$out" <<'RUBY'
+          input, out = ARGV
+          jobs = YAML.safe_load_file(input, aliases: false).fetch('jobs')
+          raise 'expected producer and consumer' unless jobs.keys.sort == %w[consumer producer]
+          scripts = jobs.values.flat_map { |job| job.fetch('steps').filter_map { |step| step['run'] } }
+          raise 'missing native shell steps' if scripts.length < 5
+          scripts.each_with_index do |body, i|
+            raise 'invalid step' unless body.is_a?(String) && !body.empty?
+            File.write(File.join(out, "cross#{i}.sh"), body)
+          end
+          RUBY
+          for file in "$out"/cross*.sh; do
+            bash -n "$file"
+          done
+          python3 -I -B - "$out" <<'PY'
+          import pathlib, re, sys
+          root = pathlib.Path(sys.argv[1])
+          count = 0
+          for shell_file in sorted(root.glob("cross*.sh")):
+              lines = shell_file.read_text(encoding="utf-8").splitlines()
+              pos = 0
+              while pos < len(lines):
+                  if re.search(r"<<'PY'\s*$", lines[pos]):
+                      body = []
+                      pos += 1
+                      while pos < len(lines) and lines[pos] != "PY":
+                          body.append(lines[pos])
+                          pos += 1
+                      if pos == len(lines):
+                          raise SystemExit("unclosed Python heredoc")
+                      compile("\n".join(body) + "\n", "<checkpoint-embedded-python>", "exec")
+                      count += 1
+                  pos += 1
+          if count < 5:
+              raise SystemExit("insufficient native Python programs examined")
+          print("LAS_CROSSJOB_STATIC=YAML_BASH_PYTHON_PASS_ONLY")
           PY
