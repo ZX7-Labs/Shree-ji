@@ -1,0 +1,172 @@
+name: Source-exact TLC checkpoint and restart feasibility (quarantine research)
+
+on:
+  push:
+    branches:
+      - quarantine/tlc-expected-negative-audit-repair-20261031
+    paths:
+      - .github/workflows/quarantine-tlc-checkpoint-restart-probe.yml
+
+permissions:
+  contents: read
+
+jobs:
+  checkpoint-probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      TARGET_BRANCH_PROOF: 0a9d756901b297941bbaf17509c374fcbbbf6e38862e10a80ec265fc97ce52df
+      EXPECTED_PRIVATE_COMMIT_PROOF: 1adce8a16b15daa5022b11634ffccb7c21785e6ccb449a6055acf2e2d5514e43
+      EXPECTED_PRIVATE_TEST_RUNNER_SHA256: 529de5130fd7f8cb9331fb535e8c762ec75afae6143fbe879c3917bd926495df
+    steps:
+      - name: Read public controller without retaining credentials
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - name: Recover exact private source and pinned TLC 1.7.4 from tested bridge
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          source=.github/workflows/quarantine-two-case-tlc-smoke.yml
+          out="$(mktemp -d "$RUNNER_TEMP/tlc-restart-setup.XXXXXXXX")"
+          chmod 700 "$out"
+          trap 'rm -rf -- "$out"' EXIT
+          ruby -ryaml - "$source" "$out" <<'RUBY'
+          source, out = ARGV
+          steps = YAML.safe_load_file(source, aliases: false).fetch('jobs').fetch('smoke').fetch('steps')
+          raise 'unexpected sequence' unless steps.length == 3
+          code = steps[1].fetch('run')
+          raise 'missing pinned recovery' unless code.include?('EXPECTED_PRIVATE_COMMIT_PROOF') && code.include?('setup1.sh')
+          File.write(File.join(out, 'recover.sh'), code)
+          RUBY
+          bash -n "$out/recover.sh"
+          bash "$out/recover.sh"
+          unset PRIVATE_REPOSITORY PRIVATE_READ_TOKEN
+          echo 'LAS_CHECKPOINT_PROBE=SOURCE_AND_TOOL_PINNED'
+      - name: Check slow positive checkpoint creation and immutable-revision restart
+        shell: bash
+        env:
+          JAVA_TOOL_OPTIONS: -Xmx5g
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/private-source"
+          cd "$root"
+          logs="$(mktemp -d "$RUNNER_TEMP/tlc-restart-private.XXXXXXXX")"
+          chmod 700 "$logs"
+          trap 'rm -rf -- "$logs"' EXIT
+          if ! python3 -I -B - "$root" "$logs" <<'PY'
+          import contextlib, io, os, pathlib, sys
+          root, logs = map(pathlib.Path, sys.argv[1:3])
+          source = (root / 'tools/verify_codespaces_all.sh').read_text(encoding='utf-8')
+          marker = """if ! python3 - "$ROOT" > "$TLC_MAP.pending" <<'PY'\n"""
+          closing = "\nPY\nthen"
+          if source.count(marker) != 1:
+              raise SystemExit(2)
+          tail = source.split(marker, 1)[1]
+          if tail.count(closing) != 1:
+              raise SystemExit(2)
+          capture = io.StringIO()
+          sys.argv = ['canonical', str(root)]
+          with contextlib.redirect_stdout(capture):
+              exec(compile(tail.split(closing, 1)[0], '<exact-canonical-map>', 'exec'),
+                   {'__name__': '__main__'})
+          rows = [line.split('\t', 3) for line in capture.getvalue().splitlines()]
+          if len(rows) != 207 or any(len(row) != 4 for row in rows):
+              raise SystemExit(2)
+          positives = [row for row in rows if not row[3] and not row[0].endswith('Negative.cfg')]
+          negatives = [row for row in rows if row[3] and row[0].endswith('Negative.cfg')]
+          if len(positives) != 195 or len(negatives) != 12:
+              raise SystemExit(2)
+          for row in positives:
+              for p in row[:2]:
+                  name = pathlib.PurePosixPath(p)
+                  if name.is_absolute() or not p.startswith('spec/') or '..' in name.parts:
+                      raise SystemExit(2)
+                  if not (root / p).is_file() or (root / p).is_symlink():
+                      raise SystemExit(2)
+          # The first native 4-minute positive timeout used this deterministic
+          # source-based selector. No private path/name is published.
+          candidate = min(positives, key=lambda row: (os.stat(root / row[1]).st_size, row[0]))
+          fd = os.open(logs / 'case.tsv', os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+          with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+              handle.write('\t'.join(candidate) + '\n')
+          print('LAS_CHECKPOINT_PROBE=CANONICAL_SLOW_CANDIDATE_SELECTED')
+          PY
+          then
+            echo 'LAS_CHECKPOINT_PROBE=FAIL:PRIVATE_SOURCE_PLAN'; exit 1
+          fi
+          IFS=$'\t' read -r cfg model deadlock expectation < "$logs/case.tsv"
+          [[ -n "$cfg" && -n "$model" && -z "$expectation" ]] || {
+            echo 'LAS_CHECKPOINT_PROBE=FAIL:BAD_CASE'; exit 1
+          }
+          git -c core.fsmonitor=false ls-files --error-unmatch "$cfg" "$model" >/dev/null 2>&1 || {
+            echo 'LAS_CHECKPOINT_PROBE=FAIL:SOURCE_CUSTODY'; exit 1
+          }
+          meta="$logs/metadata"
+          mkdir -m 700 "$meta"
+          archive="$RUNNER_TEMP/las-tlc-tools.jar"
+          args=(-workers auto -lncheck final -fp 0 -checkpoint 1 -metadir "$meta")
+          if [[ "$deadlock" == "1" ]]; then args+=(-deadlock); fi
+          args+=(-config "$(basename "$cfg")" "$(basename "$model")")
+          # The first slice is deliberately incomplete: its goal is a real TLC
+          # checkpoint barrier, NOT a model-check PASS.
+          if (cd "$(dirname "$cfg")" && timeout --signal=TERM --kill-after=15s 150s \
+               java -XX:+UseParallelGC -jar "$archive" "${args[@]}") > "$logs/slice1" 2>&1; then
+            echo 'LAS_CHECKPOINT_PROBE=FAIL:UNEXPECTED_EARLY_COMPLETION'; exit 1
+          else
+            rc=$?
+          fi
+          if (( rc != 124 )); then
+            echo 'LAS_CHECKPOINT_PROBE=FAIL:UNEXPECTED_FIRST_EXIT'; exit 1
+          fi
+          grep -Fq 'Checkpointing completed at (' "$logs/slice1" || {
+            echo 'LAS_CHECKPOINT_PROBE=FAIL:NO_COMPLETED_BARRIER'; exit 1
+          }
+          mapfile -t checkpoint_dirs < <(find "$meta" -type f -name vars.chkpt -printf '%h\n' | sort -u)
+          (( ${#checkpoint_dirs[@]} == 1 )) || {
+            echo 'LAS_CHECKPOINT_PROBE=FAIL:AMBIGUOUS_OR_MISSING_CHECKPOINT'; exit 1
+          }
+          recovery_dir="${checkpoint_dirs[0]}"
+          [[ -f "$recovery_dir/queue.chkpt" && ! -L "$recovery_dir/queue.chkpt" ]] || {
+            echo 'LAS_CHECKPOINT_PROBE=FAIL:INCOMPLETE_CHECKPOINT'; exit 1
+          }
+          state_before="$(sha256sum "$recovery_dir/queue.chkpt" "$recovery_dir/vars.chkpt" | sha256sum | awk '{print $1}')"
+          echo 'LAS_CHECKPOINT_PROBE=FIRST_REAL_BARRIER_COMPLETE'
+          recovered_args=(-workers auto -lncheck final -fp 0 -checkpoint 1 -metadir "$meta" -recover "$recovery_dir")
+          if [[ "$deadlock" == "1" ]]; then recovered_args+=(-deadlock); fi
+          recovered_args+=(-config "$(basename "$cfg")" "$(basename "$model")")
+          if (cd "$(dirname "$cfg")" && timeout --signal=TERM --kill-after=15s 150s \
+               java -XX:+UseParallelGC -jar "$archive" "${recovered_args[@]}") > "$logs/slice2" 2>&1; then
+            java_rc=0
+          else
+            java_rc=$?
+          fi
+          if (( java_rc == 0 )); then
+            if ! python3 -I -B tools/verification/canonical_tlc_result_evidence.py \
+                   "$logs/slice2" 0 0 > "$logs/recovery-receipt" 2>&1; then
+              echo 'LAS_CHECKPOINT_PROBE=FAIL:INVALID_COMPLETE_RECEIPT'; exit 1
+            fi
+            echo 'LAS_CHECKPOINT_PROBE=COMPLETE_MODEL_AFTER_RESTART'
+          elif (( java_rc == 124 )); then
+            grep -Fq 'Checkpointing completed at (' "$logs/slice2" || {
+              echo 'LAS_CHECKPOINT_PROBE=FAIL:NO_SECOND_BARRIER'; exit 1
+            }
+            mapfile -t new_dirs < <(find "$meta" -type f -name vars.chkpt -printf '%h\n' | sort -u)
+            (( ${#new_dirs[@]} == 1 )) || {
+              echo 'LAS_CHECKPOINT_PROBE=FAIL:RECOVERY_CHECKPOINT_AMBIGUITY'; exit 1
+            }
+            state_after="$(sha256sum "${new_dirs[0]}/queue.chkpt" "${new_dirs[0]}/vars.chkpt" | sha256sum | awk '{print $1}')"
+            [[ "$state_before" != "$state_after" ]] || {
+              echo 'LAS_CHECKPOINT_PROBE=FAIL:NO_CHECKPOINT_CHANGE'; exit 1
+            }
+            echo 'LAS_CHECKPOINT_PROBE=RESTARTED_AND_ADVANCED_CHECKPOINT_NOT_MODEL_PASS'
+          else
+            echo 'LAS_CHECKPOINT_PROBE=FAIL:MODEL_OR_RECOVERY'; exit 1
+          fi
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_CHECKPOINT_PROBE=FAIL:SOURCE_DRIFT'; exit 1
+          }
+          echo 'LAS_CHECKPOINT_PROBE=SCOPED_SAME_RUNNER_FEASIBILITY_ONLY_NOT_RELEASE'
