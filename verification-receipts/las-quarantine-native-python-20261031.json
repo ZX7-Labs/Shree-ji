@@ -1,0 +1,49 @@
+{
+  "schema": "las-pspr-native-bridge-scoped-receipt-v1",
+  "classification": "EXACT_PRIVATE_REVISION_SCOPED_PYTHON_NOT_PRODUCT_RELEASE",
+  "private_source_commit_sha256": "1bc15bc87e3a8b16b2bd75b4801a0439028c60e203db51f51b879f93fc0ca84e",
+  "private_runner_blob_sha256": "05e9176f1487e4a9303b38ae49f2cc88892c10657b1e43892935b27267235102",
+  "public_runner_repo": "ZX7-Labs/Shree-ji",
+  "public_run_id": 41226876948,
+  "public_job_id": 124612755404,
+  "public_head_sha": "97b6e49920c5b7e8296cdb99c13f479f9ad462d9",
+  "public_workflow_path": ".github/workflows/quarantine-las-native-python-98-20261031.yml",
+  "run_conclusion": "success",
+  "job_conclusion": "success",
+  "completed_at": "2026-10-31T17:56:02Z",
+  "required_steps": [
+    {
+      "name": "Recover exact read-only private source without publishing code",
+      "conclusion": "success"
+    },
+    {
+      "name": "Execute source-owned non-vacuous 12-stage native suite",
+      "conclusion": "success"
+    },
+    {
+      "name": "Scrub ephemeral checkout",
+      "conclusion": "success"
+    }
+  ],
+  "public_markers": [
+    "LAS_NATIVE_BRIDGE=SOURCE_PINNED:1bc15bc87e3a8b16b2bd75b4801a0439028c60e203db51f51b879f93fc0ca84e",
+    "LAS_NATIVE_BRIDGE=SCOPED_PRIVATE_PYTHON_PASS_NOT_PRODUCT_RELEASE",
+    "LAS_NATIVE_BRIDGE=EPHEMERAL_CLEANUP"
+  ],
+  "source_owned_native_stage_count": 12,
+  "source_owned_native_case_executions": 316,
+  "native_modes": [
+    "normal",
+    "optimized"
+  ],
+  "raw_private_logs_uploaded": false,
+  "excluded_assurance": [
+    "Rust current exact revision",
+    "Ada/SPARK",
+    "TLA+/TLC full coverage",
+    "independent reality sensor authenticity",
+    "FFI/restart/replay integration",
+    "physical deployment",
+    "owner release approval"
+  ]
+}
