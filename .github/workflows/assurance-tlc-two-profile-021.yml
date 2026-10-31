@@ -94,8 +94,12 @@ jobs:
           if ! printf '%s  %s\n' '7f21faa2cdae3189e7d5fadb4488f0dfcc658407' "$archive" | sha1sum --check --strict >"$private_log" 2>&1; then
             echo 'LAS_TLC_SCOPE=FAIL:SOURCE_PIN'; exit 1
           fi
-          echo "LAS_TLC_ARTIFACT_SHA256=$(sha256sum "$archive" | awk '{print $1}')"
-          echo 'LAS_TLC_SCOPE=ORIGINAL_TOOL_PIN_MATCHED_SHA1_ONLY'
+          # Strong artifact pin derived from separately observed official-source
+          # SHA-1-pinned native run 41176201522 (do not trust a new jar build).
+          if ! printf '%s  %s\n' 'fa18543e44ed5974a85bd2c60c0dc16620ae117680ea8e693d2691999ed90b22' "$archive" | sha256sum --check --strict > "$private_log" 2>&1; then
+            echo 'LAS_TLC_SCOPE=FAIL:SHA256'; exit 1
+          fi
+          echo 'LAS_TLC_SCOPE=PINNED_SHA1_AND_SHA256'
 
       - name: Execute two exact source-pinned model profiles natively
         shell: bash
