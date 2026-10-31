@@ -1,0 +1,150 @@
+name: Quarantine private sensor and flow constructor privacy compilation
+on:
+  push:
+    branches:
+      - quarantine/las-native-python-98-exact-20261031
+    paths:
+      - .github/workflows/quarantine-las-privacy-constructor-negatives-20261031.yml
+permissions:
+  contents: read
+jobs:
+  compile-private-negatives:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      TARGET_BRANCH_PROOF: 2e7d4bb17d6ca183c895b195861e75f8bfd9de9b031d4b4306a0e7ad836de47e
+      EXPECTED_PRIVATE_COMMIT_PROOF: 5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f
+      EXPECTED_PRIVATE_RUNNER_BLOB_PROOF: 05e9176f1487e4a9303b38ae49f2cc88892c10657b1e43892935b27267235102
+    steps:
+      - name: Recover exact read-only private source without publishing code
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PRIVATE_REPOSITORY" || -z "$PRIVATE_READ_TOKEN" ]]; then
+            echo 'LAS_NATIVE_BRIDGE=FAIL:ACCESS'; exit 1
+          fi
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_READ_TOKEN"
+          private="$RUNNER_TEMP/private-source"
+          mkdir -m 700 "$private"
+          cd "$private"
+          git init -q
+          git remote add origin "https://github.com/$PRIVATE_REPOSITORY.git"
+          authorization="$(printf 'x-access-token:%s' "$PRIVATE_READ_TOKEN" | base64 -w0)"
+          echo "::add-mask::$authorization"
+          all_refs="$RUNNER_TEMP/private-heads"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" ls-remote --heads origin > "$all_refs" 2> "$RUNNER_TEMP/secret-fetch-error" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:READ'; exit 1
+          }
+          match=''
+          while read -r _sha candidate; do
+            candidate_proof="$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')"
+            if [[ "$candidate_proof" == "$TARGET_BRANCH_PROOF" ]]; then
+              [[ -z "$match" ]] || { echo 'LAS_NATIVE_BRIDGE=FAIL:AMBIGUOUS_REF'; exit 1; }
+              match="$candidate"
+            fi
+          done < "$all_refs"
+          rm -f "$all_refs" "$RUNNER_TEMP/secret-fetch-error"
+          [[ -n "$match" ]] || { echo 'LAS_NATIVE_BRIDGE=FAIL:TARGET'; exit 1; }
+          echo "::add-mask::$match"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" fetch -q --depth=1 origin "$match" > /dev/null 2> "$RUNNER_TEMP/secret-fetch-error" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:FETCH'; exit 1
+          }
+          rm -f "$RUNNER_TEMP/secret-fetch-error"
+          unset authorization PRIVATE_READ_TOKEN PRIVATE_REPOSITORY
+          git -c core.fsmonitor=false checkout -q --detach FETCH_HEAD
+          actual="$(git -c core.fsmonitor=false rev-parse --verify HEAD)"
+          echo "::add-mask::$actual"
+          proof="$(printf '%s' "$actual" | sha256sum | awk '{print $1}')"
+          [[ "$proof" == "$EXPECTED_PRIVATE_COMMIT_PROOF" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:SOURCE_PIN'; exit 1
+          }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:DIRTY'; exit 1
+          }
+          script='tools/verification/run_bridge_native_suite.sh'
+          [[ -f "$script" && ! -L "$script" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:RUNNER_MISSING'; exit 1
+          }
+          blob="$(git -c core.fsmonitor=false hash-object "$script")"
+          blob_proof="$(printf '%s' "$blob" | sha256sum | awk '{print $1}')"
+          [[ "$blob_proof" == "$EXPECTED_PRIVATE_RUNNER_BLOB_PROOF" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:RUNNER_PIN'; exit 1
+          }
+          echo "LAS_NATIVE_BRIDGE=SOURCE_PINNED:$proof"
+
+      - name: Check source-owned compiler-negative classifiers against mutations
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-source"
+          private="$(mktemp -d "$RUNNER_TEMP/las-privacy-negative.XXXXXXXX")"
+          chmod 700 "$private"
+          for mode in normal optimized; do
+            flags=()
+            if [[ "$mode" == optimized ]]; then flags=(-O); fi
+            if ! python3 -I -B ${flags[@]} -m unittest discover -s tools/verification -p 'test_sensor_event_privacy_compiler.py' > "$private/sensor-$mode.private" 2>&1; then
+              echo 'LAS_PRIVACY=FAIL:SENSOR_CLASSIFIER'; exit 1
+            fi
+            grep -Eq '^Ran 9 tests in [0-9.]+s$' "$private/sensor-$mode.private" || {
+              echo 'LAS_PRIVACY=FAIL:SENSOR_COUNT'; exit 1
+            }
+            grep -Fxq 'OK' "$private/sensor-$mode.private" || {
+              echo 'LAS_PRIVACY=FAIL:SENSOR_CLASSIFIER_RESULT'; exit 1
+            }
+            if ! python3 -I -B ${flags[@]} -m unittest discover -s tools/verification -p 'test_flow_release_privacy_compiler.py' > "$private/flow-$mode.private" 2>&1; then
+              echo 'LAS_PRIVACY=FAIL:FLOW_CLASSIFIER'; exit 1
+            fi
+            grep -Eq '^Ran 11 tests in [0-9.]+s$' "$private/flow-$mode.private" || {
+              echo 'LAS_PRIVACY=FAIL:FLOW_COUNT'; exit 1
+            }
+            grep -Fxq 'OK' "$private/flow-$mode.private" || {
+              echo 'LAS_PRIVACY=FAIL:FLOW_CLASSIFIER_RESULT'; exit 1
+            }
+          done
+          echo 'LAS_PRIVACY=CLASSIFIER_40_CASES_PASS_NOT_NATIVE_COMPILER'
+
+      - name: Compile exact negative Rust privacy witnesses and refuse public constructors
+        shell: bash
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.1
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-source"
+          if ! rustup toolchain install 1.98.1 --profile minimal >"$RUNNER_TEMP/las-privacy-toolchain.private" 2>&1; then
+            echo 'LAS_PRIVACY=FAIL:TOOLCHAIN'; exit 1
+          fi
+          if ! python3 -I -B tools/verification/sensor_event_privacy_compiler.py >"$RUNNER_TEMP/las-sensor-privacy-result.private" 2>&1; then
+            echo 'LAS_PRIVACY=FAIL:SENSOR_RUST_PROOF'; exit 1
+          fi
+          grep -Fxq 'LAS_SENSOR_PROOF_GATE_COMPILE_NEGATIVE=PASS' "$RUNNER_TEMP/las-sensor-privacy-result.private" || {
+            echo 'LAS_PRIVACY=FAIL:SENSOR_RUST_MARKER'; exit 1
+          }
+          echo 'LAS_PRIVACY=SENSOR_PROOF_GATE_CONSTRUCTOR_REJECTED'
+          if ! python3 -I -B tools/verification/flow_release_privacy_compiler.py >"$RUNNER_TEMP/las-flow-privacy-result.private" 2>&1; then
+            echo 'LAS_PRIVACY=FAIL:FLOW_RUST_PROOF'; exit 1
+          fi
+          grep -Fxq 'LAS_FLOW_RELEASE_PRIVACY_COMPILE_NEGATIVE=PASS' "$RUNNER_TEMP/las-flow-privacy-result.private" || {
+            echo 'LAS_PRIVACY=FAIL:FLOW_RUST_MARKER'; exit 1
+          }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_PRIVACY=FAIL:SOURCE_DRIFT'; exit 1
+          }
+          echo 'LAS_PRIVACY=FLOW_RELEASE_CONSTRUCTOR_ACCESS_REJECTED'
+          echo 'LAS_PRIVACY=EXACT_COMPILER_NEGATIVES_PASS_NOT_RELEASE'
+
+      - name: Delete ephemeral private source and diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf -- "$RUNNER_TEMP/private-source"
+          find "$RUNNER_TEMP" -maxdepth 1 -name 'las-privacy-negative.*' -type d -exec rm -rf -- {} +
+          rm -f -- "$RUNNER_TEMP/las-privacy-toolchain.private" "$RUNNER_TEMP/las-sensor-privacy-result.private" "$RUNNER_TEMP/las-flow-privacy-result.private"
+          find "$RUNNER_TEMP" -maxdepth 1 -name 'las-sensor-proof-gate-negative-*.log' -type f -delete
+          find "$RUNNER_TEMP" -maxdepth 1 -name 'las-flow-release-negative-*.log' -type f -delete
+          rm -f -- "$RUNNER_TEMP/private-heads" "$RUNNER_TEMP/secret-fetch-error"
+          echo 'LAS_PRIVACY=EPHEMERAL_CLEANUP'
