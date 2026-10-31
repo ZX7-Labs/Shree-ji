@@ -17,13 +17,14 @@ import unittest
 
 CALL = re.compile(r"\.\s*persist_verified_settlement\s*\(")
 OBSERVE_CALL = re.compile(r"\.\s*observe_reality\s*\(")
+HOST_CALL = re.compile(r"\.\s*settle_authenticated_reality\s*\(")
 FN = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z_0-9]*)\b")
 COMMENT = re.compile(r"//[^\n]*")
 TEST_MARKER = re.compile(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]")
 MIN_MODULES = 80
 
 
-def census(root: Path, min_modules: int = MIN_MODULES) -> tuple[int, int, int, int, int]:
+def census(root: Path, min_modules: int = MIN_MODULES) -> tuple[int, int, int, int, int, int]:
     base = root / "src" / "effect_fabric"
     if not base.is_dir() or base.is_symlink():
         raise ValueError("source boundary missing")
@@ -49,6 +50,7 @@ def census(root: Path, min_modules: int = MIN_MODULES) -> tuple[int, int, int, i
         raise ValueError("Root settlement trust seam changed without review")
     forwarders = test_calls = candidates = 0
     reality_forwarders = reality_test_calls = reality_drivers = 0
+    host_calls = 0
     for file in files:
         source = file.read_text(encoding="utf-8")
         # A lexical detector: comments and strings cannot establish production
@@ -82,11 +84,21 @@ def census(root: Path, min_modules: int = MIN_MODULES) -> tuple[int, int, int, i
                 reality_forwarders += 1
             else:
                 reality_drivers += 1
+        # A helper exposed on the production runtime is NOT proof of a
+        # live host/sensor event dispatch. Demand an actual non-test caller.
+        for call in HOST_CALL.finditer(clean):
+            preceding = [m for m in fns if m.start() < call.start()]
+            if not preceding:
+                raise ValueError("unattributed host call")
+            fn = preceding[-1]
+            test_region = any(start < fn.start() for start in markers)
+            if not (is_test_file or test_region or fn.group(1) == "settle_authenticated_reality"):
+                host_calls += 1
     if forwarders < 3 or test_calls < 2:
         raise ValueError("settlement reference census changed unexpectedly")
     if reality_forwarders < 3 or reality_test_calls < 1:
         raise ValueError("Reality reference census changed unexpectedly")
-    return len(files), forwarders, test_calls, candidates, reality_drivers
+    return len(files), forwarders, test_calls, candidates, reality_drivers, host_calls
 
 
 class CensusTests(unittest.TestCase):
@@ -145,7 +157,8 @@ class CensusTests(unittest.TestCase):
             self.fixture(root, "fn drive_verified_sensor() {"
                       " self.service.observe_reality(obs);"
                       " self.service.persist_verified_settlement(commit_id); }\n")
-            self.assertEqual(census(root, min_modules=8)[-1], 1)
+            self.assertEqual(census(root, min_modules=8)[-2], 1)
+            self.assertEqual(census(root, min_modules=8)[-1], 0)
 
     def test_mixed_file_cfg_test_is_excluded(self) -> None:
         with tempfile.TemporaryDirectory() as d:
@@ -153,6 +166,48 @@ class CensusTests(unittest.TestCase):
             self.fixture(root, "#[cfg(test)]\nmod tests {\n"
                       "fn test_drive() {self.service.observe_reality(obs);"
                       "self.service.persist_verified_settlement(id);}\n}\n")
+            self.assertEqual(census(root, min_modules=8)[-1], 0)
+
+
+    def test_runtime_wrapper_without_host_invocation_remains_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.fixture(
+                root,
+                "fn settle_authenticated_reality() {"
+                " self.deployment.observe_reality(event);"
+                " self.deployment.persist_verified_settlement(commit); }\n"
+                "fn settle_authenticated_reality() {"
+                " self.process.settle_authenticated_reality(event); }\n",
+            )
+            candidate = census(root, min_modules=8)
+            self.assertGreater(candidate[-3], 0)
+            self.assertEqual(candidate[-1], 0)
+
+    def test_only_separate_non_test_host_invocation_closes_source_call_graph(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.fixture(
+                root,
+                "fn settle_authenticated_reality() {"
+                " self.deployment.observe_reality(event);"
+                " self.deployment.persist_verified_settlement(commit); }\n"
+                "fn drive_authenticated_sensor_event() {"
+                " self.production.settle_authenticated_reality(event); }\n",
+            )
+            candidate = census(root, min_modules=8)
+            self.assertGreater(candidate[-3], 0)
+            self.assertGreater(candidate[-2], 0)
+            self.assertEqual(candidate[-1], 1)
+
+    def test_test_only_host_call_not_counted(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.fixture(
+                root,
+                "#[cfg(test)]\nmod tests {\n"
+                "fn drive_test_sensor() {self.production.settle_authenticated_reality(event);}\n}\n",
+            )
             self.assertEqual(census(root, min_modules=8)[-1], 0)
 
     def test_missing_source_boundary_fails(self) -> None:
@@ -182,14 +237,18 @@ def main() -> int:
         print("LAS_SETTLEMENT_REACHABILITY=FAIL:SOURCE_ROOT_MISSING")
         return 2
     try:
-        module_count, forwarders, tests, driver_candidates, reality_drivers = census(args.source_root)
+        module_count, forwarders, tests, driver_candidates, reality_drivers, host_calls = census(args.source_root)
     except (OSError, UnicodeError, ValueError):
         print("LAS_SETTLEMENT_REACHABILITY=FAIL:SOURCE_OR_TRUST_SEAM_UNVERIFIED")
         return 2
     if driver_candidates == 0 or reality_drivers == 0:
         print("LAS_SETTLEMENT_REACHABILITY=FAIL:NO_NONFORWARDING_PRODUCTION_DRIVER")
         return 17
-    # This is never evidence of physical reachability, only a review target.
+    if host_calls == 0:
+        print("LAS_SETTLEMENT_REACHABILITY=BLOCKED:NO_EXTERNAL_PRODUCTION_HOST_CALL")
+        return 18
+    # A host callsite still cannot prove physical sensor provenance or Root
+    # hardware behavior. Release stays held for independent dynamic evidence.
     print("LAS_SETTLEMENT_REACHABILITY=CANDIDATE_FOUND_INDEPENDENT_REVIEW_REQUIRED")
     return 0
 
