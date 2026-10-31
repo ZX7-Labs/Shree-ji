@@ -88,17 +88,8 @@ jobs:
           log="$RUNNER_TEMP/private-native-receipt"
           # Raw private test output is NEVER written to public GitHub Actions logs.
           if ! bash "$private/tools/verification/run_bridge_native_suite.sh" "$private" > "$log" 2>&1; then
-            # Emit ONLY an allowlisted synthetic failure code, never private stderr.
-            safe="$(grep -m1 -E '^LAS_NATIVE_SCOPED=FAIL:(ARGUMENT|ENV|CHECKOUT|SOURCE|WORKFLOW|SOURCE_SET|STAGE_[0-9]+|COUNT_[0-9]+|IDENTITIES_[0-9]+|REVISION_DRIFT)
-          grep -Fxq 'LAS_NATIVE_SCOPED=PASS' "$log" || { echo 'LAS_BRIDGE=FAIL:NATIVE_MARKER'; exit 1; }
-          grep -Fxq 'LAS_NATIVE_STAGES=12' "$log" || { echo 'LAS_BRIDGE=FAIL:STAGES'; exit 1; }
-          grep -Fxq 'LAS_NATIVE_CASES=240' "$log" || { echo 'LAS_BRIDGE=FAIL:NONVACUITY'; exit 1; }
-          grep -Fxq "LAS_PRIVATE_PROOF=$EXPECTED_PRIVATE_COMMIT_PROOF" "$log" || {
-            echo 'LAS_BRIDGE=FAIL:SOURCE_CHANGED'; exit 1
-          }
-          rm -f "$log"
-          echo 'LAS_BRIDGE=SCOPED_NATIVE_PASS_NOT_RELEASE_ACCEPTANCE'
- "$log" || true)"
+            # Emit ONLY a known synthetic status code, never raw private test stderr.
+            safe="$(grep -m1 -E '^LAS_NATIVE_SCOPED=FAIL:(ARGUMENT|ENV|CHECKOUT|SOURCE|WORKFLOW|SOURCE_SET|STAGE_[0-9]+|COUNT_[0-9]+|IDENTITIES_[0-9]+|REVISION_DRIFT)$' "$log" || true)"
             if [[ -n "$safe" ]]; then echo "$safe"; fi
             echo 'LAS_BRIDGE=FAIL:NATIVE'; exit 1
           fi
