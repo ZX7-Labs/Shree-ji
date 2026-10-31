@@ -85,7 +85,11 @@ jobs:
           jobs = YAML.safe_load_file(input, aliases: false).fetch('jobs')
           raise 'expected producer and consumer' unless jobs.keys.sort == %w[consumer producer]
           approval = jobs.fetch('producer').fetch('if')
-          raise 'public artifact approval gate absent or altered' unless approval == %q[${{ vars.LAS_PUBLIC_ENCRYPTED_TLC_CHECKPOINT_EXPORT_APPROVED == 'true' }}]
+          # Construct the GitHub expression at runtime: a literal expression in
+          # an Actions run block would be interpolated by Actions before Ruby.
+          dollar_open = [36, 123, 123].pack('C*')
+          expected = dollar_open + %q[ vars.LAS_PUBLIC_ENCRYPTED_TLC_CHECKPOINT_EXPORT_APPROVED == 'true' }}]
+          raise 'public artifact approval gate absent or altered' unless approval == expected
           scripts = jobs.values.flat_map { |job| job.fetch('steps').filter_map { |step| step['run'] } }
           raise 'unreviewed shell step count' unless scripts.length == 4
           scripts.each_with_index do |body, i|
