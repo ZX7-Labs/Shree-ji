@@ -166,16 +166,7 @@ jobs:
             echo 'LAS_TLC_SAMPLE=FAIL:SAMPLE_CUSTODY'; exit 1
           fi
           count=0
-          while IFS=
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf -- "$RUNNER_TEMP/private-source"
-          find "$RUNNER_TEMP" -maxdepth 1 -name 'las-profile-census.*' -type d -exec rm -rf -- {} +
-          rm -f -- "$RUNNER_TEMP/private-heads" "$RUNNER_TEMP/secret-fetch-error"
-          echo 'LAS_TLC_CENSUS=EPHEMERAL_CLEANUP'
-\t' read -r cfg tla deadlock expectation; do
+          while IFS=$'\t' read -r cfg tla deadlock expectation; do
             count=$((count+1))
             [[ "$count" -le 8 && "$deadlock" =~ ^[01]$ ]] || {
               echo 'LAS_TLC_SAMPLE=FAIL:PROFILE_SHAPE'; exit 1
