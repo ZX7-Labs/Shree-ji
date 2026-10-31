@@ -91,10 +91,25 @@ jobs:
                       raise SystemExit(2)
                   if not (root / name).is_file() or (root / name).is_symlink():
                       raise SystemExit(2)
-          # Selection by small, source-tracked module size is a smoke heuristic,
-          # not a claim of representative or complete formal coverage.
+          # Select only two *historically scoped* native-smoke positive candidates,
+          # already represented by non-sensitive path digests in the pinned public
+          # two-profile research workflow. A prior 1.7.2 run is NOT 1.7.4 proof.
+          # Never print profile paths/digests to the public runner log.
+          import hashlib, re
+          public_source = pathlib.Path(os.environ['GITHUB_WORKSPACE']) / '.github/workflows/assurance-tlc-two-profile-021.yml'
+          old_controller = public_source.read_text(encoding='utf-8')
+          if old_controller.count('wanted=(') != 1:
+              raise SystemExit(2)
+          old_wanted_block = old_controller.split('wanted=(', 1)[1].split(')', 1)[0]
+          old_wanted = re.findall(r"'([0-9a-f]{64})'", old_wanted_block)
+          if len(old_wanted) != 2 or len(set(old_wanted)) != 2:
+              raise SystemExit(2)
+          previously_scoped = [row for row in positives
+                               if hashlib.sha256(row[0].encode()).hexdigest() in old_wanted]
+          if len(previously_scoped) != 2:
+              raise SystemExit(2)
           sizekey = lambda row: (os.stat(root / row[1]).st_size, row[0])
-          choices = [min(negatives, key=sizekey), min(positives, key=sizekey)]
+          choices = [min(negatives, key=sizekey), min(previously_scoped, key=sizekey)]
           output = logs / 'chosen.tsv'
           fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
           with os.fdopen(fd, 'w', encoding='utf-8') as f:
