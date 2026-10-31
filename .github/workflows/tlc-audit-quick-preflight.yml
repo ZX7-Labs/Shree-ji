@@ -84,6 +84,8 @@ jobs:
           input, out = ARGV
           jobs = YAML.safe_load_file(input, aliases: false).fetch('jobs')
           raise 'expected producer and consumer' unless jobs.keys.sort == %w[consumer producer]
+          approval = jobs.fetch('producer').fetch('if')
+          raise 'public artifact approval gate absent or altered' unless approval == %q[${{ vars.LAS_PUBLIC_ENCRYPTED_TLC_CHECKPOINT_EXPORT_APPROVED == 'true' }}]
           scripts = jobs.values.flat_map { |job| job.fetch('steps').filter_map { |step| step['run'] } }
           raise 'unreviewed shell step count' unless scripts.length == 4
           scripts.each_with_index do |body, i|
