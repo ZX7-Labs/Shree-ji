@@ -1,0 +1,27 @@
+{
+  "schema": "las-pspr-root-spark-exact-20261031-v1",
+  "classification": "EXACT_PRIVATE_REVISION_SCOPED_ROOT_SPARK_PASS_NOT_RELEASE",
+  "private_source_commit_sha256": "1bc15bc87e3a8b16b2bd75b4801a0439028c60e203db51f51b879f93fc0ca84e",
+  "public_run_id": 41227441756,
+  "public_job_id": 124614427968,
+  "public_head_sha": "acf7b4e829ad3a1a0ff6d1c13bd8fa7b908a8660",
+  "conclusion": "success",
+  "markers": [
+    "LAS_NATIVE_BRIDGE=SOURCE_PINNED:1bc15bc87e3a8b16b2bd75b4801a0439028c60e203db51f51b879f93fc0ca84e",
+    "LAS_ROOT_SPARK=SCOPED_GNATPROVE_PASS_NOT_RELEASE_APPROVAL",
+    "LAS_ROOT_SPARK=EPHEMERAL_CLEANUP"
+  ],
+  "compiler": "GNAT Native 16.1.0",
+  "prover": "GNATprove 16.1.0",
+  "capacity_instantiations": [
+    1,
+    2,
+    16,
+    256
+  ],
+  "gnatprove_invocation": "--mode=all --level=4 --proof=progressive:all --checks-as-errors=on --proof-warnings=on --warnings=error --pedantic",
+  "tool_returncode_success": true,
+  "private_log_nonempty": true,
+  "full_canonical_root_and_reality_verification": false,
+  "not_release_approval": true
+}
