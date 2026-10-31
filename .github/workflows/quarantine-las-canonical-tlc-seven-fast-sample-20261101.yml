@@ -1,0 +1,206 @@
+name: Quarantine 207-profile canonical TLC seven bounded cross-subsystem checks
+on:
+  push:
+    branches:
+      - quarantine/las-native-python-98-exact-20261031
+    paths:
+      - .github/workflows/quarantine-las-canonical-tlc-seven-fast-sample-20261101.yml
+permissions:
+  contents: read
+jobs:
+  private-map-seven-bounded:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      TARGET_BRANCH_PROOF: 2e7d4bb17d6ca183c895b195861e75f8bfd9de9b031d4b4306a0e7ad836de47e
+      EXPECTED_PRIVATE_COMMIT_PROOF: 6a2f0085f0f7fe676155389c9720e431312025b8c237279efd801656c536ce86
+      EXPECTED_PRIVATE_RUNNER_BLOB_PROOF: d4df90336770cf5275996ccf750325a091b071a86a708799281845dc0eb5c74f
+    steps:
+      - name: Recover exact read-only private source without publishing code
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PRIVATE_REPOSITORY" || -z "$PRIVATE_READ_TOKEN" ]]; then
+            echo 'LAS_NATIVE_BRIDGE=FAIL:ACCESS'; exit 1
+          fi
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_READ_TOKEN"
+          private="$RUNNER_TEMP/private-source"
+          mkdir -m 700 "$private"
+          cd "$private"
+          git init -q
+          git remote add origin "https://github.com/$PRIVATE_REPOSITORY.git"
+          authorization="$(printf 'x-access-token:%s' "$PRIVATE_READ_TOKEN" | base64 -w0)"
+          echo "::add-mask::$authorization"
+          all_refs="$RUNNER_TEMP/private-heads"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" ls-remote --heads origin > "$all_refs" 2> "$RUNNER_TEMP/secret-fetch-error" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:READ'; exit 1
+          }
+          match=''
+          while read -r _sha candidate; do
+            candidate_proof="$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')"
+            if [[ "$candidate_proof" == "$TARGET_BRANCH_PROOF" ]]; then
+              [[ -z "$match" ]] || { echo 'LAS_NATIVE_BRIDGE=FAIL:AMBIGUOUS_REF'; exit 1; }
+              match="$candidate"
+            fi
+          done < "$all_refs"
+          rm -f "$all_refs" "$RUNNER_TEMP/secret-fetch-error"
+          [[ -n "$match" ]] || { echo 'LAS_NATIVE_BRIDGE=FAIL:TARGET'; exit 1; }
+          echo "::add-mask::$match"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" fetch -q --depth=1 origin "$match" > /dev/null 2> "$RUNNER_TEMP/secret-fetch-error" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:FETCH'; exit 1
+          }
+          rm -f "$RUNNER_TEMP/secret-fetch-error"
+          unset authorization PRIVATE_READ_TOKEN PRIVATE_REPOSITORY
+          git -c core.fsmonitor=false checkout -q --detach FETCH_HEAD
+          actual="$(git -c core.fsmonitor=false rev-parse --verify HEAD)"
+          echo "::add-mask::$actual"
+          proof="$(printf '%s' "$actual" | sha256sum | awk '{print $1}')"
+          [[ "$proof" == "$EXPECTED_PRIVATE_COMMIT_PROOF" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:SOURCE_PIN'; exit 1
+          }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:DIRTY'; exit 1
+          }
+          script='tools/verification/run_bridge_native_suite.sh'
+          [[ -f "$script" && ! -L "$script" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:RUNNER_MISSING'; exit 1
+          }
+          blob="$(git -c core.fsmonitor=false hash-object "$script")"
+          blob_proof="$(printf '%s' "$blob" | sha256sum | awk '{print $1}')"
+          [[ "$blob_proof" == "$EXPECTED_PRIVATE_RUNNER_BLOB_PROOF" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:RUNNER_PIN'; exit 1
+          }
+          echo "LAS_NATIVE_BRIDGE=SOURCE_PINNED:$proof"
+
+      - name: Execute exact source-owned canonical TLA profile mapper privately
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-source"
+          private="$(mktemp -d "$RUNNER_TEMP/las-profile-census.XXXXXXXX")"
+          chmod 700 "$private"
+          if ! python3 -I -B - "$private" <<'PY_CENSUS'
+          import hashlib,pathlib,re,subprocess,sys
+          root=pathlib.Path.cwd()
+          source=(root/"tools/verify_codespaces_all.sh").read_text(encoding="utf-8")
+          before='if ! python3 - "$ROOT" > "$TLC_MAP.pending" <<'+"'PY'"+'\n'
+          after='\nPY\nthen'
+          if source.count(before)!=1:raise SystemExit(1)
+          tail=source.split(before,1)[1]
+          if tail.count(after)!=1:raise SystemExit(1)
+          script=tail.split(after,1)[0]
+          if len(script)<1000 or len(script)>20000 or not script.startswith("import pathlib, sys\n"):raise SystemExit(1)
+          result=subprocess.run([sys.executable,"-I","-B","-",str(root)],input=script,capture_output=True,text=True,timeout=20,cwd=str(root))
+          if result.returncode or result.stderr or not result.stdout.endswith("\n") or "\r" in result.stdout:raise SystemExit(1)
+          data=result.stdout
+          rows=[line.split("\t") for line in data.splitlines()]
+          if not 150<=len(rows)<=512 or any(len(row)!=4 for row in rows):raise SystemExit(1)
+          regex=re.compile(r"spec/(?:[a-z_0-9-]+/)+[A-Za-z_0-9.-]+\.(?:cfg|tla)\Z")
+          if any(not regex.fullmatch(row[0]) or not regex.fullmatch(row[1]) for row in rows):raise SystemExit(1)
+          cfgs=[row[0] for row in rows]
+          if cfgs!=sorted(set(cfgs)):raise SystemExit(1)
+          actual=sorted(p.relative_to(root).as_posix() for p in (root/"spec").rglob("*.cfg") if p.is_file())
+          if cfgs!=actual:raise SystemExit(1)
+          output=pathlib.Path(sys.argv[1])
+          (output/"map.private").write_text(data)
+          (output/"count.private").write_text(str(len(rows)))
+          (output/"digest.private").write_text(hashlib.sha256(data.encode()).hexdigest())
+          PY_CENSUS
+          then
+            echo 'LAS_TLC_CENSUS=FAIL:SOURCE_MAP'; exit 1
+          fi
+          count="$(cat "$private/count.private")"
+          digest="$(cat "$private/digest.private")"
+          [[ "$count" =~ ^[0-9]+$ && "$digest" =~ ^[a-f0-9]{64}$ ]] || {
+            echo 'LAS_TLC_CENSUS=FAIL:SHAPE'; exit 1
+          }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_TLC_CENSUS=FAIL:SOURCE_DRIFT'; exit 1
+          }
+          echo "LAS_TLC_CENSUS=EXACT_PROFILE_COUNT:$count"
+          echo "LAS_TLC_CENSUS=EXACT_MAP_SHA256:$digest"
+          echo 'LAS_TLC_CENSUS=SOURCE_OWNED_COMPLETE_MAP_NOT_EXECUTED_MODELS'
+      - name: Verify seven selected source-owned TLC profiles with bounded checker execution
+        shell: bash
+        env:
+          JAVA_TOOL_OPTIONS: -Xmx5g
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-source"
+          private="$(find "$RUNNER_TEMP" -maxdepth 1 -name 'las-profile-census.*' -type d -print -quit)"
+          countdirs="$(find "$RUNNER_TEMP" -maxdepth 1 -name 'las-profile-census.*' -type d | wc -l)"
+          [[ -n "$private" && "$countdirs" -eq 1 ]] || {
+            echo 'LAS_TLC_SAMPLE=FAIL:MAP_CUSTODY'; exit 1
+          }
+          [[ "$(cat "$private/count.private")" == 207 ]] || {
+            echo 'LAS_TLC_SAMPLE=FAIL:COUNT'; exit 1
+          }
+          [[ "$(cat "$private/digest.private")" == d8ac54521e20a2843841e4bffcf18d92dfa9228581e3064a33bf87cfb3e0cb18 ]] || {
+            echo 'LAS_TLC_SAMPLE=FAIL:MAP_PIN'; exit 1
+          }
+          jar="$private/tla2tools.jar"
+          if ! curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+                  --output "$jar" \
+                  "https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar" \
+                  > "$private/fetch.private" 2>&1; then
+            echo 'LAS_TLC_SAMPLE=FAIL:TOOL_FETCH'; exit 1
+          fi
+          printf 'bee4a54f3ee3d4afc347c3240ec2d9e93b075104  %s\n' "$jar" |
+            sha1sum --check --strict >"$private/jarcheck.private" 2>&1 || {
+            echo 'LAS_TLC_SAMPLE=FAIL:TOOL_PIN'; exit 1
+          }
+          if ! python3 -I -B - "$private/map.private" "$private/sample.private" <<'PY_SAMPLE'
+          import pathlib,sys
+          rows=pathlib.Path(sys.argv[1]).read_text().splitlines()
+          indices=(0,20,119,121,127,168,177)
+          if len(rows)!=207 or len(set(indices))!=7:raise SystemExit(1)
+          chosen=[rows[i] for i in indices]
+          if len(chosen)!=7 or any(len(x.split("\t"))!=4 for x in chosen):raise SystemExit(1)
+          pathlib.Path(sys.argv[2]).write_text("\n".join(chosen)+"\n")
+          PY_SAMPLE
+          then
+            echo 'LAS_TLC_SAMPLE=FAIL:SAMPLE_CUSTODY'; exit 1
+          fi
+          count=0
+          while IFS=$'\t' read -r cfg tla deadlock expectation; do
+            count=$((count+1))
+            [[ "$count" -le 7 && "$deadlock" =~ ^[01]$ ]] || {
+              echo 'LAS_TLC_SAMPLE=FAIL:PROFILE_SHAPE'; exit 1
+            }
+            [[ -f "$cfg" && -f "$tla" && "$(dirname "$cfg")" == "$(dirname "$tla")" ]] || {
+              echo 'LAS_TLC_SAMPLE=FAIL:PROFILE_FILES'; exit 1
+            }
+            args=(-workers 2 -lncheck final -fp 0)
+            if [[ "$deadlock" == 1 ]]; then args+=(-deadlock); fi
+            logfile="$private/sample-$count.private"
+            if ( cd "$(dirname "$cfg")" && timeout --signal=TERM --kill-after=5s 240s java -XX:+UseParallelGC -jar "$jar" "${args[@]}" -config "$(basename "$cfg")" "$(basename "$tla")" ) >"$logfile" 2>&1; then
+              java_rc=0
+            else
+              java_rc=$?
+            fi
+            if ! python3 -I -B tools/verification/canonical_tlc_result_evidence.py \
+                  "$logfile" "$java_rc" 0 --expectation "$expectation" >"$private/classifier-$count.private" 2>&1; then
+              echo "LAS_TLC_SAMPLE=FAIL:PROFILE_$count"; exit 1
+            fi
+            echo "LAS_TLC_SAMPLE=PROFILE_${count}_PASS"
+          done < "$private/sample.private"
+          [[ "$count" -eq 7 ]] || {
+            echo 'LAS_TLC_SAMPLE=FAIL:NOT_SEVEN'; exit 1
+          }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_TLC_SAMPLE=FAIL:SOURCE_DRIFT'; exit 1
+          }
+          echo 'LAS_TLC_SAMPLE=SEVEN_BOUND_EXACT_CROSS_SUBSYSTEMS_CLASSIFIED_NOT_FULL_207_OR_RELEASE'
+      - name: Scrub private source and map
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf -- "$RUNNER_TEMP/private-source"
+          find "$RUNNER_TEMP" -maxdepth 1 -name 'las-profile-census.*' -type d -exec rm -rf -- {} +
+          rm -f -- "$RUNNER_TEMP/private-heads" "$RUNNER_TEMP/secret-fetch-error"
+          echo 'LAS_TLC_CENSUS=EPHEMERAL_CLEANUP'
