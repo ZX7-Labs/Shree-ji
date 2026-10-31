@@ -1,0 +1,21 @@
+{
+  "schema": "las-source8bb-canonical-tlc-207-map-v1",
+  "private_source_commit_sha256": "5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f",
+  "canonical_map_sha256": "d8ac54521e20a2843841e4bffcf18d92dfa9228581e3064a33bf87cfb3e0cb18",
+  "exact_required_profiles": 207,
+  "public_run_id": 41229798562,
+  "public_job_id": 124621459703,
+  "public_head_sha": "c7bf1d5c7d8e33920267d5447e61788596dbdf81",
+  "checked_markers": [
+    "LAS_NATIVE_BRIDGE=SOURCE_PINNED:5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f",
+    "LAS_TLC_CENSUS=EXACT_PROFILE_COUNT:207",
+    "LAS_TLC_CENSUS=EXACT_MAP_SHA256:d8ac54521e20a2843841e4bffcf18d92dfa9228581e3064a33bf87cfb3e0cb18",
+    "LAS_TLC_CENSUS=SOURCE_OWNED_COMPLETE_MAP_NOT_EXECUTED_MODELS",
+    "LAS_TLC_CENSUS=EPHEMERAL_CLEANUP"
+  ],
+  "source_owned_generator": "tools/verify_codespaces_all.sh",
+  "source_fs_inventory_crosscheck": true,
+  "all_207_executed": false,
+  "old_202_source_compatible": false,
+  "release_authorized": false
+}
