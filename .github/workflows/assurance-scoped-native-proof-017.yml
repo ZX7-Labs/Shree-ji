@@ -136,7 +136,7 @@ jobs:
                       if msg.get('level') != 'error':
                           continue
                       code = (msg.get('code') or {}).get('code') or 'UNKNOWN'
-                      if not re.fullmatch(r'E[0-9]{4}', code):
+                      if not re.fullmatch(r'(?:E[0-9]{4}|[a-z][a-z0-9_]{0,47})', code):
                           code = 'UNKNOWN'
                       spans = msg.get('spans') or []
                       span = next((v for v in spans if v.get('is_primary')), spans[0] if spans else {})
