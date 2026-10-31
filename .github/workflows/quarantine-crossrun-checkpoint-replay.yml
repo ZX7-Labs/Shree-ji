@@ -95,7 +95,7 @@ jobs:
           keys.each do |k|
             raise 'origin source identity drift' unless ENV.fetch(k) == source.fetch('env').fetch(k)
           end
-          code = source.fetch('jobs').fetch('consumer').fetch('steps').fetch(3).fetch('run')
+          code = source.fetch('jobs').fetch('consumer').fetch('steps').fetch(2).fetch('run')
           raise 'pinned recovery code not present' unless code.include?('setup0.sh') && code.include?('setup1.sh')
           File.write(File.join(root, 'recover.sh'), code)
           RUBY
@@ -115,7 +115,7 @@ jobs:
           ruby -ryaml - "$root" <<'RUBY'
           root = ARGV.fetch(0)
           src = YAML.safe_load_file('.github/workflows/quarantine-crossjob-checkpoint.yml', aliases: false)
-          consumer = src.fetch('jobs').fetch('consumer').fetch('steps').fetch(4).fetch('run')
+          consumer = src.fetch('jobs').fetch('consumer').fetch('steps').fetch(3).fetch('run')
           raise 'missing source-pinned sealed restore' unless consumer.include?('LAS_CROSS_JOB=AUTHENTICATION_AND_TAMPER_REJECTION_PASS') && consumer.include?('LA'+'S_CROSS_JOB=SCOPED_ARTIFACT_CUSTODY_FEASIBILITY_NOT_RELEASE')
           File.write(File.join(root, 'verify-restart.sh'), consumer)
           RUBY
