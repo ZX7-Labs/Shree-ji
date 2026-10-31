@@ -1,0 +1,83 @@
+{
+  "schema": "las-private-public-candidate-six-scoped-gates-v1",
+  "private_revision": "8f039f43f9a0bb4a1c69fa204513e8fbfa2724c2",
+  "private_revision_sha256": "6a2f0085f0f7fe676155389c9720e431312025b8c237279efd801656c536ce86",
+  "pr": 54,
+  "draft": true,
+  "source_authority": "checked GitHub current branch and six run/job/log outputs in this continuation",
+  "scope": "SCOPED_CI_PASS_NOT_GLOBAL_RELEASE",
+  "public_execution_repo": "ZX7-Labs/Shree-ji",
+  "artifact_branch": "quarantine/las-native-python-98-exact-20261031",
+  "confirmed_successes": [
+    {
+      "name": "python_108_inventory_and_336_native_case_executions",
+      "run_id": 41235103201,
+      "job_id": 124637088947,
+      "public_workflow_revision": "9d81b77feb63e88fb16b468377340395bfe536d1",
+      "status": "completed",
+      "conclusion": "success",
+      "private_source_sha256": "6a2f0085f0f7fe676155389c9720e431312025b8c237279efd801656c536ce86",
+      "job_steps": "successful, including cleanup"
+    },
+    {
+      "name": "rust_fmt_compile_clippy_default_and_linux_all_target_tests",
+      "run_id": 41235107789,
+      "job_id": 124637103728,
+      "public_workflow_revision": "c9dda75849c4744699c7ddae80b82d8399394097",
+      "status": "completed",
+      "conclusion": "success",
+      "private_source_sha256": "6a2f0085f0f7fe676155389c9720e431312025b8c237279efd801656c536ce86",
+      "job_steps": "successful, including cleanup"
+    },
+    {
+      "name": "root_ffi_ada_gprbuild_all_features_rust_clippy_tests",
+      "run_id": 41235112337,
+      "job_id": 124637117320,
+      "public_workflow_revision": "2482fbb64ade746f5b2f98f31da76223fee4861b",
+      "status": "completed",
+      "conclusion": "success",
+      "private_source_sha256": "6a2f0085f0f7fe676155389c9720e431312025b8c237279efd801656c536ce86",
+      "job_steps": "successful, including cleanup"
+    },
+    {
+      "name": "root_9_model_checked_sany_semantics",
+      "run_id": 41235116720,
+      "job_id": 124637130596,
+      "public_workflow_revision": "3042067b0c86bc321ea2f6a33c46f164358ec0ce",
+      "status": "completed",
+      "conclusion": "success",
+      "private_source_sha256": "6a2f0085f0f7fe676155389c9720e431312025b8c237279efd801656c536ce86",
+      "job_steps": "successful, including cleanup"
+    },
+    {
+      "name": "root_3_selected_tlc_profiles",
+      "run_id": 41235126902,
+      "job_id": 124637162269,
+      "public_workflow_revision": "d06818730b8edb2a84ed768f30c3c7cbbde57a69",
+      "status": "completed",
+      "conclusion": "success",
+      "private_source_sha256": "6a2f0085f0f7fe676155389c9720e431312025b8c237279efd801656c536ce86",
+      "job_steps": "successful, including cleanup"
+    },
+    {
+      "name": "root_5_selected_tlc_profiles",
+      "run_id": 41235131804,
+      "job_id": 124637177151,
+      "public_workflow_revision": "3035531afb1009e68fe355bd9c639be38e9fa919",
+      "status": "completed",
+      "conclusion": "success",
+      "private_source_sha256": "6a2f0085f0f7fe676155389c9720e431312025b8c237279efd801656c536ce86",
+      "job_steps": "successful, including cleanup"
+    }
+  ],
+  "unverified": [
+    "full canonical 207 TLC models",
+    "source-exact Root SPARK result still running",
+    "real hardware sensor authenticity and consequential actuator integration",
+    "complete operator incident and rollback readiness",
+    "authorized production merge"
+  ],
+  "source_copied_to_public_repository": false,
+  "raw_private_logs_published": false,
+  "release_authorized": false
+}
