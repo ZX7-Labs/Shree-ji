@@ -17,7 +17,7 @@ jobs:
     timeout-minutes: 5
     env:
       TARGET_BRANCH_PROOF: bfef81c13787a130d485ec445be47cddd779df8fff141805a4c663fdd6034b8c
-      EXPECTED_PRIVATE_COMMIT_PROOF: d2b0cfcc6e4a583a694fcbfec561b1980de853a14d2a250e5fcee96b48941b22
+      EXPECTED_PRIVATE_COMMIT_PROOF: dab2b2f0a7f6870344ff5715effd671146b8c1553876d7c732b1c6aada669ba1
       EXPECTED_PRIVATE_TEST_RUNNER_SHA256: 529de5130fd7f8cb9331fb535e8c762ec75afae6143fbe879c3917bd926495df
     steps:
       - name: Checkout exact public census and pinned controller without retained credentials
