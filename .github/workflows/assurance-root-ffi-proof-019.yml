@@ -130,7 +130,32 @@ jobs:
           if ! RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 check --locked --features 'root-ffi linux-peer-credentials' --all-targets >"$logs/check" 2>&1; then
             echo 'LAS_ROOT_FFI=FAIL:FFI_CHECK'; exit 1
           fi
-          if ! GPRBUILD="$GPRBUILD" cargo +1.98.1 clippy --locked --features 'root-ffi linux-peer-credentials' --all-targets -- -D warnings >"$logs/clippy" 2>&1; then
+          if ! GPRBUILD="$GPRBUILD" cargo +1.98.1 clippy --locked --features 'root-ffi linux-peer-credentials' --all-targets --message-format=json -- -D warnings >"$logs/clippy" 2>&1; then
+            # Only compiler/lint code, one-way path proof and line: never source.
+            python3 -I -B - "$logs/clippy" <<'PY'
+          import hashlib, json, re, sys
+          count=0
+          with open(sys.argv[1],encoding='utf-8',errors='replace') as source:
+              for raw in source:
+                  try: obj=json.loads(raw)
+                  except (TypeError,ValueError): continue
+                  if obj.get('reason')!='compiler-message': continue
+                  msg=obj.get('message') or {}
+                  if msg.get('level')!='error': continue
+                  code=(msg.get('code') or {}).get('code') or 'UNKNOWN'
+                  if not re.fullmatch(r'(?:E[0-9]{4}|clippy::[a-z0-9_]{1,60}|[a-z][a-z0-9_]{0,47})',code):
+                      code='UNKNOWN'
+                  spans=msg.get('spans') or []
+                  span=next((v for v in spans if v.get('is_primary')),spans[0] if spans else {})
+                  path=str(span.get('file_name','UNKNOWN')).replace('\\','/')
+                  if path.startswith('/') or '..' in path.split('/'): path='UNKNOWN'
+                  line=span.get('line_start',0)
+                  if type(line) is not int or line<0 or line>1000000: line=0
+                  count+=1
+                  if count<=30:
+                      print(f'LAS_ROOT_OPAQUE_LINT={code}:{hashlib.sha256(path.encode()).hexdigest()[:16]}:{line}')
+          print(f'LAS_ROOT_OPAQUE_LINT_COUNT={count}')
+          PY
             echo 'LAS_ROOT_FFI=FAIL:FFI_CLIPPY'; exit 1
           fi
           if ! RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --features 'root-ffi linux-peer-credentials' --lib -- --test-threads=1 >"$logs/tests" 2>&1; then
