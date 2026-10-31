@@ -1,0 +1,19 @@
+{
+  "schema": "las-private-public-pinned-sany-v1",
+  "classification": "EXACT_PRIVATE_REVISION_NINE_ROOT_SANY_SEMANTIC_PASS_NOT_TLC",
+  "private_source_commit_sha256": "1bc15bc87e3a8b16b2bd75b4801a0439028c60e203db51f51b879f93fc0ca84e",
+  "public_run_id": 41227841242,
+  "public_job_id": 124615622424,
+  "public_head_sha": "ab6bdde86eaba9e948efe8602dcfae4b26ff0f51",
+  "conclusion": "success",
+  "pinned_sany_jar": "TLA+ 1.7.4 SHA1 bee4a54f3ee3d4afc347c3240ec2d9e93b075104",
+  "models_count": 9,
+  "checked_sany_api_private_source": true,
+  "markers": [
+    "LAS_NATIVE_BRIDGE=SOURCE_PINNED:1bc15bc87e3a8b16b2bd75b4801a0439028c60e203db51f51b879f93fc0ca84e",
+    "LAS_ROOT_SANY=9_PINNED_MODELS_PARSED_SEMANTIC_LEVEL_PASS_NOT_TLC",
+    "LAS_ROOT_SANY=EPHEMERAL_CLEANUP"
+  ],
+  "not_tlc": true,
+  "not_full_formal_release_approval": true
+}
