@@ -17,6 +17,12 @@ env:
 
 jobs:
   producer:
+    # OFF by default. This encrypted artifact contains private-model-derived
+    # checkpoint state, a new data class NOT covered merely by permission for
+    # encrypted diagnostic logs. An independent owner-controlled GitHub Actions
+    # repository variable must affirm this exact public artifact export policy.
+    # If missing/false, producer and dependent consumer are SKIPPED, never PASS.
+    if: ${{ vars.LAS_PUBLIC_ENCRYPTED_TLC_CHECKPOINT_EXPORT_APPROVED == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
