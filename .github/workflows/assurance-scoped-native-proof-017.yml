@@ -191,7 +191,40 @@ jobs:
           PY
             echo 'LAS_RUST_SCOPE=FAIL:CLIPPY'; exit 1
           fi
-          if ! RUSTFLAGS=-Dwarnings cargo +1.98.1 test --locked --all-targets -- --test-threads=1 >"$diagnostics/tests" 2>&1; then
+          if ! RUSTFLAGS=-Dwarnings cargo +1.98.1 test --locked --all-targets --message-format=json -- --test-threads=1 >"$diagnostics/tests" 2>&1; then
+            # Classify compile failures and failed unit test identifiers without
+            # exposing any raw private test logs, names or source paths.
+            python3 -I -B - "$diagnostics/tests" <<'PY'
+          import hashlib, json, re, sys
+          errors = failed = 0
+          with open(sys.argv[1], encoding='utf-8', errors='replace') as source:
+              for raw in source:
+                  try:
+                      obj = json.loads(raw)
+                  except (ValueError, TypeError):
+                      obj = {}
+                  if obj.get('reason') == 'compiler-message':
+                      m = obj.get('message') or {}
+                      if m.get('level') != 'error':
+                          continue
+                      code = (m.get('code') or {}).get('code') or 'UNKNOWN'
+                      if not re.fullmatch(r'(?:E[0-9]{4}|[a-z][a-z0-9_]{0,48})', code):
+                          code = 'UNKNOWN'
+                      spans = m.get('spans') or []
+                      span = next((a for a in spans if a.get('is_primary')), spans[0] if spans else {})
+                      name = str(span.get('file_name', 'UNKNOWN')).replace('\\', '/')
+                      if name.startswith('/') or '..' in name.split('/'):
+                          name = 'UNKNOWN'
+                      errors += 1
+                      if errors <= 30:
+                          print(f'LAS_TEST_COMPILE_ERROR={code}:{hashlib.sha256(name.encode()).hexdigest()[:16]}:{int(span.get("line_start",0))}')
+                  elif (match := re.search(r'^test (\S+) \.\.\. FAILED\s*$', raw)):
+                      failed += 1
+                      if failed <= 30:
+                          print('LAS_TEST_FAIL_ID_HASH='+hashlib.sha256(match.group(1).encode()).hexdigest()[:16])
+          print(f'LAS_TEST_COMPILE_ERROR_COUNT={errors}')
+          print(f'LAS_TEST_FAIL_COUNT={failed}')
+          PY
             echo 'LAS_RUST_SCOPE=FAIL:DEFAULT_TESTS'; exit 1
           fi
           if ! grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$diagnostics/tests"; then
