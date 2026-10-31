@@ -1,0 +1,53 @@
+{
+  "schema": "las-pspr-rust-scoped-receipt-v1",
+  "classification": "EXACT_PRIVATE_REVISION_SCOPED_RUST_NOT_RELEASE_APPROVAL",
+  "private_source_commit_sha256": "1bc15bc87e3a8b16b2bd75b4801a0439028c60e203db51f51b879f93fc0ca84e",
+  "private_runner_blob_sha256": "05e9176f1487e4a9303b38ae49f2cc88892c10657b1e43892935b27267235102",
+  "public_repo": "ZX7-Labs/Shree-ji",
+  "public_run_id": 41226977981,
+  "public_job_id": 124613064368,
+  "public_head_sha": "d6526c412093716da0c4cc38c894cde1387dc0d6",
+  "run_conclusion": "success",
+  "job_conclusion": "success",
+  "completed_at": "2026-10-31T17:58:25Z",
+  "expected_toolchain": "Rust 1.98.1",
+  "verified_markers": [
+    "LAS_PRIVATE_SOURCE_PROOF=1bc15bc87e3a8b16b2bd75b4801a0439028c60e203db51f51b879f93fc0ca84e",
+    "LAS_BRIDGE=EXACT_SOURCE_READY",
+    "LAS_SETTLEMENT_RUST=FORMAT_PINNED_PASS",
+    "LAS_SETTLEMENT_RUST=DEFAULT_COMPILE_PASS",
+    "LAS_SETTLEMENT_RUST=CLIPPY_PASS",
+    "LAS_SETTLEMENT_RUST=LIB_TESTS_PASS",
+    "LAS_RUST_INTEGRATION=EXACT_SCOPED_RUST_PASS_NOT_RELEASE_APPROVAL",
+    "LAS_RUST_INTEGRATION=EPHEMERAL_CLEANUP"
+  ],
+  "completed_steps": [
+    {
+      "name": "Recover one privately pinned source revision",
+      "result": "success"
+    },
+    {
+      "name": "Verify pinned Rust 1.98.1 crate, source policy and unit tests",
+      "result": "success"
+    },
+    {
+      "name": "Scrub private checkout and temporary diagnostics",
+      "result": "success"
+    }
+  ],
+  "gates": [
+    "rustfmt --check",
+    "cargo check --locked --all-targets with warnings denied",
+    "cargo clippy --locked --all-targets -D warnings",
+    "cargo test --locked --lib with nonvacuous result",
+    "cargo check --locked --features linux-peer-credentials --all-targets"
+  ],
+  "private_diagnostics_published": false,
+  "not_verified": [
+    "Root FFI Ada linkage",
+    "TLA+/TLC full formal coverage",
+    "all integration and system tests",
+    "physical effects and independent sensor authenticity",
+    "release"
+  ]
+}
