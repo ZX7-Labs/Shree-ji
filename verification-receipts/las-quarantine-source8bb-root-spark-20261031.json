@@ -1,0 +1,24 @@
+{
+  "schema": "las-source8bb-root-spark-scoped-v1",
+  "private_source_commit_sha256": "5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f",
+  "public_run_id": 41228592852,
+  "public_job_id": 124617839598,
+  "public_head_sha": "4e18ee1855fe0cecb198d59beebc9467d89f24b6",
+  "source_verified_markers": [
+    "LAS_NATIVE_BRIDGE=SOURCE_PINNED:5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f",
+    "LAS_ROOT_SPARK=SCOPED_GNATPROVE_PASS_NOT_RELEASE_APPROVAL",
+    "LAS_ROOT_SPARK=EPHEMERAL_CLEANUP"
+  ],
+  "gnat_native": "16.1.0",
+  "gnatprove": "16.1.0",
+  "capacities": [
+    1,
+    2,
+    16,
+    256
+  ],
+  "proof_invocation_scope": "--mode=all --level=4 --proof=progressive:all --checks-as-errors=on --proof-warnings=on --warnings=error --pedantic",
+  "production_integration_proof": false,
+  "private_logs_uploaded": false,
+  "release_authorized": false
+}
