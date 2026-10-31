@@ -201,7 +201,7 @@ jobs:
           [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
             echo 'LAS_ALL_SANY=FAIL:SOURCE_DRIFT'; exit 1
           }
-          echo "LAS_ALL_SANY=DISTINCT_MODELS_$count_SEMANTIC_LEVEL_PASS_NOT_TLC"
+          echo "LAS_ALL_SANY=DISTINCT_MODELS_${count}_SEMANTIC_LEVEL_PASS_NOT_TLC"
           echo 'LAS_ALL_SANY=SEMANTIC_NEGATIVE_REJECTED'
       - name: Scrub ephemeral checkout and SANY diagnostics
         if: always()
