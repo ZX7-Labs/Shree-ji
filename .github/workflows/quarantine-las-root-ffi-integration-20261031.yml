@@ -117,6 +117,21 @@ jobs:
           fi
           echo 'LAS_ROOT_FFI=COMPILE_PASS'
           if ! GPRBUILD="$GPRBUILD" cargo +1.98.1 clippy --locked --features root-ffi,linux-peer-credentials --all-targets -- -D warnings >"$logs/clippy.private" 2>&1; then
+            # The compiler log is private. Publish ONLY generic lint names,
+            # error-code identifiers and cardinalities (never messages,
+            # private paths or source snippets) for safe root-cause triage.
+            python3 - "$logs/clippy.private" <<'PY_DIAG'
+          import pathlib,re,sys
+          content=pathlib.Path(sys.argv[1]).read_text(errors="replace")
+          rustc=sorted(set(re.findall(r'(?m)^error\[([A-Z][0-9]{4})\]:',content)))
+          lint=sorted(set(re.findall(r'clippy::[a-z][a-z_0-9]{1,60}',content)))
+          errors=len(re.findall(r'(?m)^error(?:\[[A-Z][0-9]{4}\])?:',content))
+          warnings=len(re.findall(r'(?m)^warning:',content))
+          print("LAS_ROOT_FFI_DIAG=RUSTC_CODES:"+(",".join(rustc) if rustc else "NONE"))
+          print("LAS_ROOT_FFI_DIAG=CLIPPY_LINTS:"+(",".join(lint[:12]) if lint else "NONE"))
+          print("LAS_ROOT_FFI_DIAG=ERROR_COUNT:"+str(min(errors,999)))
+          print("LAS_ROOT_FFI_DIAG=WARNING_COUNT:"+str(min(warnings,999)))
+          PY_DIAG
             echo 'LAS_ROOT_FFI=FAIL:CLIPPY'; exit 1
           fi
           echo 'LAS_ROOT_FFI=CLIPPY_PASS'
