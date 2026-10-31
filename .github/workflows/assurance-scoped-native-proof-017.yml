@@ -101,3 +101,39 @@ jobs:
           }
           rm -f "$log"
           echo 'LAS_BRIDGE=SCOPED_NATIVE_PASS_NOT_RELEASE_ACCEPTANCE'
+
+      - name: Run pinned private Rust source gates without private credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-source"
+          diagnostics="$RUNNER_TEMP/private-rust-diagnostics"
+          mkdir -m 700 "$diagnostics"
+          # Only the generic stage/status is public. No private compiler text.
+          if ! rustup toolchain install 1.98.1 --profile minimal >"$diagnostics/toolchain" 2>&1 ||
+             ! rustup component add --toolchain 1.98.1 rustfmt clippy >>"$diagnostics/toolchain" 2>&1; then
+            echo 'LAS_RUST_SCOPE=FAIL:TOOLCHAIN'; exit 1
+          fi
+          if ! cargo +1.98.1 fmt --all -- --check >"$diagnostics/fmt" 2>&1; then
+            echo 'LAS_RUST_SCOPE=FAIL:FORMAT'; exit 1
+          fi
+          if ! RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --all-targets >"$diagnostics/check" 2>&1; then
+            echo 'LAS_RUST_SCOPE=FAIL:DEFAULT_CHECK'; exit 1
+          fi
+          if ! RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --features linux-peer-credentials --all-targets >"$diagnostics/linux-check" 2>&1; then
+            echo 'LAS_RUST_SCOPE=FAIL:LINUX_CHECK'; exit 1
+          fi
+          if ! cargo +1.98.1 clippy --locked --all-targets -- -D warnings >"$diagnostics/clippy" 2>&1; then
+            echo 'LAS_RUST_SCOPE=FAIL:CLIPPY'; exit 1
+          fi
+          if ! RUSTFLAGS=-Dwarnings cargo +1.98.1 test --locked --all-targets -- --test-threads=1 >"$diagnostics/tests" 2>&1; then
+            echo 'LAS_RUST_SCOPE=FAIL:DEFAULT_TESTS'; exit 1
+          fi
+          if ! grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$diagnostics/tests"; then
+            echo 'LAS_RUST_SCOPE=FAIL:VACUOUS_TESTS'; exit 1
+          fi
+          if [[ -n "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo 'LAS_RUST_SCOPE=FAIL:SOURCE_DRIFT'; exit 1
+          fi
+          rm -rf -- "$diagnostics"
+          echo 'LAS_RUST_SCOPE=SCOPED_DEFAULT_RUST_PASS_NOT_RELEASE_ACCEPTANCE'
