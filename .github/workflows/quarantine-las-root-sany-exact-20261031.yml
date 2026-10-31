@@ -1,0 +1,146 @@
+name: Quarantine exact private Root SANY semantic gate
+on:
+  push:
+    branches:
+      - quarantine/las-native-python-98-exact-20261031
+    paths:
+      - .github/workflows/quarantine-las-root-sany-exact-20261031.yml
+permissions:
+  contents: read
+jobs:
+  exact-private-sany:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      TARGET_BRANCH_PROOF: 2e7d4bb17d6ca183c895b195861e75f8bfd9de9b031d4b4306a0e7ad836de47e
+      EXPECTED_PRIVATE_COMMIT_PROOF: 1bc15bc87e3a8b16b2bd75b4801a0439028c60e203db51f51b879f93fc0ca84e
+      EXPECTED_PRIVATE_RUNNER_BLOB_PROOF: 05e9176f1487e4a9303b38ae49f2cc88892c10657b1e43892935b27267235102
+    steps:
+      - name: Recover exact read-only private source without publishing code
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PRIVATE_REPOSITORY" || -z "$PRIVATE_READ_TOKEN" ]]; then
+            echo 'LAS_NATIVE_BRIDGE=FAIL:ACCESS'; exit 1
+          fi
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_READ_TOKEN"
+          private="$RUNNER_TEMP/private-source"
+          mkdir -m 700 "$private"
+          cd "$private"
+          git init -q
+          git remote add origin "https://github.com/$PRIVATE_REPOSITORY.git"
+          authorization="$(printf 'x-access-token:%s' "$PRIVATE_READ_TOKEN" | base64 -w0)"
+          echo "::add-mask::$authorization"
+          all_refs="$RUNNER_TEMP/private-heads"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" ls-remote --heads origin > "$all_refs" 2> "$RUNNER_TEMP/secret-fetch-error" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:READ'; exit 1
+          }
+          match=''
+          while read -r _sha candidate; do
+            candidate_proof="$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')"
+            if [[ "$candidate_proof" == "$TARGET_BRANCH_PROOF" ]]; then
+              [[ -z "$match" ]] || { echo 'LAS_NATIVE_BRIDGE=FAIL:AMBIGUOUS_REF'; exit 1; }
+              match="$candidate"
+            fi
+          done < "$all_refs"
+          rm -f "$all_refs" "$RUNNER_TEMP/secret-fetch-error"
+          [[ -n "$match" ]] || { echo 'LAS_NATIVE_BRIDGE=FAIL:TARGET'; exit 1; }
+          echo "::add-mask::$match"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" fetch -q --depth=1 origin "$match" > /dev/null 2> "$RUNNER_TEMP/secret-fetch-error" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:FETCH'; exit 1
+          }
+          rm -f "$RUNNER_TEMP/secret-fetch-error"
+          unset authorization PRIVATE_READ_TOKEN PRIVATE_REPOSITORY
+          git -c core.fsmonitor=false checkout -q --detach FETCH_HEAD
+          actual="$(git -c core.fsmonitor=false rev-parse --verify HEAD)"
+          echo "::add-mask::$actual"
+          proof="$(printf '%s' "$actual" | sha256sum | awk '{print $1}')"
+          [[ "$proof" == "$EXPECTED_PRIVATE_COMMIT_PROOF" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:SOURCE_PIN'; exit 1
+          }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:DIRTY'; exit 1
+          }
+          script='tools/verification/run_bridge_native_suite.sh'
+          [[ -f "$script" && ! -L "$script" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:RUNNER_MISSING'; exit 1
+          }
+          blob="$(git -c core.fsmonitor=false hash-object "$script")"
+          blob_proof="$(printf '%s' "$blob" | sha256sum | awk '{print $1}')"
+          [[ "$blob_proof" == "$EXPECTED_PRIVATE_RUNNER_BLOB_PROOF" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:RUNNER_PIN'; exit 1
+          }
+          echo "LAS_NATIVE_BRIDGE=SOURCE_PINNED:$proof"
+
+      - name: Verify exactly nine source-owned Root TLA models with checked SANY API 1.7.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-source"
+          private="$RUNNER_TEMP/las-sany-private"
+          mkdir -m 700 "$private"
+          jar="$private/tla2tools.jar"
+          if ! curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+               --output "$jar" "https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar" \
+               > "$private/fetch.log" 2>&1; then
+            echo 'LAS_ROOT_SANY=FAIL:TOOL_FETCH'; exit 1
+          fi
+          printf 'bee4a54f3ee3d4afc347c3240ec2d9e93b075104  %s\n' "$jar" |
+            sha1sum --check --strict > "$private/checksum.log" 2>&1 || {
+            echo 'LAS_ROOT_SANY=FAIL:TOOL_PIN'; exit 1
+          }
+          mkdir "$private/classes"
+          if ! javac --release 17 -cp "$jar" -d "$private/classes" \
+                   tools/verification/CheckedSany.java > "$private/javac.log" 2>&1; then
+            echo 'LAS_ROOT_SANY=FAIL:API_ADAPTER'; exit 1
+          fi
+          # Derive the exact nine-model obligation from the PRIVATE workflow.
+          # Do not publish proprietary module names on the public runner.
+          python3 -I -B - "$private/models" <<'PY_MODELS' || {
+          import pathlib,re,sys
+          source=pathlib.Path(".github/workflows/root-authority-tlc.yml").read_text()
+          tag="      - name: Parse Root Authority specifications"
+          fence="      - name: Exhaustively model-check Root Authority profiles"
+          if source.count(tag)!=1 or source.count(fence)!=1: raise SystemExit(1)
+          subsection=source.split(tag,1)[1].split(fence,1)[0]
+          names=re.findall(r"(?m)^\s+spec/root_authority/([A-Za-z_][A-Za-z0-9_]*)\.tla\s*$",subsection)
+          if len(names)!=9 or len(set(names))!=9: raise SystemExit(1)
+          target=pathlib.Path(sys.argv[1])
+          for name in names:
+              if not pathlib.Path("spec/root_authority",name+".tla").is_file(): raise SystemExit(1)
+          target.write_text("\n".join(names)+"\n")
+          PY_MODELS
+            echo 'LAS_ROOT_SANY=FAIL:SOURCE_CENSUS'; exit 1
+          }
+          n=0
+          while IFS= read -r model; do
+            n=$((n+1))
+            [[ "$model" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || {
+              echo 'LAS_ROOT_SANY=FAIL:MODULE_ID'; exit 1
+            }
+            if ! python3 -I -B tools/verification/checked_sany.py \
+                     --jar "$jar" --classes "$private/classes" \
+                     --model "spec/root_authority/$model.tla" \
+                     --private-output "$private/model-$n" \
+                     > "$private/result-$n.log" 2>&1; then
+              echo "LAS_ROOT_SANY=FAIL:SEMANTICS_$n"; exit 1
+            fi
+          done < "$private/models"
+          [[ "$n" -eq 9 ]] || { echo 'LAS_ROOT_SANY=FAIL:COUNT'; exit 1; }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_ROOT_SANY=FAIL:SOURCE_DRIFT'; exit 1
+          }
+          echo 'LAS_ROOT_SANY=9_PINNED_MODELS_PARSED_SEMANTIC_LEVEL_PASS_NOT_TLC'
+
+      - name: Scrub private source and SANY logs
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf -- "$RUNNER_TEMP/private-source" "$RUNNER_TEMP/las-sany-private"
+          rm -f -- "$RUNNER_TEMP/private-heads" "$RUNNER_TEMP/secret-fetch-error"
+          echo 'LAS_ROOT_SANY=EPHEMERAL_CLEANUP'
