@@ -85,7 +85,7 @@ jobs:
           jobs = YAML.safe_load_file(input, aliases: false).fetch('jobs')
           raise 'expected producer and consumer' unless jobs.keys.sort == %w[consumer producer]
           scripts = jobs.values.flat_map { |job| job.fetch('steps').filter_map { |step| step['run'] } }
-          raise 'missing native shell steps' if scripts.length < 5
+          raise 'unreviewed shell step count' unless scripts.length == 4
           scripts.each_with_index do |body, i|
             raise 'invalid step' unless body.is_a?(String) && !body.empty?
             File.write(File.join(out, "cross#{i}.sh"), body)
