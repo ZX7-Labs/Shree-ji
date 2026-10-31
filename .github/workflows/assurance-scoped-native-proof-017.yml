@@ -117,7 +117,44 @@ jobs:
           if ! cargo +1.98.1 fmt --all -- --check >"$diagnostics/fmt" 2>&1; then
             echo 'LAS_RUST_SCOPE=FAIL:FORMAT'; exit 1
           fi
-          if ! RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --all-targets >"$diagnostics/check" 2>&1; then
+          if ! RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --all-targets --message-format=json >"$diagnostics/check" 2>&1; then
+            # Only opaque file hashes, safe Rust error codes and line numbers
+            # leave the private runner. Raw diagnostics remain ephemeral.
+            python3 -I -B - "$diagnostics/check" <<'PY'
+          import hashlib, json, re, sys
+          count = 0
+          try:
+              with open(sys.argv[1], encoding='utf-8', errors='replace') as source:
+                  for raw in source:
+                      try:
+                          record = json.loads(raw)
+                      except (ValueError, TypeError):
+                          continue
+                      if record.get('reason') != 'compiler-message':
+                          continue
+                      msg = record.get('message', {})
+                      if msg.get('level') != 'error':
+                          continue
+                      code = (msg.get('code') or {}).get('code') or 'UNKNOWN'
+                      if not re.fullmatch(r'E[0-9]{4}', code):
+                          code = 'UNKNOWN'
+                      spans = msg.get('spans') or []
+                      span = next((v for v in spans if v.get('is_primary')), spans[0] if spans else {})
+                      path = str(span.get('file_name', 'UNKNOWN')).replace('\\', '/')
+                      # Use only a canonical relative path. Never print it.
+                      if path.startswith('/') or '..' in path.split('/'):
+                          path = 'UNKNOWN'
+                      proof = hashlib.sha256(path.encode()).hexdigest()[:16]
+                      line = span.get('line_start', 0)
+                      if not isinstance(line, int) or not 0 <= line <= 1000000:
+                          line = 0
+                      count += 1
+                      if count <= 30:
+                          print(f'LAS_RUST_OPAQUE_ERROR={code}:{proof}:{line}')
+          except OSError:
+              pass
+          print(f'LAS_RUST_OPAQUE_ERROR_COUNT={count}')
+          PY
             echo 'LAS_RUST_SCOPE=FAIL:DEFAULT_CHECK'; exit 1
           fi
           if ! RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --features linux-peer-credentials --all-targets >"$diagnostics/linux-check" 2>&1; then
