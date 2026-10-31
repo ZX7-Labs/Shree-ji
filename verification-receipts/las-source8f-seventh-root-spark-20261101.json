@@ -1,0 +1,39 @@
+{
+  "schema": "las-private-exact-gnatprove-seventh-gate-v1",
+  "private_source_commit": "8f039f43f9a0bb4a1c69fa204513e8fbfa2724c2",
+  "source_sha256": "6a2f0085f0f7fe676155389c9720e431312025b8c237279efd801656c536ce86",
+  "public_run": 41235122017,
+  "public_job": 124637147354,
+  "public_head": "3509127b2a9443e140ea38b8b395835d6e1d1d85",
+  "result": "scoped-pass",
+  "gnatprove_version": "16.1.0",
+  "capacities": [
+    1,
+    2,
+    16,
+    256
+  ],
+  "markers": [
+    "LAS_NATIVE_BRIDGE=SOURCE_PINNED:6a2f0085f0f7fe676155389c9720e431312025b8c237279efd801656c536ce86",
+    "LAS_ROOT_SPARK=SCOPED_GNATPROVE_PASS_NOT_RELEASE_APPROVAL",
+    "LAS_ROOT_SPARK=EPHEMERAL_CLEANUP"
+  ],
+  "checked_steps": [
+    {
+      "name": "Recover exact read-only private source without publishing code",
+      "result": "success"
+    },
+    {
+      "name": "Prove current Root Authority capacity 1 2 16 256 with GNATprove 16.1.0",
+      "result": "success"
+    },
+    {
+      "name": "Scrub private workspace and proof logs",
+      "result": "success"
+    }
+  ],
+  "global_release": false,
+  "full_canonical_spark": false,
+  "complete_tlc_207": false,
+  "physical_provider_not_verified": true
+}
