@@ -248,3 +248,34 @@ jobs:
           fi
           rm -rf -- "$diagnostics"
           echo 'LAS_RUST_SCOPE=SCOPED_DEFAULT_RUST_PASS_NOT_RELEASE_ACCEPTANCE'
+
+      - name: Verify Linux peer credentials and release-mode crate tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-source"
+          logs="$(mktemp -d "$RUNNER_TEMP/las-linux-release.XXXXXXXX")"
+          chmod 700 "$logs"
+          trap 'rm -rf -- "$logs"' EXIT
+          if ! RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --features linux-peer-credentials --all-targets >"$logs/linux-check" 2>&1; then
+            echo 'LAS_EXTRA_RUST=FAIL:LINUX_COMPILE'; exit 1
+          fi
+          if ! cargo +1.98.1 clippy --locked --features linux-peer-credentials --all-targets -- -D warnings >"$logs/linux-clippy" 2>&1; then
+            echo 'LAS_EXTRA_RUST=FAIL:LINUX_CLIPPY'; exit 1
+          fi
+          if ! RUSTFLAGS=-Dwarnings cargo +1.98.1 test --locked --features linux-peer-credentials --all-targets -- --test-threads=1 >"$logs/linux-tests" 2>&1; then
+            echo 'LAS_EXTRA_RUST=FAIL:LINUX_TEST'; exit 1
+          fi
+          if ! grep -Eq '^test result: ok\\. [1-9][0-9]* passed;' "$logs/linux-tests"; then
+            echo 'LAS_EXTRA_RUST=FAIL:LINUX_VACUOUS'; exit 1
+          fi
+          if ! RUSTFLAGS=-Dwarnings cargo +1.98.1 test --locked --release --lib -- --test-threads=1 >"$logs/release-tests" 2>&1; then
+            echo 'LAS_EXTRA_RUST=FAIL:RELEASE_TEST'; exit 1
+          fi
+          if ! grep -Eq '^test result: ok\\. [1-9][0-9]* passed;' "$logs/release-tests"; then
+            echo 'LAS_EXTRA_RUST=FAIL:RELEASE_VACUOUS'; exit 1
+          fi
+          if [[ -n "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo 'LAS_EXTRA_RUST=FAIL:CHECKOUT_DRIFT'; exit 1
+          fi
+          echo 'LAS_EXTRA_RUST=LINUX_AND_RELEASE_SCOPED_PASS_NOT_ROOT_FFI_OR_HARDWARE'
