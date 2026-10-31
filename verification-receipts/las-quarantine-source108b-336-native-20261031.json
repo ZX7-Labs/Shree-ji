@@ -1,0 +1,20 @@
+{
+  "schema": "las-quarantine-workflow-command-hijack-native-v1",
+  "classification": "SCOPED_SOURCE_EXACT_PYTHON_BASH_108_INVENTORY_336_NATIVE",
+  "private_source_commit_proof_sha256": "6a2f0085f0f7fe676155389c9720e431312025b8c237279efd801656c536ce86",
+  "private_runner_blob_proof_sha256": "d4df90336770cf5275996ccf750325a091b071a86a708799281845dc0eb5c74f",
+  "public_run_id": 41230462263,
+  "public_job_id": 124623422907,
+  "public_head_sha": "9c501184d05845278f39660b9d34b67a5898f6d8",
+  "markers": [
+    "LAS_NATIVE_BRIDGE=SOURCE_PINNED:6a2f0085f0f7fe676155389c9720e431312025b8c237279efd801656c536ce86",
+    "LAS_NATIVE_BRIDGE=SCOPED_PRIVATE_PYTHON_PASS_NOT_PRODUCT_RELEASE",
+    "LAS_NATIVE_BRIDGE=EPHEMERAL_CLEANUP"
+  ],
+  "context_tests": 92,
+  "canonical_inventory_tests": 16,
+  "normal_optimized_test_executions": 336,
+  "source_owner_stages": 12,
+  "other_root_rust_spark_tlc_verified_for_this_new_source": false,
+  "release_authorized": false
+}
