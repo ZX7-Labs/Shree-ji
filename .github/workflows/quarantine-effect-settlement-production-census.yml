@@ -29,34 +29,61 @@ jobs:
         run: |
           set -euo pipefail
           python3 -I -B tools/verification/guarded_effect_settlement_reachability.py --self-test
-      - name: Read exact private source by the existing pinned source-only trust step
+      - name: Recover one privately pinned source revision
         shell: bash
         env:
           PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
           PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
         run: |
           set -euo pipefail
-          umask 077
-          out="$(mktemp -d "$RUNNER_TEMP/settlement-source.XXXXXXXX")"
-          trap 'rm -rf -- "$out"' EXIT
-          ruby -ryaml - "$out" <<'RUBY'
-          out = ARGV.fetch(0)
-          controller = YAML.safe_load_file('.github/workflows/assurance-all-tlc-audit-022.yml', aliases: false)
-          pinned = controller.fetch('jobs').fetch('tlc-full-audit')
-          %w[TARGET_BRANCH_PROOF EXPECTED_PRIVATE_COMMIT_PROOF EXPECTED_PRIVATE_TEST_RUNNER_SHA256].each do |key|
-            raise 'source proof contract drift' unless ENV.fetch(key) == pinned.fetch('env').fetch(key)
-          end
-          source_step = pinned.fetch('steps').fetch(0).fetch('run')
-          raise 'missing canonical exact source proof' unless
-            source_step.include?('LAS_BRIDGE=EXACT_SOURCE_READY') &&
-            source_step.include?('EXPECTED_PRIVATE_COMMIT_PROOF') &&
-            source_step.include?('RUNNER_SOURCE')
-          File.write(File.join(out, 'recover.sh'), source_step)
-          RUBY
-          bash -n "$out/recover.sh"
-          bash "$out/recover.sh"
-          unset PRIVATE_REPOSITORY PRIVATE_READ_TOKEN
-          echo 'LAS_SETTLEMENT_REACHABILITY=SOURCE_CUSTODY_PINNED'
+          if [[ -z "$PRIVATE_REPOSITORY" || -z "$PRIVATE_READ_TOKEN" ]]; then
+            echo 'LAS_BRIDGE=FAIL:ACCESS'; exit 1
+          fi
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_READ_TOKEN"
+          private="$RUNNER_TEMP/private-source"
+          mkdir -m 700 "$private"
+          cd "$private"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          authorization="$(printf 'x-access-token:%s' "$PRIVATE_READ_TOKEN" | base64 -w0)"
+          echo "::add-mask::$authorization"
+          all_refs="$RUNNER_TEMP/private-heads"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" \
+            ls-remote --heads origin > "$all_refs" 2> "$RUNNER_TEMP/secret-fetch-error"
+          match=''
+          while read -r _sha candidate; do
+            candidate_proof="$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')"
+            if [[ "$candidate_proof" == "$TARGET_BRANCH_PROOF" ]]; then
+              [[ -z "$match" ]] || { echo 'LAS_BRIDGE=FAIL:AMBIGUOUS_REF'; exit 1; }
+              match="$candidate"
+            fi
+          done < "$all_refs"
+          rm -f "$all_refs" "$RUNNER_TEMP/secret-fetch-error"
+          [[ -n "$match" ]] || { echo 'LAS_BRIDGE=FAIL:TARGET'; exit 1; }
+          echo "::add-mask::$match"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" \
+            fetch -q --depth=1 origin "$match" > /dev/null 2> "$RUNNER_TEMP/secret-fetch-error"
+          rm -f "$RUNNER_TEMP/secret-fetch-error"
+          unset authorization PRIVATE_READ_TOKEN PRIVATE_REPOSITORY
+          git -c core.fsmonitor=false checkout -q --detach FETCH_HEAD
+          actual="$(git -c core.fsmonitor=false rev-parse --verify HEAD)"
+          echo "::add-mask::$actual"
+          proof="$(printf '%s' "$actual" | sha256sum | awk '{print $1}')"
+          if [[ "$proof" != "$EXPECTED_PRIVATE_COMMIT_PROOF" ]]; then
+            echo 'LAS_BRIDGE=FAIL:SOURCE_PROOF'; exit 1
+          fi
+          if [[ -n "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo 'LAS_BRIDGE=FAIL:DIRTY'; exit 1
+          fi
+          test_runner='tools/verification/run_bridge_native_suite.sh'
+          if ! printf '%s  %s\n' "$EXPECTED_PRIVATE_TEST_RUNNER_SHA256" "$test_runner" |
+               sha256sum --check --strict >/dev/null 2>&1; then
+            echo 'LAS_BRIDGE=FAIL:RUNNER_SOURCE'; exit 1
+          fi
+          echo "LAS_PRIVATE_SOURCE_PROOF=$proof"
+          echo 'LAS_BRIDGE=EXACT_SOURCE_READY'
+
       - name: Identify actual non-forwarding production settlement driver
         shell: bash
         run: |
