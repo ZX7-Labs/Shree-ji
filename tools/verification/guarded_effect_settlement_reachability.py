@@ -92,7 +92,13 @@ def census(root: Path, min_modules: int = MIN_MODULES) -> tuple[int, int, int, i
                 raise ValueError("unattributed host call")
             fn = preceding[-1]
             test_region = any(start < fn.start() for start in markers)
-            if not (is_test_file or test_region or fn.group(1) == "settle_authenticated_reality"):
+            # An internal proof-verification adapter is NOT a deployed host
+            # event source. Counting it would turn a new helper into a
+            # misleading "production caller present" release signal.
+            adapter_only = fn.group(1) in {
+                "settle_authenticated_reality", "settle_verified_sensor_event"
+            }
+            if not (is_test_file or test_region or adapter_only):
                 host_calls += 1
     if forwarders < 3 or test_calls < 2:
         raise ValueError("settlement reference census changed unexpectedly")
@@ -183,6 +189,16 @@ class CensusTests(unittest.TestCase):
             candidate = census(root, min_modules=8)
             self.assertGreater(candidate[-3], 0)
             self.assertEqual(candidate[-1], 0)
+
+    def test_uninvoked_dual_verifier_adapter_must_not_clear_release_block(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.fixture(
+                root,
+                "fn settle_verified_sensor_event() {"
+                " self.production.settle_authenticated_reality(proof); }\\n",
+            )
+            self.assertEqual(census(root, min_modules=8)[-1], 0)
 
     def test_only_separate_non_test_host_invocation_closes_source_call_graph(self) -> None:
         with tempfile.TemporaryDirectory() as d:
