@@ -132,6 +132,35 @@ jobs:
           print("LAS_ROOT_FFI_DIAG=ERROR_COUNT:"+str(min(errors,999)))
           print("LAS_ROOT_FFI_DIAG=WARNING_COUNT:"+str(min(warnings,999)))
           PY_DIAG
+            # A second machine-JSON diagnostic provides only opaque Git index
+            # ordinals and line numbers. Source filenames and messages remain
+            # entirely in the ephemeral runner, never in public logs.
+            GPRBUILD="$GPRBUILD" cargo +1.98.1 clippy --locked --features root-ffi,linux-peer-credentials --all-targets --message-format=json -- -D warnings >"$logs/clippy-json.private" 2>&1 || :
+            python3 - "$logs/clippy-json.private" <<'PY_LOCATION'
+          import json,subprocess,sys
+          names=subprocess.check_output(["git","-c","core.fsmonitor=false","ls-files","-z"]).decode("utf-8").split("\0")
+          lookup={s:i+1 for i,s in enumerate(sorted(x for x in names if x))}
+          results=set()
+          for row in open(sys.argv[1],encoding="utf-8",errors="replace"):
+              try: event=json.loads(row)
+              except (ValueError,TypeError): continue
+              if event.get("reason")!="compiler-message": continue
+              msg=event.get("message") or {}
+              if msg.get("level")!="error": continue
+              cd=msg.get("code") or {}
+              code=cd.get("code") or "UNKNOWN"
+              if not isinstance(code,str) or len(code)>80 or not all(c.isascii() and (c.isalnum() or c in ":_") for c in code): code="OTHER"
+              for span in msg.get("spans",[]):
+                  if not span.get("is_primary"): continue
+                  name=span.get("file_name","")
+                  if name.startswith("./"):name=name[2:]
+                  idx=lookup.get(name,0)
+                  line=span.get("line_start",0)
+                  if type(line)!=int or line<0 or line>100000:line=0
+                  results.add((idx,line,code))
+          for idx,line,code in sorted(results)[:12]:
+              print(f"LAS_ROOT_FFI_DIAG=LOCATION:{idx}:{line}:{code}")
+          PY_LOCATION
             echo 'LAS_ROOT_FFI=FAIL:CLIPPY'; exit 1
           fi
           echo 'LAS_ROOT_FFI=CLIPPY_PASS'
