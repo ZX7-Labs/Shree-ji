@@ -1,0 +1,148 @@
+name: Exact private two-profile TLC model checking (quarantine only)
+
+on:
+  push:
+    branches:
+      - quarantine/assurance-scoped-native-bridge-20261031
+    paths:
+      - .github/workflows/assurance-tlc-two-profile-021.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fixed-private-tlc-two-profile-021
+  cancel-in-progress: false
+
+jobs:
+  tlc-two-profile-scope:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 38
+    env:
+      # Only non-sensitive one-way proofs appear in the PUBLIC shell.
+      TARGET_BRANCH_PROOF: 0a9d756901b297941bbaf17509c374fcbbbf6e38862e10a80ec265fc97ce52df
+      EXPECTED_PRIVATE_COMMIT_PROOF: 1adce8a16b15daa5022b11634ffccb7c21785e6ccb449a6055acf2e2d5514e43
+      EXPECTED_PRIVATE_TEST_RUNNER_SHA256: 529de5130fd7f8cb9331fb535e8c762ec75afae6143fbe879c3917bd926495df
+    steps:
+      - name: Recover one privately pinned source revision
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PRIVATE_REPOSITORY" || -z "$PRIVATE_READ_TOKEN" ]]; then
+            echo 'LAS_BRIDGE=FAIL:ACCESS'; exit 1
+          fi
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_READ_TOKEN"
+          private="$RUNNER_TEMP/private-source"
+          mkdir -m 700 "$private"
+          cd "$private"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          authorization="$(printf 'x-access-token:%s' "$PRIVATE_READ_TOKEN" | base64 -w0)"
+          echo "::add-mask::$authorization"
+          all_refs="$RUNNER_TEMP/private-heads"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" \
+            ls-remote --heads origin > "$all_refs" 2> "$RUNNER_TEMP/secret-fetch-error"
+          match=''
+          while read -r _sha candidate; do
+            candidate_proof="$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')"
+            if [[ "$candidate_proof" == "$TARGET_BRANCH_PROOF" ]]; then
+              [[ -z "$match" ]] || { echo 'LAS_BRIDGE=FAIL:AMBIGUOUS_REF'; exit 1; }
+              match="$candidate"
+            fi
+          done < "$all_refs"
+          rm -f "$all_refs" "$RUNNER_TEMP/secret-fetch-error"
+          [[ -n "$match" ]] || { echo 'LAS_BRIDGE=FAIL:TARGET'; exit 1; }
+          echo "::add-mask::$match"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" \
+            fetch -q --depth=1 origin "$match" > /dev/null 2> "$RUNNER_TEMP/secret-fetch-error"
+          rm -f "$RUNNER_TEMP/secret-fetch-error"
+          unset authorization PRIVATE_READ_TOKEN PRIVATE_REPOSITORY
+          git -c core.fsmonitor=false checkout -q --detach FETCH_HEAD
+          actual="$(git -c core.fsmonitor=false rev-parse --verify HEAD)"
+          echo "::add-mask::$actual"
+          proof="$(printf '%s' "$actual" | sha256sum | awk '{print $1}')"
+          if [[ "$proof" != "$EXPECTED_PRIVATE_COMMIT_PROOF" ]]; then
+            echo 'LAS_BRIDGE=FAIL:SOURCE_PROOF'; exit 1
+          fi
+          if [[ -n "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo 'LAS_BRIDGE=FAIL:DIRTY'; exit 1
+          fi
+          test_runner='tools/verification/run_bridge_native_suite.sh'
+          if ! printf '%s  %s\n' "$EXPECTED_PRIVATE_TEST_RUNNER_SHA256" "$test_runner" |
+               sha256sum --check --strict >/dev/null 2>&1; then
+            echo 'LAS_BRIDGE=FAIL:RUNNER_SOURCE'; exit 1
+          fi
+          echo "LAS_PRIVATE_SOURCE_PROOF=$proof"
+          echo 'LAS_BRIDGE=EXACT_SOURCE_READY'
+
+      - name: Obtain source-workflow pinned TLA tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/las-tlc-tools.jar"
+          private_log="$RUNNER_TEMP/las-tlc-tools-download-private.log"
+          if ! curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+               --output "$archive" \
+               'https://github.com/tlaplus/tlaplus/releases/download/v1.7.2/tla2tools.jar' >"$private_log" 2>&1; then
+            echo 'LAS_TLC_SCOPE=FAIL:TOOL_DOWNLOAD'; exit 1
+          fi
+          if ! printf '%s  %s\n' '7f21faa2cdae3189e7d5fadb4488f0dfcc658407' "$archive" | sha1sum --check --strict >"$private_log" 2>&1; then
+            echo 'LAS_TLC_SCOPE=FAIL:SOURCE_PIN'; exit 1
+          fi
+          echo "LAS_TLC_ARTIFACT_SHA256=$(sha256sum "$archive" | awk '{print $1}')"
+          echo 'LAS_TLC_SCOPE=ORIGINAL_TOOL_PIN_MATCHED_SHA1_ONLY'
+
+      - name: Execute two exact source-pinned model profiles natively
+        shell: bash
+        env:
+          JAVA_TOOL_OPTIONS: -Xmx5g
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-source"
+          archive="$RUNNER_TEMP/las-tlc-tools.jar"
+          logs="$(mktemp -d "$RUNNER_TEMP/las-tlc-profiles.XXXXXXXX")"
+          chmod 700 "$logs"
+          trap 'rm -rf -- "$logs"' EXIT
+          wanted=(
+            'e9cdf104f1e2f834baee61a14572ac9f98811eae2a4710968f2b6bf10ab111f3'
+            '59bb9dd5b2b742a5e045c91d55bcc0f14495097749c6245a5a01f865afb12052'
+          )
+          count=0
+          for path_proof in "${wanted[@]}"; do
+            matched=''
+            while IFS= read -r -d '' cfg; do
+              digest="$(printf '%s' "$cfg" | sha256sum | awk '{print $1}')"
+              if [[ "$digest" == "$path_proof" ]]; then
+                [[ -z "$matched" ]] || { echo 'LAS_TLC_SCOPE=FAIL:AMBIGUOUS_PROFILE'; exit 1; }
+                matched="$cfg"
+              fi
+            done < <(find spec -type f -name '*.cfg' -print0)
+            [[ -n "$matched" ]] || { echo 'LAS_TLC_SCOPE=FAIL:MISSING_PROFILE'; exit 1; }
+            model="${matched%.cfg}.tla"
+            [[ -f "$model" && ! -L "$model" && -f "$matched" && ! -L "$matched" ]] || {
+              echo 'LAS_TLC_SCOPE=FAIL:SOURCE_PAIR'; exit 1
+            }
+            count=$((count + 1))
+            if ! java -cp "$archive" tla2sany.SANY "$model" >"$logs/${count}.parse" 2>&1; then
+              echo "LAS_TLC_SCOPE=FAIL:SANY_${count}"; exit 1
+            fi
+            if ! java -XX:+UseParallelGC -jar "$archive" \
+                 -workers 2 -fp 0 -deadlock -config "$matched" "$model" >"$logs/${count}.tlc" 2>&1; then
+              echo "LAS_TLC_SCOPE=FAIL:TLC_${count}"; exit 1
+            fi
+            # The actual TLC success marker is tool-native, not supplied by
+            # model text or shell echoes.
+            if ! grep -Eq 'Model checking completed\. No error has been found\.|No error has been found\.' "$logs/${count}.tlc"; then
+              echo "LAS_TLC_SCOPE=FAIL:TOOL_RECEIPT_${count}"; exit 1
+            fi
+          done
+          [[ "$count" == 2 ]] || { echo 'LAS_TLC_SCOPE=FAIL:VACUOUS'; exit 1; }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_TLC_SCOPE=FAIL:CHECKOUT_DRIFT'; exit 1
+          }
+          echo 'LAS_TLC_SCOPE=TWO_EXACT_PROFILE_NATIVE_PASS_NOT_COMPLETE_FORMAL_ACCEPTANCE'
