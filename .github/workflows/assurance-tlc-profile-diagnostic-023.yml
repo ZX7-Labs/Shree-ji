@@ -1,0 +1,155 @@
+name: Private native TLC profile failure diagnostic (quarantine only)
+
+on:
+  push:
+    branches:
+      - quarantine/assurance-scoped-native-bridge-20261031
+    paths:
+      - .github/workflows/assurance-tlc-profile-diagnostic-023.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fixed-private-tlc-profile-diagnostic-023
+  cancel-in-progress: false
+
+jobs:
+  tlc-profile-diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 28
+    env:
+      # Only non-sensitive one-way proofs appear in the PUBLIC shell.
+      TARGET_BRANCH_PROOF: 0a9d756901b297941bbaf17509c374fcbbbf6e38862e10a80ec265fc97ce52df
+      EXPECTED_PRIVATE_COMMIT_PROOF: 1adce8a16b15daa5022b11634ffccb7c21785e6ccb449a6055acf2e2d5514e43
+      EXPECTED_PRIVATE_TEST_RUNNER_SHA256: 529de5130fd7f8cb9331fb535e8c762ec75afae6143fbe879c3917bd926495df
+    steps:
+      - name: Recover one privately pinned source revision
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PRIVATE_REPOSITORY" || -z "$PRIVATE_READ_TOKEN" ]]; then
+            echo 'LAS_BRIDGE=FAIL:ACCESS'; exit 1
+          fi
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_READ_TOKEN"
+          private="$RUNNER_TEMP/private-source"
+          mkdir -m 700 "$private"
+          cd "$private"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          authorization="$(printf 'x-access-token:%s' "$PRIVATE_READ_TOKEN" | base64 -w0)"
+          echo "::add-mask::$authorization"
+          all_refs="$RUNNER_TEMP/private-heads"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" \
+            ls-remote --heads origin > "$all_refs" 2> "$RUNNER_TEMP/secret-fetch-error"
+          match=''
+          while read -r _sha candidate; do
+            candidate_proof="$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')"
+            if [[ "$candidate_proof" == "$TARGET_BRANCH_PROOF" ]]; then
+              [[ -z "$match" ]] || { echo 'LAS_BRIDGE=FAIL:AMBIGUOUS_REF'; exit 1; }
+              match="$candidate"
+            fi
+          done < "$all_refs"
+          rm -f "$all_refs" "$RUNNER_TEMP/secret-fetch-error"
+          [[ -n "$match" ]] || { echo 'LAS_BRIDGE=FAIL:TARGET'; exit 1; }
+          echo "::add-mask::$match"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" \
+            fetch -q --depth=1 origin "$match" > /dev/null 2> "$RUNNER_TEMP/secret-fetch-error"
+          rm -f "$RUNNER_TEMP/secret-fetch-error"
+          unset authorization PRIVATE_READ_TOKEN PRIVATE_REPOSITORY
+          git -c core.fsmonitor=false checkout -q --detach FETCH_HEAD
+          actual="$(git -c core.fsmonitor=false rev-parse --verify HEAD)"
+          echo "::add-mask::$actual"
+          proof="$(printf '%s' "$actual" | sha256sum | awk '{print $1}')"
+          if [[ "$proof" != "$EXPECTED_PRIVATE_COMMIT_PROOF" ]]; then
+            echo 'LAS_BRIDGE=FAIL:SOURCE_PROOF'; exit 1
+          fi
+          if [[ -n "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo 'LAS_BRIDGE=FAIL:DIRTY'; exit 1
+          fi
+          test_runner='tools/verification/run_bridge_native_suite.sh'
+          if ! printf '%s  %s\n' "$EXPECTED_PRIVATE_TEST_RUNNER_SHA256" "$test_runner" |
+               sha256sum --check --strict >/dev/null 2>&1; then
+            echo 'LAS_BRIDGE=FAIL:RUNNER_SOURCE'; exit 1
+          fi
+          echo "LAS_PRIVATE_SOURCE_PROOF=$proof"
+          echo 'LAS_BRIDGE=EXACT_SOURCE_READY'
+
+      - name: Obtain source-workflow pinned TLA tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/las-tlc-tools.jar"
+          private_log="$RUNNER_TEMP/las-tlc-tools-download-private.log"
+          if ! curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+               --output "$archive" \
+               'https://github.com/tlaplus/tlaplus/releases/download/v1.7.2/tla2tools.jar' >"$private_log" 2>&1; then
+            echo 'LAS_TLC_SCOPE=FAIL:TOOL_DOWNLOAD'; exit 1
+          fi
+          if ! printf '%s  %s\n' '7f21faa2cdae3189e7d5fadb4488f0dfcc658407' "$archive" | sha1sum --check --strict >"$private_log" 2>&1; then
+            echo 'LAS_TLC_SCOPE=FAIL:SOURCE_PIN'; exit 1
+          fi
+          # Strong artifact pin derived from separately observed official-source
+          # SHA-1-pinned native run 41176201522 (do not trust a new jar build).
+          if ! printf '%s  %s\n' 'fa18543e44ed5974a85bd2c60c0dc16620ae117680ea8e693d2691999ed90b22' "$archive" | sha256sum --check --strict > "$private_log" 2>&1; then
+            echo 'LAS_TLC_SCOPE=FAIL:SHA256'; exit 1
+          fi
+          echo 'LAS_TLC_SCOPE=PINNED_SHA1_AND_SHA256'
+
+      - name: Encrypted diagnosis for seven native TLC profile blockers
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-source"
+          logs="$(mktemp -d "$RUNNER_TEMP/las-tlc-diagnostic.XXXXXXXX")"
+          chmod 700 "$logs"
+          trap 'rm -rf -- "$logs"' EXIT
+          printf '%s' 'LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUVMVENDQXBXZ0F3SUJBZ0lVTmoyVlkvMy9FMWpUcndMN0dyVnl4YzcydzJjd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0pqRWtNQ0lHQTFVRUF3d2JURUZUSUZCeWFYWmhkR1VnUkdWaWRXY2dSWEJvWlcxbGNtRnNNQjRYRFRJMgpNVEF6TVRBMU5UYzBOMW9YRFRJMk1URXdNakExTlRjME4xb3dKakVrTUNJR0ExVUVBd3diVEVGVElGQnlhWFpoCmRHVWdSR1ZpZFdjZ1JYQm9aVzFsY21Gc01JSUJvakFOQmdrcWhraUc5dzBCQVFFRkFBT0NBWThBTUlJQmlnS0MKQVlFQW40K0srRWRnT3BoQU9lVWVkb0FXN1JqdDk3NjlHb25uNFQ3MTVtcjdZakJwd2FXc3QrK3NnQllKdmdVbwp5YzVvdzR6bFRhcFU4c014TVJNR0QwaFZkRzRsVXV2ZXFtRHBRcHNVdFRGOEhQMXRUcWhJOXkwTnhhWFdmSEVWClJiZVYxSkFrVWJ5dXdiTWg4M3dyNW8rQzA4V2ZEdi9ZN1h0UjBRN0tYUTVGRW8yY3grMW9WNW9aeTJDeFdOZ1EKY1dJSzhQcmdNQ2llYzdxUmJja3pjdnlORjg5OEQyUkwyY0dtaEw3TUxrekJ2TmkxV3dxKytjK3RHUDRyaC9pdAo1cUpESmJVQ1kwVEo4SWV1T0J6aGsyNU5NNGg4TDFzMEJmMWFIQklxeFdLOXYvM0pZQk02MUx6UGZQNi9oUW83CnM2aGtWdS9GQ2ZMTks2cUpMM3Z0eDFUVEpsZFBTVVJLeWFRTTN5ZnU0TUxSWGlXa1pMc3kwWlE0bFZEeGxnMzcKU3FQd0lsUnhnU3hTREdWd0luelpFakViY1JjZzVpVXIyQlNUV1RYdjJ5TERQUW82YmpiclV0elhra2pJNWNJWgp1N3ZrbTV5d2p1YVFHekRtbDhZMm9rS1JTT1pnc0w3bS9ZVG9Eb3Nyc2hreDUvbit3ZmtKSkthRjZXVHIrYXNOClFISkJBZ01CQUFHalV6QlJNQjBHQTFVZERnUVdCQlI2ZktMbjl4OFZXYWowb3BJcEhPU2liMytaWnpBZkJnTlYKSFNNRUdEQVdnQlI2ZktMbjl4OFZXYWowb3BJcEhPU2liMytaWnpBUEJnTlZIUk1CQWY4RUJUQURBUUgvTUEwRwpDU3FHU0liM0RRRUJDd1VBQTRJQmdRQWp3R0s5R1FCRE1mdmR6NlZRMzZDMmcxdGIyTUc4bVIwK04wQ1dxZGcvCmhhS3BqSG13TFAzU3lEdUpJTnhuRHB0M0lRUkpRMlNhWTVVMWNsY1ZnRWpidGl2K3BtNDNab2ZFTlEwREFnQTcKL2NMOWZEUmdwSmFoQlNiVVdCT0dITlhkTkVZNXMvaTNiY3EwRXBnaTZKZzZ0Q2NXcTVlUkFYcWQzcFJCcVQvbQprbDNTbWdBNEdrMnlabURwNFB0clpMYmVCZG9JaUkwUWJ3MDZLMkdkRHhiQ2R3M3h4VEpVdDNKRnFRK0UxRkZPCnFRaDNVTUdDbGJTR0Z4WHk4Qm1CM3JseUw3bmVYbDUzRUFpZXdOcU9PUGovMEF0cGg5d3FUNWlzTG1hQmtSdEEKaS9EWnA0c1ZsalUyM0NrYldXUjVTYXZOWFVjTlRWTExTa0RITXU1b2ZKV0cxZ1V2YXFHRm5zS1c3UGZBSG9oTgpKWVFISGU3WFcxZGU3UmRzY3F5cnk4bTl6L1N4SGx5K3lMeCt2VCtPUklsRlRCNHlOcHFRWGFFdEwzZWNna0JnCkV6QUNVVXBOeFZYeWJXVGxIUVRmeXI5TzVSYjZJSU9MS3A5MDRCTkpTYXRIT3NxWWN5RDdJYzlacC91L2ViTFAKSG82U3Qzay9ZbDVPbkZQZ3d5U0JNeDg9Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K' | base64 -d > "$logs/diag-recipient.pem"
+          missing=0
+          for target in '473919ed6cda5a33' 'b1f0d855e8255672' '45db3f718fa27ba6' '71a64e6bbddb752b' '4605faf449933030' 'fb2ca55cf8f7c787' '8e723f10be15d5e2'; do
+            matched=''
+            while IFS= read -r -d '' cfg; do
+              proof="$(printf '%s' "$cfg" | sha256sum | cut -c1-16)"
+              if [[ "$proof" == "$target" ]]; then
+                [[ -z "$matched" ]] || { echo 'LAS_TLC_DIAG=FAIL:AMBIGUOUS'; exit 1; }
+                matched="$cfg"
+              fi
+            done < <(find spec -type f -name '*.cfg' -print0)
+            [[ -n "$matched" ]] || { echo "LAS_TLC_DIAG=FAIL:MISSING_${target}"; exit 1; }
+            stem="${matched%.cfg}"
+            model=''
+            while [[ "$stem" == *'/'* ]]; do
+              if [[ -f "$stem.tla" ]]; then model="$stem.tla"; break; fi
+              name="${stem##*/}"
+              (( ${#name} > 1 )) || break
+              stem="${stem%/*}/${name:0:${#name}-1}"
+            done
+            [[ -n "$model" ]] || { echo "LAS_TLC_DIAG=FAIL:PAIR_${target}"; exit 1; }
+            result="$logs/native_${target}.txt"
+            if timeout --signal=TERM --kill-after=5s 3m \
+                java -XX:+UseParallelGC -jar "$RUNNER_TEMP/las-tlc-tools.jar" \
+                -workers 2 -fp 0 -deadlock -config "$matched" "$model" >"$result" 2>&1; then
+              echo "LAS_TLC_DIAG=CASE_NATIVE_EXIT_ZERO_${target}"
+            else
+              missing=$((missing+1))
+              # Encrypt the native failure transcript; no private source leaves
+              # the runner unencrypted, including file paths and TLC variables.
+              tail -c 1800 "$result" >"$logs/plain.txt"
+              if openssl cms -encrypt -binary -aes-256-cbc -outform DER \
+                  -in "$logs/plain.txt" -out "$logs/cipher.der" \
+                  "$logs/diag-recipient.pem" >/dev/null 2>&1; then
+                echo "LAS_TLC_DIAG_CIPHER_BEGIN_${target}"
+                base64 -w0 "$logs/cipher.der"
+                echo
+                echo "LAS_TLC_DIAG_CIPHER_END_${target}"
+              else
+                echo "LAS_TLC_DIAG=FAIL:ENCRYPT_${target}"; exit 1
+              fi
+            fi
+          done
+          echo "LAS_TLC_DIAG=NATIVE_NONZERO_CASES_${missing}_OF_7_REVIEW_REQUIRED"
