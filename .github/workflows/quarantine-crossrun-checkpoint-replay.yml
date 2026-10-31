@@ -21,6 +21,10 @@ env:
 
 jobs:
   source-pinned-replay:
+    # PRIVATE checkpoint state is not synonymous with approved encrypted
+    # diagnostics. Require owner-controlled explicit permission to download
+    # and decrypt a public repository artifact from a historical run.
+    if: ${{ vars.LAS_PUBLIC_ENCRYPTED_TLC_CHECKPOINT_EXPORT_APPROVED == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
