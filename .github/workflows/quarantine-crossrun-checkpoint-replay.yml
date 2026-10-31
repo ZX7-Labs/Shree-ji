@@ -1,0 +1,134 @@
+name: Pinned-source authenticated TLC checkpoint cross-run recovery (quarantine research)
+
+on:
+  push:
+    branches:
+      - quarantine/tlc-expected-negative-audit-repair-20261031
+    paths:
+      - .github/workflows/quarantine-crossrun-checkpoint-replay.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  TARGET_BRANCH_PROOF: 0a9d756901b297941bbaf17509c374fcbbbf6e38862e10a80ec265fc97ce52df
+  EXPECTED_PRIVATE_COMMIT_PROOF: 1adce8a16b15daa5022b11634ffccb7c21785e6ccb449a6055acf2e2d5514e43
+  EXPECTED_PRIVATE_TEST_RUNNER_SHA256: 529de5130fd7f8cb9331fb535e8c762ec75afae6143fbe879c3917bd926495df
+  PRODUCER_WORKFLOW_SHA: fa7f3adce8f5a93182d8e4791d16ee1d487e2ebb
+  PRODUCER_RUN_ID: "41183395437"
+  EXPECTED_ARTIFACT_DIGEST: sha256:22a7ceeff181e5e525136ffe0ab4f00e9d3df46ec39c4cfdc199073231e76e8f
+
+jobs:
+  source-pinned-replay:
+    # PRIVATE checkpoint state is not synonymous with approved encrypted
+    # diagnostics. Require owner-controlled explicit permission to download
+    # and decrypt a public repository artifact from a historical run.
+    if: ${{ vars.LAS_PUBLIC_ENCRYPTED_TLC_CHECKPOINT_EXPORT_APPROVED == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout exact historical producer/consumer implementation
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+          ref: fa7f3adce8f5a93182d8e4791d16ee1d487e2ebb
+      - name: Independently confirm producer run and immutable ciphertext artifact identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/las-replay-attest"
+          mkdir -m 700 "$archive"
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+               -H "Authorization: Bearer $GH_TOKEN" \
+               -H 'Accept: application/vnd.github+json' \
+               "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$PRODUCER_RUN_ID" \
+               > "$archive/producer-run.json"
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+               -H "Authorization: Bearer $GH_TOKEN" \
+               -H 'Accept: application/vnd.github+json' \
+               "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$PRODUCER_RUN_ID/artifacts" \
+               > "$archive/producer-artifacts.json"
+          if ! python3 -I -B - "$archive" <<'PY'
+          import json, os, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          a = json.loads((root/'producer-run.json').read_text())
+          b = json.loads((root/'producer-artifacts.json').read_text())
+          if (a.get('id') != int(os.environ['PRODUCER_RUN_ID']) or
+                  a.get('head_sha') != os.environ['PRODUCER_WORKFLOW_SHA'] or
+                  a.get('status') != 'completed' or a.get('conclusion') != 'success' or
+                  a.get('repository',{}).get('full_name') != os.environ['GITHUB_REPOSITORY']):
+              raise SystemExit(2)
+          artifacts = [x for x in b.get('artifacts', []) if x.get('name') == 'las-quarantine-checkpoint-ciphertext']
+          if len(artifacts) != 1: raise SystemExit(2)
+          artifact = artifacts[0]
+          if (artifact.get('expired') is not False or
+                  artifact.get('digest') != os.environ['EXPECTED_ARTIFACT_DIGEST'] or
+                  artifact.get('size_in_bytes') != 47359839 or
+                  artifact.get('workflow_run',{}).get('id') != int(os.environ['PRODUCER_RUN_ID'])):
+              raise SystemExit(2)
+          PY
+          then
+            echo 'LAS_CROSS_RUN=FAIL:UNAPPROVED_PRODUCER_OR_ARTIFACT'; exit 1
+          fi
+          echo 'LAS_CROSS_RUN=APPROVED_IMMUTABLE_PRODUCER_AND_ARTIFACT_IDENTITY'
+      - name: Download exactly the cryptographically sealed producer artifact
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+        with:
+          name: las-quarantine-checkpoint-ciphertext
+          path: ${{ runner.temp }}/las-received-artifact
+          run-id: 41183395437
+          github-token: ${{ github.token }}
+          repository: ZX7-Labs/Shree-ji
+      - name: Rebuild exactly pinned private source and TLA+ toolchain independently
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          root="$(mktemp -d "$RUNNER_TEMP/las-crossrun-bootstrap.XXXXXXXX")"
+          trap 'rm -rf -- "$root"' EXIT
+          ruby -ryaml - "$root" <<'RUBY'
+          root = ARGV.fetch(0)
+          source = YAML.safe_load_file('.github/workflows/quarantine-crossjob-checkpoint.yml', aliases: false)
+          keys = %w[TARGET_BRANCH_PROOF EXPECTED_PRIVATE_COMMIT_PROOF EXPECTED_PRIVATE_TEST_RUNNER_SHA256]
+          keys.each do |k|
+            raise 'origin source identity drift' unless ENV.fetch(k) == source.fetch('env').fetch(k)
+          end
+          code = source.fetch('jobs').fetch('consumer').fetch('steps').fetch(2).fetch('run')
+          raise 'pinned recovery code not present' unless code.include?('setup0.sh') && code.include?('setup1.sh')
+          File.write(File.join(root, 'recover.sh'), code)
+          RUBY
+          bash -n "$root/recover.sh"
+          bash "$root/recover.sh"
+          echo 'LAS_CROSS_RUN=EXACT_PRIVATE_SOURCE_AND_JAR_READY'
+      - name: Authenticate immutable producer ciphertext and recover source-bound TLC on a fresh run
+        shell: bash
+        env:
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+          JAVA_TOOL_OPTIONS: -Xmx5g
+        run: |
+          set -euo pipefail
+          umask 077
+          root="$(mktemp -d "$RUNNER_TEMP/las-crossrun-script.XXXXXXXX")"
+          trap 'rm -rf -- "$root"' EXIT
+          ruby -ryaml - "$root" <<'RUBY'
+          root = ARGV.fetch(0)
+          src = YAML.safe_load_file('.github/workflows/quarantine-crossjob-checkpoint.yml', aliases: false)
+          consumer = src.fetch('jobs').fetch('consumer').fetch('steps').fetch(3).fetch('run')
+          raise 'missing source-pinned sealed restore' unless consumer.include?('LAS_CROSS_JOB=AUTHENTICATION_AND_TAMPER_REJECTION_PASS') && consumer.include?('LA'+'S_CROSS_JOB=SCOPED_ARTIFACT_CUSTODY_FEASIBILITY_NOT_RELEASE')
+          File.write(File.join(root, 'verify-restart.sh'), consumer)
+          RUBY
+          bash -n "$root/verify-restart.sh"
+          # The older public SHA/run-id are PROVEN from the actual GitHub API above,
+          # and supplied ONLY to the exact old run's frozen authenticated consumer.
+          # New public run SHA is never treated as a substitute for the producer.
+          if ! env GITHUB_SHA="$PRODUCER_WORKFLOW_SHA" GITHUB_RUN_ID="$PRODUCER_RUN_ID" \
+                  bash "$root/verify-restart.sh"; then
+            echo 'LAS_CROSS_RUN=FAIL:AUTHENTICATED_RECOVERY'; exit 1
+          fi
+          echo 'LAS_CROSS_RUN=SCOPED_REPLAY_OF_SEALED_PRODUCER_NOT_FULL_MODEL_PASS'

@@ -95,18 +95,20 @@ jobs:
           private_log="$RUNNER_TEMP/las-tlc-tools-download-private.log"
           if ! curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
                --output "$archive" \
-               'https://github.com/tlaplus/tlaplus/releases/download/v1.7.2/tla2tools.jar' >"$private_log" 2>&1; then
+               'https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar' >"$private_log" 2>&1; then
             echo 'LAS_TLC_SCOPE=FAIL:TOOL_DOWNLOAD'; exit 1
           fi
-          if ! printf '%s  %s\n' '7f21faa2cdae3189e7d5fadb4488f0dfcc658407' "$archive" | sha1sum --check --strict >"$private_log" 2>&1; then
+          if ! printf '%s  %s\n' 'bee4a54f3ee3d4afc347c3240ec2d9e93b075104' "$archive" | sha1sum --check --strict >"$private_log" 2>&1; then
             echo 'LAS_TLC_SCOPE=FAIL:SOURCE_PIN'; exit 1
           fi
-          # Strong artifact pin derived from separately observed official-source
-          # SHA-1-pinned native run 41176201522 (do not trust a new jar build).
-          if ! printf '%s  %s\n' 'fa18543e44ed5974a85bd2c60c0dc16620ae117680ea8e693d2691999ed90b22' "$archive" | sha256sum --check --strict > "$private_log" 2>&1; then
-            echo 'LAS_TLC_SCOPE=FAIL:SHA256'; exit 1
+          # Official 1.7.4 jar SHA-256 was independently measured on the
+          # source-pinned public runner (run 41182883770), after its SHA-1 check.
+          # Require BOTH checks: no algorithm downgrade or unreviewed version swap.
+          if ! printf '%s  %s\n' '936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88' "$archive" |
+               sha256sum --check --strict > "$private_log" 2>&1; then
+            echo 'LAS_TLC_SCOPE=FAIL:SHA256_PIN'; exit 1
           fi
-          echo 'LAS_TLC_SCOPE=PINNED_SHA1_AND_SHA256'
+          echo 'LAS_TLC_SCOPE=CANONICAL_174_SHA1_AND_SHA256_PINNED'
 
       - name: Audit full source-tracked TLC profile set in eight bounded shards
         shell: bash
@@ -120,60 +122,82 @@ jobs:
           logs="$(mktemp -d "$RUNNER_TEMP/las-tlc-all.XXXXXXXX")"
           chmod 700 "$logs"
           trap 'rm -rf -- "$logs"' EXIT
-          mapfile -d '' -t configs < <(find spec -type f -name '*.cfg' -print0 | sort -z)
-          if (( ${#configs[@]} != 207 )); then
-            echo 'LAS_ALL_TLC=FAIL:SOURCE_COUNT'; exit 1
+          # SCOPED AUDIT ONLY. Pinned canonical source owns both the
+          # positive/negative distinction and the exact model/deadlock mapping.
+          if ! python3 -I -B - "$PWD" "$PWD/tools/verify_codespaces_all.sh" > "$logs/map.tsv" 2>"$logs/map-private.err" <<'PY'
+          import pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          source = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")
+          marker = """if ! python3 - "$ROOT" > "$TLC_MAP.pending" <<'PY'\n"""
+          if source.count(marker) != 1:
+              raise SystemExit(2)
+          tail = source.split(marker, 1)[1]
+          closing = "\nPY\nthen"
+          if tail.count(closing) != 1:
+              raise SystemExit(2)
+          # Execute only the source-pinned canonical generator. This remains
+          # SELF-CONTROLLED scoped evidence, never independent approval.
+          sys.argv = ["canonical-map", str(root)]
+          exec(compile(tail.split(closing, 1)[0], "<pinned-canonical-map>", "exec"),
+               {"__name__": "__main__"})
+          PY
+          then
+            echo 'LAS_ALL_TLC=FAIL:CANONICAL_MAP_UNAVAILABLE'; exit 1
+          fi
+          mapfile -t cases < "$logs/map.tsv"
+          if (( ${#cases[@]} != 207 )); then
+            echo 'LAS_ALL_TLC=FAIL:CANONICAL_PROFILE_COUNT'; exit 1
           fi
           checked=0
-          for cfg in "${configs[@]}"; do
-            # Deterministic distribution; no individual model paths leave public logs.
+          declared_negatives=0
+          for record in "${cases[@]}"; do
+            IFS=$'\t' read -r cfg chosen deadlock expectation <<< "$record"
+            if [[ -z "$cfg" || -z "$chosen" || ! "$deadlock" =~ ^[01]$ ]]; then
+              echo 'LAS_ALL_TLC=FAIL:INVALID_CANONICAL_ENTRY'; exit 1
+            fi
+            if [[ "$cfg" == *Negative.cfg ]]; then
+              [[ -n "$expectation" ]] || { echo 'LAS_ALL_TLC=FAIL:MISSING_NEGATIVE_RULE'; exit 1; }
+              declared_negatives=$((declared_negatives + 1))
+            else
+              [[ -z "$expectation" ]] || { echo 'LAS_ALL_TLC=FAIL:UNEXPECTED_NEGATIVE_RULE'; exit 1; }
+            fi
+            # Private profile digest only schedules work; NEVER emit it publicly.
             digest="$(printf '%s' "$cfg" | sha256sum | awk '{print $1}')"
             bucket="$((16#${digest:0:4} % 8))"
             [[ "$bucket" -eq "$TLC_SHARD" ]] || continue
-            short="${digest:0:16}"
-            if ! git -c core.fsmonitor=false ls-files --error-unmatch "$cfg" >/dev/null 2>&1; then
-              echo "LAS_ALL_TLC=FAIL:UNTRACKED_${short}"; exit 1
-            fi
-            # Each .cfg is bound to its longest same-directory tracked .tla
-            # prefix. The exact 207-case path/object review is private.
-            stem="${cfg%.cfg}"
-            chosen=''
-            # TLC configs may substitute constants with operators defined only
-            # by *Model.tla, not the similarly named abstract contract *.tla.
-            # Prefer exact concrete model, then exact abstract file; for
-            # variant profiles choose the longest prefix with the same rule.
-            while [[ "$stem" == *'/'* ]]; do
-              if [[ -f "${stem}Model.tla" ]]; then
-                chosen="${stem}Model.tla"
-                break
-              elif [[ -f "$stem.tla" ]]; then
-                chosen="$stem.tla"
-                break
-              fi
-              dirname="${stem%/*}"
-              name="${stem##*/}"
-              len="${#name}"
-              (( len > 1 )) || break
-              stem="$dirname/${name:0:len-1}"
-            done
-            if [[ -z "$chosen" || -L "$cfg" || -L "$chosen" ]]; then
-              echo "LAS_ALL_TLC=FAIL:PAIR_${short}"; exit 1
-            fi
-            if ! git -c core.fsmonitor=false ls-files --error-unmatch "$chosen" >/dev/null 2>&1; then
-              echo "LAS_ALL_TLC=FAIL:MODEL_UNTRACKED_${short}"; exit 1
+            if [[ -L "$cfg" || -L "$chosen" || ! -f "$cfg" || ! -f "$chosen" ]] ||
+               ! git -c core.fsmonitor=false ls-files --error-unmatch "$cfg" "$chosen" >/dev/null 2>&1; then
+              echo 'LAS_ALL_TLC=FAIL:UNTRACKED_OR_UNSAFE_PROFILE'; exit 1
             fi
             checked=$((checked + 1))
-            if ! timeout --signal=TERM --kill-after=15s 9m \
-                 java -XX:+UseParallelGC -jar "$archive" -workers 2 -fp 0 \
-                      -deadlock -config "$cfg" "$chosen" > "$logs/case_${checked}" 2>&1; then
-              echo "LAS_ALL_TLC=FAIL:CASE_${short}"; exit 1
+            # Mirror canonical v1.7.4 liveness soundness flags. Changing these
+            # to v1.7.2, omitting final liveness, or globally disabling deadlock
+            # checks would make the scoped evidence non-comparable.
+            args=(-workers auto -lncheck final -fp 0)
+            if [[ "$deadlock" == "1" ]]; then args+=(-deadlock); fi
+            args+=(-config "$(basename "$cfg")" "$(basename "$chosen")")
+            # Model imports are resolved in the owning module directory, as in
+            # the private canonical verifier; raw logs stay runner-private.
+            if (cd "$(dirname "$cfg")" && timeout --signal=TERM --kill-after=15s 9m \
+                 java -XX:+UseParallelGC -jar "$archive" "${args[@]}") > "$logs/case_$checked" 2>&1; then
+              java_rc=0
+            else
+              java_rc=$?
             fi
-            if ! grep -Eq 'No error has been found\.' "$logs/case_${checked}"; then
-              echo "LAS_ALL_TLC=FAIL:RECEIPT_${short}"; exit 1
+            if (( java_rc == 124 || java_rc == 137 || java_rc == 143 )); then
+              echo 'LAS_ALL_TLC=INCOMPLETE:RESOURCE_OR_TIMEOUT'; exit 1
+            fi
+            if ! python3 -I -B tools/verification/canonical_tlc_result_evidence.py \
+                 "$logs/case_$checked" "$java_rc" 0 --expectation "$expectation" \
+                 > "$logs/receipt_$checked" 2>&1; then
+              echo 'LAS_ALL_TLC=FAIL:CASE_EVIDENCE_REJECTED'; exit 1
             fi
           done
+          if (( declared_negatives != 12 )); then
+            echo 'LAS_ALL_TLC=FAIL:NEGATIVE_CONTROL_COUNT'; exit 1
+          fi
           if (( checked == 0 )); then
-            echo "LAS_ALL_TLC=FAIL:EMPTY_SHARD_${TLC_SHARD}"; exit 1
+            echo 'LAS_ALL_TLC=FAIL:EMPTY_SHARD'; exit 1
           fi
           if [[ -n "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]]; then
             echo 'LAS_ALL_TLC=FAIL:SOURCE_DRIFT'; exit 1

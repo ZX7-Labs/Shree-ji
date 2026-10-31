@@ -1,0 +1,162 @@
+name: Quarantine TLC audit low-cost syntax and scope preflight
+
+on:
+  push:
+    branches:
+      - quarantine/tlc-expected-negative-audit-repair-20261031
+    paths:
+      - .github/workflows/tlc-audit-quick-preflight.yml
+      - .github/workflows/assurance-all-tlc-audit-022.yml
+      - .github/workflows/quarantine-crossjob-checkpoint.yml
+      - .github/workflows/quarantine-crossrun-checkpoint-replay.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out public controller at exact triggering revision
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - name: Parse exact source YAML and syntax-check ALL Bash run blocks
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=".github/workflows/assurance-all-tlc-audit-022.yml"
+          out="$(mktemp -d "$RUNNER_TEMP/tlc-audit-syntax.XXXXXXXX")"
+          chmod 700 "$out"
+          trap 'rm -rf -- "$out"' EXIT
+          ruby -ryaml - "$root" "$out" <<'RUBY'
+          src, out = ARGV
+          doc = YAML.safe_load_file(src, aliases: false)
+          raise 'missing workflow jobs' unless doc.is_a?(Hash)
+          steps = doc.fetch('jobs').fetch('tlc-full-audit').fetch('steps')
+          scripts = steps.map { |s| s.fetch('run') }
+          raise 'step count changed' unless scripts.length == 3
+          scripts.each_with_index do |script, i|
+            raise 'empty run block' unless script.is_a?(String) && !script.strip.empty?
+            File.write(File.join(out, "step#{i}.sh"), script)
+          end
+          RUBY
+          for script in "$out"/step*.sh; do
+            bash -n "$script"
+          done
+          python3 -I -B - "$out/step2.sh" <<'PY'
+          from pathlib import Path
+          import re, sys
+          source = Path(sys.argv[1]).read_text(encoding='utf-8')
+          markers = (
+              'canonical_tlc_result_evidence.py',
+              'declared_negatives != 12',
+              '#cases[@]} != 207',
+              '-workers auto -lncheck final -fp 0',
+              'v1.7.4',
+              'CANONICAL_MAP_UNAVAILABLE',
+              'INCOMPLETE:RESOURCE_OR_TIMEOUT',
+              'SOURCE_DRIFT',
+          )
+          for term in markers:
+              if source.count(term) != 1:
+                  raise SystemExit('scope marker absent or duplicated')
+          if 'FAIL:CASE_${short}' in source or 'FAIL:PAIR_${short}' in source:
+              raise SystemExit('public deterministic path-hash regression')
+          # This checks the actual embedded Python program syntax, not TLC.
+          match = re.search(r"(?ms)^if ! python3 -I -B - .* <<'PY'\n(.*?)\nPY\nthen$", source)
+          if not match:
+              raise SystemExit('missing canonical-map-extraction heredoc')
+          compile(match.group(1), '<embedded-canonical-map-extractor>', 'exec')
+          print('LAS_TLC_AUDIT_PREFLIGHT=SOURCE_YAML_BASH_PYTHON_SCOPED_PASS')
+          PY
+
+      - name: Cross-job checkpoint YAML/Bash/Python only (no private data or artifact)
+        shell: bash
+        run: |
+          set -euo pipefail
+          source=".github/workflows/quarantine-crossjob-checkpoint.yml"
+          out="$(mktemp -d "$RUNNER_TEMP/crossjob-syntax.XXXXXXXX")"
+          chmod 700 "$out"
+          trap 'rm -rf -- "$out"' EXIT
+          ruby -ryaml - "$source" "$out" <<'RUBY'
+          input, out = ARGV
+          jobs = YAML.safe_load_file(input, aliases: false).fetch('jobs')
+          raise 'expected producer and consumer' unless jobs.keys.sort == %w[consumer producer]
+          approval = jobs.fetch('producer').fetch('if')
+          # Construct the GitHub expression at runtime: a literal expression in
+          # an Actions run block would be interpolated by Actions before Ruby.
+          dollar_open = [36, 123, 123].pack('C*')
+          expected = dollar_open + %q[ vars.LAS_PUBLIC_ENCRYPTED_TLC_CHECKPOINT_EXPORT_APPROVED == 'true' }}]
+          raise 'public artifact approval gate absent or altered' unless approval == expected
+          scripts = jobs.values.flat_map { |job| job.fetch('steps').filter_map { |step| step['run'] } }
+          raise 'unreviewed shell step count' unless scripts.length == 4
+          scripts.each_with_index do |body, i|
+            raise 'invalid step' unless body.is_a?(String) && !body.empty?
+            File.write(File.join(out, "cross#{i}.sh"), body)
+          end
+          RUBY
+          for file in "$out"/cross*.sh; do
+            bash -n "$file"
+          done
+          python3 -I -B - "$out" <<'PY'
+          import pathlib, re, sys
+          root = pathlib.Path(sys.argv[1])
+          count = 0
+          for shell_file in sorted(root.glob("cross*.sh")):
+              lines = shell_file.read_text(encoding="utf-8").splitlines()
+              pos = 0
+              while pos < len(lines):
+                  if re.search(r"<<'PY'\s*$", lines[pos]):
+                      body = []
+                      pos += 1
+                      while pos < len(lines) and lines[pos] != "PY":
+                          body.append(lines[pos])
+                          pos += 1
+                      if pos == len(lines):
+                          raise SystemExit("unclosed Python heredoc")
+                      compile("\n".join(body) + "\n", "<checkpoint-embedded-python>", "exec")
+                      count += 1
+                  pos += 1
+          if count < 5:
+              raise SystemExit("insufficient native Python programs examined")
+          print("LAS_CROSSJOB_STATIC=YAML_BASH_PYTHON_PASS_ONLY")
+          PY
+
+      - name: Historical cross-run checkpoint security and script validation (public only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$(mktemp -d "$RUNNER_TEMP/crossrun-review.XXXXXXXX")"
+          chmod 700 "$out"
+          trap 'rm -rf -- "$out"' EXIT
+          ruby -ryaml - "$out" <<'RUBY'
+          out = ARGV.fetch(0)
+          source = YAML.safe_load_file('.github/workflows/quarantine-crossrun-checkpoint-replay.yml', aliases: false)
+          job = source.fetch('jobs').fetch('source-pinned-replay')
+          # Avoid Actions interpolating the expression inside this run block.
+          expected = [36, 123, 123].pack('C*') + %q[ vars.LAS_PUBLIC_ENCRYPTED_TLC_CHECKPOINT_EXPORT_APPROVED == 'true' }}]
+          raise 'missing explicit export permission' unless job.fetch('if') == expected
+          raise 'unexpected grant scope' unless source.fetch('permissions') == {'contents' => 'read', 'actions' => 'read'}
+          code = job.fetch('steps').filter_map {|step| step['run']}
+          raise 'unexpected scripts' unless code.length == 3
+          code.each_with_index {|body, i| File.write(File.join(out, "run#{i}.sh"), body)}
+          RUBY
+          for f in "$out"/run*.sh; do bash -n "$f"; done
+          python3 -I -B - "$out" <<'PY'
+          import pathlib, re, sys
+          root = pathlib.Path(sys.argv[1])
+          count = 0
+          for f in sorted(root.glob('run*.sh')):
+              lines = f.read_text(encoding='utf-8').splitlines()
+              for index, line in enumerate(lines):
+                  if re.search(r"<<'PY'\s*$", line):
+                      end = next((j for j in range(index+1,len(lines)) if lines[j] == 'PY'), None)
+                      if end is None: raise SystemExit('unclosed heredoc')
+                      compile('\n'.join(lines[index+1:end])+'\n','<source-pinned-embedded-python>','exec')
+                      count += 1
+          if count < 1: raise SystemExit('no real embedded Python verified')
+          print('LAS_CROSSRUN_STATIC=PRIVATE_FREE_SOURCE_SYNTAX_AND_PERMISSION_GATE_PASS')
+          PY
