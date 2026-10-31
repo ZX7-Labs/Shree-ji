@@ -1,0 +1,17 @@
+{
+  "schema": "las-root-reality-mutation-eight-twomode-v1",
+  "source_proof_sha256": "5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f",
+  "public_run_id": 41229461300,
+  "public_job_id": 124620402811,
+  "public_head_sha": "5c8e31fd6de5a33bc7fe2b5697e92d39e6a62064",
+  "verified_markers": [
+    "LAS_NATIVE_BRIDGE=SOURCE_PINNED:5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f",
+    "LAS_ROOT_MUTATIONS=16_MODED_CONTROLS_PASS_NOT_TLC_OR_RELEASE",
+    "LAS_ROOT_MUTATIONS=EPHEMERAL_CLEANUP"
+  ],
+  "source_owned_cases": 8,
+  "normal_optimized_executions": 16,
+  "control_scope": "Root/Reality exact triple identity mutations, equality omissions and rejection precedence",
+  "exhaustive_TLC_status": "not a TLC receipt",
+  "release_authorized": false
+}
