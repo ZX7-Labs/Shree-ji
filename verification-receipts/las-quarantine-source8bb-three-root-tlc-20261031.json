@@ -1,0 +1,24 @@
+{
+  "schema": "las-three-targeted-root-tlc-scoped-v1",
+  "private_source_commit_sha256": "5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f",
+  "public_run_id": 41228867844,
+  "public_job_id": 124618655386,
+  "public_runner_head": "44c20af9fd106b02ebebfb892c5ed1d7b0bfa900",
+  "verified_markers": [
+    "LAS_NATIVE_BRIDGE=SOURCE_PINNED:5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f",
+    "LAS_ROOT_TLC=PROFILE_1_PASS",
+    "LAS_ROOT_TLC=PROFILE_2_PASS",
+    "LAS_ROOT_TLC=PROFILE_3_PASS",
+    "LAS_ROOT_TLC=SCOPED_THREE_PROFILE_PASS_NOT_202_OR_RELEASE",
+    "LAS_ROOT_TLC=EPHEMERAL_CLEANUP"
+  ],
+  "tool": "TLC 1.7.4 with pinned SHA1 bee4a54f3ee3d4afc347c3240ec2d9e93b075104",
+  "private_scope": "last 3 of 9 Root models from source-owned parse obligation",
+  "positive_profile_count": 3,
+  "classifier": "tools/verification/canonical_tlc_result_evidence.py",
+  "nonvacuous_state_summary_required": true,
+  "complete_202_profile_suite": false,
+  "negative_controls_in_this_run": false,
+  "release_authorized": false,
+  "classification": "PINNED_THREE_PROFILE_TLC_PASS_ONLY"
+}
