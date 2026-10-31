@@ -131,8 +131,14 @@ jobs:
               echo "LAS_TLA_SANY=FAIL:UNTRACKED_${id}"; exit 1
             fi
             count=$((count+1))
-            if ! timeout --signal=TERM --kill-after=5s 75s \
-                 java -cp "$archive" tla2sany.SANY "$tla" >"$logs/${count}.txt" 2>&1; then
+            # SANY resolves EXTENDS/INSTANCE siblings relative to the working
+            # directory. Execute inside the model's own source directory;
+            # passing spec/.../Model.tla from repository root is not equivalent.
+            model_dir="${tla%/*}"
+            model_name="${tla##*/}"
+            if ! (cd "$model_dir" &&
+                   timeout --signal=TERM --kill-after=5s 75s \
+                   java -cp "$archive" tla2sany.SANY "$model_name") >"$logs/${count}.txt" 2>&1; then
               echo "LAS_TLA_SANY=FAIL:NATIVE_${id}"; exit 1
             fi
             if grep -Eiq '(^|[^[:alpha:]])(error|parse error|semantic error)([^[:alpha:]]|$)' "$logs/${count}.txt"; then
