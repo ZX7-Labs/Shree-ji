@@ -136,7 +136,7 @@ jobs:
                 "$logfile" "$java_rc" 0 >"$private/classifier-$count.private" 2>&1; then
               echo "LAS_ROOT_TLC=FAIL:PROFILE_$count"; exit 1
             fi
-            echo "LAS_ROOT_TLC=PROFILE_$count_PASS"
+            echo "LAS_ROOT_TLC=PROFILE_${count}_PASS"
           done < "$private/models.private"
           [[ "$count" -eq 3 ]] || { echo 'LAS_ROOT_TLC=FAIL:COUNT'; exit 1; }
           [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
