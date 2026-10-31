@@ -1,0 +1,46 @@
+{
+  "schema": "las-pspr-rust-alltargets-scoped-receipt-v1",
+  "classification": "EXACT_PRIVATE_REVISION_SCOPED_RUST_ALLTARGETS_NOT_RELEASE",
+  "private_source_commit_sha256": "1bc15bc87e3a8b16b2bd75b4801a0439028c60e203db51f51b879f93fc0ca84e",
+  "public_run_id": 41227480980,
+  "public_job_id": 124614541531,
+  "public_head_sha": "281ddd0ce2863feddc9401b8627beed6df69348e",
+  "conclusion": "success",
+  "verified_markers": [
+    "LAS_PRIVATE_SOURCE_PROOF=1bc15bc87e3a8b16b2bd75b4801a0439028c60e203db51f51b879f93fc0ca84e",
+    "LAS_BRIDGE=EXACT_SOURCE_READY",
+    "LAS_RUST_INTEGRATION=DEFAULT_ALL_TARGET_TESTS_PASS",
+    "LAS_RUST_INTEGRATION=LINUX_ALL_TARGET_TESTS_PASS_NOT_RELEASE_APPROVAL",
+    "LAS_RUST_INTEGRATION=EPHEMERAL_CLEANUP"
+  ],
+  "stages": [
+    {
+      "name": "Recover one privately pinned source revision",
+      "conclusion": "success"
+    },
+    {
+      "name": "Verify pinned Rust 1.98.1 crate, source policy and unit tests",
+      "conclusion": "success"
+    },
+    {
+      "name": "Run full default and Linux-feature Rust target tests",
+      "conclusion": "success"
+    },
+    {
+      "name": "Scrub private checkout and temporary diagnostics",
+      "conclusion": "success"
+    }
+  ],
+  "tested_profiles": [
+    "Rust 1.98.1 default cargo test --locked --all-targets -- --test-threads=1",
+    "Rust 1.98.1 cargo test --locked --features linux-peer-credentials --all-targets -- --test-threads=1"
+  ],
+  "toolchain": "Rust 1.98.1",
+  "not_release_approval": true,
+  "not_proven": [
+    "Ada/SPARK",
+    "Root FFI",
+    "TLC exhaustive",
+    "physical integration"
+  ]
+}
