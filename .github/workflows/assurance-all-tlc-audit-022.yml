@@ -136,8 +136,15 @@ jobs:
             # prefix. The exact 207-case path/object review is private.
             stem="${cfg%.cfg}"
             chosen=''
+            # TLC configs may substitute constants with operators defined only
+            # by *Model.tla, not the similarly named abstract contract *.tla.
+            # Prefer exact concrete model, then exact abstract file; for
+            # variant profiles choose the longest prefix with the same rule.
             while [[ "$stem" == *'/'* ]]; do
-              if [[ -f "$stem.tla" ]]; then
+              if [[ -f "${stem}Model.tla" ]]; then
+                chosen="${stem}Model.tla"
+                break
+              elif [[ -f "$stem.tla" ]]; then
                 chosen="$stem.tla"
                 break
               fi
