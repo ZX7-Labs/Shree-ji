@@ -119,6 +119,17 @@ jobs:
           rm -rf -- "$logs"
           echo 'LAS_ROOT_FFI=PINNED_GNAT_READY'
 
+      - name: Install exact Rust Clippy and rustfmt components
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/las-root-rust-toolchain.log"
+          if ! rustup toolchain install 1.98.1 --profile minimal >"$log" 2>&1 ||
+             ! rustup component add --toolchain 1.98.1 clippy rustfmt >>"$log" 2>&1; then
+            echo 'LAS_ROOT_FFI=FAIL:RUST_COMPONENTS'; exit 1
+          fi
+          echo 'LAS_ROOT_FFI=PINNED_RUST_COMPONENTS_READY'
+
       - name: Verify exact Root Ada and Rust FFI composition natively
         shell: bash
         run: |
