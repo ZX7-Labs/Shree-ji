@@ -1,0 +1,72 @@
+name: Quarantine TLC audit low-cost syntax and scope preflight
+
+on:
+  push:
+    branches:
+      - quarantine/tlc-expected-negative-audit-repair-20261031
+    paths:
+      - .github/workflows/tlc-audit-quick-preflight.yml
+      - .github/workflows/assurance-all-tlc-audit-022.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out public controller at exact triggering revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Parse exact source YAML and syntax-check ALL Bash run blocks
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=".github/workflows/assurance-all-tlc-audit-022.yml"
+          out="$(mktemp -d "$RUNNER_TEMP/tlc-audit-syntax.XXXXXXXX")"
+          chmod 700 "$out"
+          trap 'rm -rf -- "$out"' EXIT
+          ruby -ryaml - "$root" "$out" <<'RUBY'
+          src, out = ARGV
+          doc = YAML.safe_load_file(src, aliases: false)
+          raise 'missing workflow jobs' unless doc.is_a?(Hash)
+          steps = doc.fetch('jobs').fetch('tlc-full-audit').fetch('steps')
+          scripts = steps.map { |s| s.fetch('run') }
+          raise 'step count changed' unless scripts.length == 3
+          scripts.each_with_index do |script, i|
+            raise 'empty run block' unless script.is_a?(String) && !script.strip.empty?
+            File.write(File.join(out, "step#{i}.sh"), script)
+          end
+          RUBY
+          for script in "$out"/step*.sh; do
+            bash -n "$script"
+          done
+          python3 -I -B - "$out/step2.sh" <<'PY'
+          from pathlib import Path
+          import re, sys
+          source = Path(sys.argv[1]).read_text(encoding='utf-8')
+          markers = (
+              'canonical_tlc_result_evidence.py',
+              'declared_negatives != 12',
+              '#cases[@]} != 207',
+              '-workers auto -lncheck final -fp 0',
+              'v1.7.4',
+              'CANONICAL_MAP_UNAVAILABLE',
+              'INCOMPLETE:RESOURCE_OR_TIMEOUT',
+              'SOURCE_DRIFT',
+          )
+          for term in markers:
+              if source.count(term) != 1:
+                  raise SystemExit('scope marker absent or duplicated')
+          if 'FAIL:CASE_${short}' in source or 'FAIL:PAIR_${short}' in source:
+              raise SystemExit('public deterministic path-hash regression')
+          # This checks the actual embedded Python program syntax, not TLC.
+          match = re.search(r"<<'PY'\\n(.*?)\\nPY\\nthen", source, re.S)
+          if not match:
+              raise SystemExit('missing canonical-map-extraction heredoc')
+          compile(match.group(1), '<embedded-canonical-map-extractor>', 'exec')
+          print('LAS_TLC_AUDIT_PREFLIGHT=SOURCE_YAML_BASH_PYTHON_SCOPED_PASS')
+          PY
