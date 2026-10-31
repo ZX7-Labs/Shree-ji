@@ -64,3 +64,12 @@ This closes the *bounded, source-controlled native 12-negative test execution* g
 
 **Adversarial limitation:** private-side canonical generator and classifier still share project custody; the pinned checkout plus public runner pin prevents silent substitution for this test, but it is not independent approval for future source versions. No 207/207 full acceptance or protected main promotion is asserted.
 
+
+## Canonical TLA+ 1.7.4 dual-checksum pin and native rerun
+
+The official TLA+ 1.7.4 jar already pinned by canonical SHA-1 `bee4a54f3ee3d4afc347c3240ec2d9e93b075104` was byte-hashed by a real authorized public compute runner after exact private source/tool admission. **Run 41182883770** emitted the *public tool artifact* SHA-256 `936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88`, and all 12 native negatives completed successfully. This is a newly measured SHA-256 for **1.7.4**; it is not the older SHA-256 of 1.7.2.
+
+The isolated 207-profile controller now **requires both SHA-1 and SHA-256** for that exact official jar, failing closed on either mismatch. Its exact GitHub workflow YAML, all three Bash scripts and embedded Python passed public-native syntactic preflight **41182941798**. The all-12 negative workflow independently asserts the new source-workflow SHA-256 pin is present and re-runs the pinned private 12-case matrix; **41182968434 SUCCESS**. This adds a real second native download+hash confirmation, not merely a static copied digest.
+
+**Status remains SCOPED-TESTED / NO MERGE.** It does not certify 195 positive model executions, slow checkpoint/restart, physical Root or independent approval custody. No production `main` files were changed.
+
