@@ -1,0 +1,131 @@
+name: Quarantine exact Root Reality identity mutation controls
+on:
+  push:
+    branches:
+      - quarantine/las-native-python-98-exact-20261031
+    paths:
+      - .github/workflows/quarantine-las-root-effect-mutation-20261031.yml
+permissions:
+  contents: read
+jobs:
+  identity-mutations:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      TARGET_BRANCH_PROOF: 2e7d4bb17d6ca183c895b195861e75f8bfd9de9b031d4b4306a0e7ad836de47e
+      EXPECTED_PRIVATE_COMMIT_PROOF: 5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f
+      EXPECTED_PRIVATE_RUNNER_BLOB_PROOF: 05e9176f1487e4a9303b38ae49f2cc88892c10657b1e43892935b27267235102
+    steps:
+      - name: Recover exact read-only private source without publishing code
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PRIVATE_REPOSITORY" || -z "$PRIVATE_READ_TOKEN" ]]; then
+            echo 'LAS_NATIVE_BRIDGE=FAIL:ACCESS'; exit 1
+          fi
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_READ_TOKEN"
+          private="$RUNNER_TEMP/private-source"
+          mkdir -m 700 "$private"
+          cd "$private"
+          git init -q
+          git remote add origin "https://github.com/$PRIVATE_REPOSITORY.git"
+          authorization="$(printf 'x-access-token:%s' "$PRIVATE_READ_TOKEN" | base64 -w0)"
+          echo "::add-mask::$authorization"
+          all_refs="$RUNNER_TEMP/private-heads"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" ls-remote --heads origin > "$all_refs" 2> "$RUNNER_TEMP/secret-fetch-error" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:READ'; exit 1
+          }
+          match=''
+          while read -r _sha candidate; do
+            candidate_proof="$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')"
+            if [[ "$candidate_proof" == "$TARGET_BRANCH_PROOF" ]]; then
+              [[ -z "$match" ]] || { echo 'LAS_NATIVE_BRIDGE=FAIL:AMBIGUOUS_REF'; exit 1; }
+              match="$candidate"
+            fi
+          done < "$all_refs"
+          rm -f "$all_refs" "$RUNNER_TEMP/secret-fetch-error"
+          [[ -n "$match" ]] || { echo 'LAS_NATIVE_BRIDGE=FAIL:TARGET'; exit 1; }
+          echo "::add-mask::$match"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" fetch -q --depth=1 origin "$match" > /dev/null 2> "$RUNNER_TEMP/secret-fetch-error" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:FETCH'; exit 1
+          }
+          rm -f "$RUNNER_TEMP/secret-fetch-error"
+          unset authorization PRIVATE_READ_TOKEN PRIVATE_REPOSITORY
+          git -c core.fsmonitor=false checkout -q --detach FETCH_HEAD
+          actual="$(git -c core.fsmonitor=false rev-parse --verify HEAD)"
+          echo "::add-mask::$actual"
+          proof="$(printf '%s' "$actual" | sha256sum | awk '{print $1}')"
+          [[ "$proof" == "$EXPECTED_PRIVATE_COMMIT_PROOF" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:SOURCE_PIN'; exit 1
+          }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:DIRTY'; exit 1
+          }
+          script='tools/verification/run_bridge_native_suite.sh'
+          [[ -f "$script" && ! -L "$script" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:RUNNER_MISSING'; exit 1
+          }
+          blob="$(git -c core.fsmonitor=false hash-object "$script")"
+          blob_proof="$(printf '%s' "$blob" | sha256sum | awk '{print $1}')"
+          [[ "$blob_proof" == "$EXPECTED_PRIVATE_RUNNER_BLOB_PROOF" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:RUNNER_PIN'; exit 1
+          }
+          echo "LAS_NATIVE_BRIDGE=SOURCE_PINNED:$proof"
+
+      - name: Run exact-source mutation tests in normal and optimized Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-source"
+          dir="$(mktemp -d "$RUNNER_TEMP/las-identity-mutation.XXXXXXXX")"
+          chmod 700 "$dir"
+          if ! python3 -I -B - "$dir/script.private" <<'PY_SRC'
+          import pathlib,re,sys
+          data=pathlib.Path(".github/workflows/root-authority-tlc.yml").read_text()
+          start="      - name: Independent Root/Reality terminal identity mutation controls"
+          end="      - name: Exhaustively model-check independent terminal EffectKey identity"
+          if data.count(start)!=1 or data.count(end)!=1:raise SystemExit(1)
+          source=data.split(start,1)[1].split(end,1)[0]
+          matched=re.findall(r"(?m)^\s+python3 -I -B (tools/verification/[a-z0-9_]+\.py)\s*$",source)
+          if len(matched)!=1:raise SystemExit(1)
+          p=pathlib.Path(matched[0])
+          if not p.is_file() or p.is_symlink():raise SystemExit(1)
+          methods=re.findall(r"(?m)^\s+def (test_[a-z0-9_]+)\(",p.read_text())
+          if len(methods)!=8 or len(set(methods))!=8:raise SystemExit(1)
+          pathlib.Path(sys.argv[1]).write_text(str(p)+"\n")
+          PY_SRC
+          then
+            echo 'LAS_ROOT_MUTATIONS=FAIL:SOURCE'; exit 1
+          fi
+          read -r script < "$dir/script.private"
+          if ! python3 -I -B "$script" >"$dir/normal.private" 2>&1; then
+            echo 'LAS_ROOT_MUTATIONS=FAIL:NORMAL'; exit 1
+          fi
+          if ! python3 -O -I -B "$script" >"$dir/optimized.private" 2>&1; then
+            echo 'LAS_ROOT_MUTATIONS=FAIL:OPTIMIZED'; exit 1
+          fi
+          for mode in normal optimized; do
+            grep -Eq '^Ran 8 tests in [0-9.]+s$' "$dir/$mode.private" || {
+              echo 'LAS_ROOT_MUTATIONS=FAIL:COUNT'; exit 1
+            }
+            grep -Fxq 'OK' "$dir/$mode.private" || {
+              echo 'LAS_ROOT_MUTATIONS=FAIL:RESULT'; exit 1
+            }
+          done
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_ROOT_MUTATIONS=FAIL:SOURCE_DRIFT'; exit 1
+          }
+          echo 'LAS_ROOT_MUTATIONS=16_MODED_CONTROLS_PASS_NOT_TLC_OR_RELEASE'
+      - name: Scrub private source and mutation logs
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf -- "$RUNNER_TEMP/private-source"
+          find "$RUNNER_TEMP" -maxdepth 1 -name 'las-identity-mutation.*' -type d -exec rm -rf -- {} +
+          rm -f -- "$RUNNER_TEMP/private-heads" "$RUNNER_TEMP/secret-fetch-error"
+          echo 'LAS_ROOT_MUTATIONS=EPHEMERAL_CLEANUP'
