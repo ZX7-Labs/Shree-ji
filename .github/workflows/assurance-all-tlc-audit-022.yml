@@ -95,18 +95,15 @@ jobs:
           private_log="$RUNNER_TEMP/las-tlc-tools-download-private.log"
           if ! curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
                --output "$archive" \
-               'https://github.com/tlaplus/tlaplus/releases/download/v1.7.2/tla2tools.jar' >"$private_log" 2>&1; then
+               'https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar' >"$private_log" 2>&1; then
             echo 'LAS_TLC_SCOPE=FAIL:TOOL_DOWNLOAD'; exit 1
           fi
-          if ! printf '%s  %s\n' '7f21faa2cdae3189e7d5fadb4488f0dfcc658407' "$archive" | sha1sum --check --strict >"$private_log" 2>&1; then
+          if ! printf '%s  %s\n' 'bee4a54f3ee3d4afc347c3240ec2d9e93b075104' "$archive" | sha1sum --check --strict >"$private_log" 2>&1; then
             echo 'LAS_TLC_SCOPE=FAIL:SOURCE_PIN'; exit 1
           fi
-          # Strong artifact pin derived from separately observed official-source
-          # SHA-1-pinned native run 41176201522 (do not trust a new jar build).
-          if ! printf '%s  %s\n' 'fa18543e44ed5974a85bd2c60c0dc16620ae117680ea8e693d2691999ed90b22' "$archive" | sha256sum --check --strict > "$private_log" 2>&1; then
-            echo 'LAS_TLC_SCOPE=FAIL:SHA256'; exit 1
-          fi
-          echo 'LAS_TLC_SCOPE=PINNED_SHA1_AND_SHA256'
+          # Exact canonical private verifier pins v1.7.4. A second digest
+          # may be added only after independent byte verification of this version.
+          echo 'LAS_TLC_SCOPE=EXACT_CANONICAL_VERSION_SHA1_PINNED'
 
       - name: Audit full source-tracked TLC profile set in eight bounded shards
         shell: bash
@@ -168,12 +165,16 @@ jobs:
               echo 'LAS_ALL_TLC=FAIL:UNTRACKED_OR_UNSAFE_PROFILE'; exit 1
             fi
             checked=$((checked + 1))
-            args=(-workers 2 -fp 0)
+            # Mirror canonical v1.7.4 liveness soundness flags. Changing these
+            # to v1.7.2, omitting final liveness, or globally disabling deadlock
+            # checks would make the scoped evidence non-comparable.
+            args=(-workers auto -lncheck final -fp 0)
             if [[ "$deadlock" == "1" ]]; then args+=(-deadlock); fi
-            args+=(-config "$cfg" "$chosen")
-            # Raw logs and exact model error detail remain runner-private.
-            if timeout --signal=TERM --kill-after=15s 9m \
-                 java -XX:+UseParallelGC -jar "$archive" "${args[@]}" > "$logs/case_$checked" 2>&1; then
+            args+=(-config "$(basename "$cfg")" "$(basename "$chosen")")
+            # Model imports are resolved in the owning module directory, as in
+            # the private canonical verifier; raw logs stay runner-private.
+            if (cd "$(dirname "$cfg")" && timeout --signal=TERM --kill-after=15s 9m \
+                 java -XX:+UseParallelGC -jar "$archive" "${args[@]}") > "$logs/case_$checked" 2>&1; then
               java_rc=0
             else
               java_rc=$?
