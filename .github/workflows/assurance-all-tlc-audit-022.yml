@@ -101,9 +101,14 @@ jobs:
           if ! printf '%s  %s\n' 'bee4a54f3ee3d4afc347c3240ec2d9e93b075104' "$archive" | sha1sum --check --strict >"$private_log" 2>&1; then
             echo 'LAS_TLC_SCOPE=FAIL:SOURCE_PIN'; exit 1
           fi
-          # Exact canonical private verifier pins v1.7.4. A second digest
-          # may be added only after independent byte verification of this version.
-          echo 'LAS_TLC_SCOPE=EXACT_CANONICAL_VERSION_SHA1_PINNED'
+          # Official 1.7.4 jar SHA-256 was independently measured on the
+          # source-pinned public runner (run 41182883770), after its SHA-1 check.
+          # Require BOTH checks: no algorithm downgrade or unreviewed version swap.
+          if ! printf '%s  %s\n' '936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88' "$archive" |
+               sha256sum --check --strict > "$private_log" 2>&1; then
+            echo 'LAS_TLC_SCOPE=FAIL:SHA256_PIN'; exit 1
+          fi
+          echo 'LAS_TLC_SCOPE=CANONICAL_174_SHA1_AND_SHA256_PINNED'
 
       - name: Audit full source-tracked TLC profile set in eight bounded shards
         shell: bash
