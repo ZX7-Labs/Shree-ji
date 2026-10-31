@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 42
     env:
       TARGET_BRANCH_PROOF: 68abd16178b43f10ddcb403e178fcb9225e6fb3605cf409708b581cae59a552b
-      EXPECTED_PRIVATE_COMMIT_PROOF: 09ef36a78c24b11079cfb4ac5b62cb1e203f68fd48eda19f9fdc13d98f403d9e
+      EXPECTED_PRIVATE_COMMIT_PROOF: 8d520f5e27145c8ccfc82eade256d9cf0cf187e1dee14c39bde722f514a77342
       EXPECTED_PRIVATE_TEST_RUNNER_SHA256: 529de5130fd7f8cb9331fb535e8c762ec75afae6143fbe879c3917bd926495df
     steps:
       - name: Recover one privately pinned source revision
@@ -88,10 +88,12 @@ jobs:
              ! rustup component add --toolchain 1.98.1 rustfmt clippy >>"$logs/rustup" 2>&1; then
             echo 'LAS_SETTLEMENT_RUST=FAIL:TOOLCHAIN'; exit 1
           fi
-          if ! cargo +1.98.1 fmt --all -- --check >"$logs/fmt" 2>&1; then
-            echo 'LAS_SETTLEMENT_RUST=FAIL:RUSTFMT'; exit 1
+          if cargo +1.98.1 fmt --all -- --check >"$logs/fmt" 2>&1; then
+            echo 'LAS_SETTLEMENT_RUST=FORMAT_PINNED_PASS'
+          else
+            # Keep the entire private formatter output in the ephemeral runner.
+            echo 'LAS_SETTLEMENT_RUST=FORMAT_PENDING_NO_SOURCE_EXPORTED'
           fi
-          echo 'LAS_SETTLEMENT_RUST=FORMAT_PINNED_PASS'
           if ! RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --all-targets >"$logs/check" 2>&1; then
             echo 'LAS_SETTLEMENT_RUST=FAIL:COMPILE'; exit 1
           fi
@@ -112,5 +114,9 @@ jobs:
           fi
           if [[ -n "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]]; then
             echo 'LAS_SETTLEMENT_RUST=FAIL:SOURCE_DRIFT'; exit 1
+          fi
+          if [[ -s "$logs/fmt" ]]; then
+            echo 'LAS_SETTLEMENT_RUST=FAIL:FORMAT_INCOMPLETE'
+            exit 1
           fi
           echo 'LAS_SETTLEMENT_RUST=SCOPED_SOURCE_EXACT_RUST_PASS_NOT_RELEASE_APPROVAL'
