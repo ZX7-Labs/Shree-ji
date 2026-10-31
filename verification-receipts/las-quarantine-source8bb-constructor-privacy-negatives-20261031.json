@@ -1,0 +1,24 @@
+{
+  "schema": "las-private-public-constructor-negative-v1",
+  "private_source_commit_proof_sha256": "5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f",
+  "public_run_id": 41229566864,
+  "public_job_id": 124620739816,
+  "public_head": "273a48a6a8a9f9994e4f1a81d4d49cb4b3a6d359",
+  "markers": [
+    "LAS_NATIVE_BRIDGE=SOURCE_PINNED:5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f",
+    "LAS_PRIVACY=CLASSIFIER_40_CASES_PASS_NOT_NATIVE_COMPILER",
+    "LAS_PRIVACY=SENSOR_PROOF_GATE_CONSTRUCTOR_REJECTED",
+    "LAS_PRIVACY=FLOW_RELEASE_CONSTRUCTOR_ACCESS_REJECTED",
+    "LAS_PRIVACY=EXACT_COMPILER_NEGATIVES_PASS_NOT_RELEASE",
+    "LAS_PRIVACY=EPHEMERAL_CLEANUP"
+  ],
+  "offline_classifier_test_executions": 40,
+  "real_negative_rust_compilations": 2,
+  "scope": [
+    "authenticated sensor event proof-gate constructor privacy",
+    "authorized data flow release constructor privacy"
+  ],
+  "source_diagnostics_private": true,
+  "complete_prod_security_proof": false,
+  "release_authorized": false
+}
