@@ -1,0 +1,144 @@
+name: Exact private rustfmt candidate (quarantine only)
+
+on:
+  push:
+    branches:
+      - quarantine/assurance-scoped-native-bridge-20261031
+    paths:
+      - .github/workflows/assurance-rustfmt-candidate-018.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exact-private-rustfmt-candidate-018
+  cancel-in-progress: false
+
+jobs:
+  format-candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TARGET_BRANCH_PROOF: eb7c5aae89fe45f8372d3906fd20ae64b757e61a7f3b43b93e49c8db6ccb68f4
+      EXPECTED_PRIVATE_COMMIT_PROOF: 79c8698e31c3aface56a36dba37a73b9f830a92d3864d8192581c5813ba5aac2
+      CANDIDATE_TARGET_REF: refs/heads/quarantine/rustfmt-1-98-1-candidate-20261031
+    steps:
+      - name: Clone exact source read-only and verify proof
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "$PRIVATE_REPOSITORY" && -n "$PRIVATE_READ_TOKEN" ]] || { echo 'LAS_FMT=FAIL:READ_ACCESS'; exit 1; }
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_READ_TOKEN"
+          dir="$RUNNER_TEMP/private-format"
+          mkdir -m 700 "$dir"
+          cd "$dir"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_READ_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $auth" \
+            ls-remote --heads origin > "$RUNNER_TEMP/private-refs" 2> "$RUNNER_TEMP/private-git-error"
+          matched=''
+          while read -r _id candidate; do
+            proof="$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')"
+            if [[ "$proof" == "$TARGET_BRANCH_PROOF" ]]; then
+              [[ -z "$matched" ]] || { echo 'LAS_FMT=FAIL:AMBIGUOUS'; exit 1; }
+              matched="$candidate"
+            fi
+          done < "$RUNNER_TEMP/private-refs"
+          rm -f "$RUNNER_TEMP/private-refs" "$RUNNER_TEMP/private-git-error"
+          [[ -n "$matched" ]] || { echo 'LAS_FMT=FAIL:MISSING_REF'; exit 1; }
+          echo "::add-mask::$matched"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $auth" \
+            fetch -q --depth=1 origin "$matched" > /dev/null 2> "$RUNNER_TEMP/private-git-error"
+          rm -f "$RUNNER_TEMP/private-git-error"
+          unset auth PRIVATE_REPOSITORY PRIVATE_READ_TOKEN
+          git -c core.fsmonitor=false checkout -q --detach FETCH_HEAD
+          private_head="$(git -c core.fsmonitor=false rev-parse --verify HEAD)"
+          echo "::add-mask::$private_head"
+          [[ "$(printf '%s' "$private_head" | sha256sum | awk '{print $1}')" == "$EXPECTED_PRIVATE_COMMIT_PROOF" ]] || {
+            echo 'LAS_FMT=FAIL:EXACT_REVISION'; exit 1;
+          }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_FMT=FAIL:DIRTY_SOURCE'; exit 1;
+          }
+          echo 'LAS_FMT=EXACT_SOURCE_READY'
+
+      - name: Format Rust with pinned toolchain and audit complete diff privately
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-format"
+          log="$RUNNER_TEMP/private-format-tool.log"
+          if ! rustup toolchain install 1.98.1 --profile minimal > "$log" 2>&1 ||
+             ! rustup component add --toolchain 1.98.1 rustfmt >> "$log" 2>&1; then
+            echo 'LAS_FMT=FAIL:TOOLCHAIN'; exit 1
+          fi
+          if ! cargo +1.98.1 fmt --all > "$log" 2>&1; then
+            echo 'LAS_FMT=FAIL:RUSTFMT'; exit 1
+          fi
+          if ! cargo +1.98.1 fmt --all -- --check >> "$log" 2>&1; then
+            echo 'LAS_FMT=FAIL:NOT_IDEMPOTENT'; exit 1
+          fi
+          python3 -I -B - <<'PY'
+          import subprocess, sys
+          diff = subprocess.check_output(['git','-c','core.fsmonitor=false','diff','--name-only','-z','--diff-filter=ACMRTUXB'])
+          paths = [p.decode('utf-8', 'strict') for p in diff.rstrip(b'\0').split(b'\0') if p]
+          if not 1 <= len(paths) <= 250 or any(not p.endswith('.rs') or p.startswith('/') or '..' in p.split('/') for p in paths):
+              sys.exit(1)
+          if subprocess.check_output(['git','-c','core.fsmonitor=false','ls-files','--others','-z']):
+              sys.exit(1)
+          PY
+          if [[ "$?" != 0 ]]; then
+            echo 'LAS_FMT=FAIL:MODIFICATION_SCOPE'; exit 1
+          fi
+          git -c core.fsmonitor=false -c core.hooksPath=/dev/null add -- '*.rs' || {
+            echo 'LAS_FMT=FAIL:STAGING'; exit 1;
+          }
+          [[ -z "$(git -c core.fsmonitor=false diff --name-only)" ]] || {
+            echo 'LAS_FMT=FAIL:UNSTAGED'; exit 1;
+          }
+          git -c user.name='Living Assurance Formatter' -c user.email='assurance@example.invalid' -c core.hooksPath=/dev/null \
+            commit -qm 'quarantine: deterministic pinned rustfmt 1.98.1 (no promotion)'
+          parent="$(git -c core.fsmonitor=false rev-parse HEAD^)"
+          [[ "$(printf '%s' "$parent" | sha256sum | awk '{print $1}')" == "$EXPECTED_PRIVATE_COMMIT_PROOF" ]] || {
+            echo 'LAS_FMT=FAIL:PARENT_REVISION'; exit 1;
+          }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_FMT=FAIL:POST_FORMAT_DIRTY'; exit 1;
+          }
+          echo 'LAS_FMT=RUST_ONLY_CANDIDATE_READY'
+
+      - name: Push exclusively to new unmerged private quarantine branch
+        shell: bash
+        env:
+          PRIVATE_WRITE_TOKEN: ${{ secrets.LAS_PRIVATE_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "$PRIVATE_WRITE_TOKEN" ]] || { echo 'LAS_FMT=FAIL:WRITE_CUSTODY'; exit 1; }
+          echo "::add-mask::$PRIVATE_WRITE_TOKEN"
+          cd "$RUNNER_TEMP/private-format"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_WRITE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          set +e
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $auth" \
+            ls-remote --exit-code origin "$CANDIDATE_TARGET_REF" > "$RUNNER_TEMP/private-ref-existing" 2> "$RUNNER_TEMP/private-git-error"
+          rc=$?
+          set -e
+          rm -f "$RUNNER_TEMP/private-ref-existing" "$RUNNER_TEMP/private-git-error"
+          [[ "$rc" == 2 ]] || { echo 'LAS_FMT=FAIL:EXISTING_OR_UNAVAILABLE_TARGET'; exit 1; }
+          if ! git -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+               -c http.extraHeader="AUTHORIZATION: basic $auth" \
+               push -q origin "HEAD:$CANDIDATE_TARGET_REF" > "$RUNNER_TEMP/private-push-out" 2>&1; then
+            echo 'LAS_FMT=FAIL:PUSH'; exit 1
+          fi
+          rm -f "$RUNNER_TEMP/private-push-out"
+          unset auth PRIVATE_WRITE_TOKEN
+          child="$(git -c core.fsmonitor=false rev-parse HEAD)"
+          echo "::add-mask::$child"
+          echo "LAS_FMT_CHILD_PROOF=$(printf '%s' "$child" | sha256sum | awk '{print $1}')"
+          echo 'LAS_FMT=QUARANTINE_CANDIDATE_CREATED_NOT_MERGED'
