@@ -95,6 +95,10 @@ class CensusTests(unittest.TestCase):
             "fn persist_verified_settlement() { self.service.persist_verified_settlement(id); }\n",
             encoding="utf-8"
         )
+        (base / "root_supervisor_linux_production_runtime_facade.rs").write_text(
+            "fn persist_verified_settlement() { self.service.persist_verified_settlement(id); }\n",
+            encoding="utf-8"
+        )
         (base / "root_supervisor_linux_production_runtime.rs").write_text(
             runtime, encoding="utf-8"
         )
@@ -108,7 +112,7 @@ class CensusTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             self.fixture(root, "fn idle() {}\n")
-            result = census(root, min_modules=7)
+            result = census(root, min_modules=8)
             self.assertEqual(result[-1], 0)
             self.assertGreaterEqual(result[1], 3)
             self.assertEqual(result[2], 2)
@@ -118,14 +122,14 @@ class CensusTests(unittest.TestCase):
             root = Path(d)
             self.fixture(root, "fn drive_verified_sensor() {"
                       " self.service.persist_verified_settlement(commit_id); }\n")
-            self.assertEqual(census(root, min_modules=7)[-1], 1)
+            self.assertEqual(census(root, min_modules=8)[-1], 1)
 
     def test_mixed_file_cfg_test_is_excluded(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             self.fixture(root, "#[cfg(test)]\nmod tests {\n"
                       "fn test_drive() {self.service.persist_verified_settlement(id);}\n}\n")
-            self.assertEqual(census(root, min_modules=7)[-1], 0)
+            self.assertEqual(census(root, min_modules=8)[-1], 0)
 
     def test_missing_source_boundary_fails(self) -> None:
         with tempfile.TemporaryDirectory() as d:
@@ -136,7 +140,7 @@ class CensusTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             self.fixture(root, "// fn run() {self.service.persist_verified_settlement(id);}\n")
-            self.assertEqual(census(root, min_modules=7)[-1], 0)
+            self.assertEqual(census(root, min_modules=8)[-1], 0)
 
 
 def main() -> int:
