@@ -22,7 +22,7 @@ jobs:
     env:
       # Only non-sensitive one-way proofs appear in the PUBLIC shell.
       TARGET_BRANCH_PROOF: 0a9d756901b297941bbaf17509c374fcbbbf6e38862e10a80ec265fc97ce52df
-      EXPECTED_PRIVATE_COMMIT_PROOF: 8311dec6d88a023c3b047d6516e63a4facc212f3bde0c3ce3f25d4fc78fc5b49
+      EXPECTED_PRIVATE_COMMIT_PROOF: 08da2eb60d52abd3e01d18ec46af8cca7d6b5d04bf9a371d04b9ff58959a2500
       EXPECTED_PRIVATE_TEST_RUNNER_SHA256: 529de5130fd7f8cb9331fb535e8c762ec75afae6143fbe879c3917bd926495df
     steps:
       - name: Recover one privately pinned source revision
