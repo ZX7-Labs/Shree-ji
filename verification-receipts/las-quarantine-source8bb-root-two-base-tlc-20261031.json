@@ -1,0 +1,21 @@
+{
+  "schema": "las-root-base-attenuation-two-tlc-v1",
+  "source_proof_sha256": "5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f",
+  "public_run_id": 41229150941,
+  "public_job_id": 124619476838,
+  "public_runner_head": "3a3862578c341cc1a760e28073309411b14d2403",
+  "verified_markers": [
+    "LAS_NATIVE_BRIDGE=SOURCE_PINNED:5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f",
+    "LAS_ROOT_TLC=PROFILE_1_PASS",
+    "LAS_ROOT_TLC=PROFILE_2_PASS",
+    "LAS_ROOT_TLC=SCOPED_TWO_PROFILE_PASS_NOT_DEEP_OR_202_OR_RELEASE",
+    "LAS_ROOT_TLC=EPHEMERAL_CLEANUP"
+  ],
+  "profiles": 2,
+  "profile_selection": "private source-owned RootAuthority pattern first two of exactly three known configs",
+  "tool": "TLC 1.7.4 pinned",
+  "negative_control_in_this_run": false,
+  "deep_model_in_this_run": false,
+  "full_202_suite": false,
+  "release_authorized": false
+}
