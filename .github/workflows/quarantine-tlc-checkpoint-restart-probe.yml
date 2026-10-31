@@ -36,10 +36,16 @@ jobs:
           trap 'rm -rf -- "$out"' EXIT
           ruby -ryaml - "$source" "$out" <<'RUBY'
           source, out = ARGV
-          steps = YAML.safe_load_file(source, aliases: false).fetch('jobs').fetch('smoke').fetch('steps')
+          smoke = YAML.safe_load_file(source, aliases: false).fetch('jobs').fetch('smoke')
+          probe = YAML.safe_load_file('.github/workflows/quarantine-tlc-checkpoint-restart-probe.yml', aliases: false).fetch('jobs').fetch('checkpoint-probe')
+          expected = %w[TARGET_BRANCH_PROOF EXPECTED_PRIVATE_COMMIT_PROOF EXPECTED_PRIVATE_TEST_RUNNER_SHA256]
+          expected.each do |key|
+            raise 'source proof mismatch' unless smoke.fetch('env').fetch(key) == probe.fetch('env').fetch(key)
+          end
+          steps = smoke.fetch('steps')
           raise 'unexpected sequence' unless steps.length == 3
           code = steps[1].fetch('run')
-          raise 'missing pinned recovery' unless code.include?('EXPECTED_PRIVATE_COMMIT_PROOF') && code.include?('setup1.sh')
+          raise 'missing pinned recovery' unless code.include?('setup0.sh') && code.include?('setup1.sh') && code.include?('bash "$out/setup1.sh"')
           File.write(File.join(out, 'recover.sh'), code)
           RUBY
           bash -n "$out/recover.sh"
