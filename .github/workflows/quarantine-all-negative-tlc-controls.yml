@@ -61,7 +61,8 @@ jobs:
           logs="$(mktemp -d "$RUNNER_TEMP/tlc-negative-matrix.XXXXXXXX")"
           chmod 700 "$logs"
           trap 'rm -rf -- "$logs"' EXIT
-          if ! python3 -I -B - "$root" "$logs" <<'PY'
+          # Never echo Python traceback or private source paths into PUBLIC CI.
+          if ! python3 -I -B - "$root" "$logs" > "$logs/private-plan.log" 2>&1 <<'PY'
           import contextlib, io, os, pathlib, sys
           root, logs = map(pathlib.Path, sys.argv[1:3])
           source = (root / 'tools/verify_codespaces_all.sh').read_text(encoding='utf-8')
@@ -104,6 +105,9 @@ jobs:
           then
             echo 'LAS_NATIVE_TLC_NEGATIVES=FAIL:PRIVATE_CASE_PLAN'; exit 1
           fi
+          # The plan already checked counts, tracked private file identities and
+          # source-bound semantics; publish only a fixed no-path status marker.
+          echo 'LAS_NATIVE_TLC_PLAN=SCOPED_PRIVATE_CENSUS_OK'
           archive="$RUNNER_TEMP/las-tlc-tools.jar"
           idx=0
           while IFS=$'\t' read -r cfg model deadlock expectation; do
