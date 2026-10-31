@@ -13,7 +13,9 @@ permissions:
 
 concurrency:
   group: fixed-private-all-tlc-audit-022
-  cancel-in-progress: false
+  # Cancel stale, proven-misbound source-model attempts rather than occupying
+  # hosted runners while the exact profile resolver has been corrected.
+  cancel-in-progress: true
 
 jobs:
   tlc-full-audit:
