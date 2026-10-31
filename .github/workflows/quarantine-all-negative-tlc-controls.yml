@@ -6,6 +6,7 @@ on:
       - quarantine/tlc-expected-negative-audit-repair-20261031
     paths:
       - .github/workflows/quarantine-all-negative-tlc-controls.yml
+      - tools/verification/native_tlc_receipt_mutation_audit.py
 
 permissions:
   contents: read
@@ -143,6 +144,15 @@ jobs:
                 > "$logs/result_$idx" 2>&1; then
               echo 'LAS_NATIVE_TLC_NEGATIVES=FAIL:MODEL_OR_RECEIPT'; exit 1
             fi
+            # Use each REAL native TLC trace as the baseline for seven
+            # independently selected invalid-receipt mutations. Neither the
+            # raw trace nor any private model path appears in public logs.
+            if ! python3 -I -B "$GITHUB_WORKSPACE/tools/verification/native_tlc_receipt_mutation_audit.py" \
+                 "$PWD/tools/verification/canonical_tlc_result_evidence.py" \
+                 "$logs/tlc_$idx" "$java_rc" "$expectation" \
+                 > "$logs/mutation_$idx.log" 2>&1; then
+              echo 'LAS_NATIVE_TLC_NEGATIVES=FAIL:REAL_LOG_MUTATION_GATES'; exit 1
+            fi
             # Native expected failure is PASS only after the private source
             # classifier verifies exact invariant, Java=12 and finished trace.
             echo 'LAS_NATIVE_TLC_NEGATIVES=EXPECTED_COUNTEREXAMPLE_VALIDATED'
@@ -154,4 +164,5 @@ jobs:
           if [[ -n "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]]; then
             echo 'LAS_NATIVE_TLC_NEGATIVES=FAIL:SOURCE_DRIFT'; exit 1
           fi
+          echo 'LAS_NATIVE_TLC_NEGATIVES=REAL_NATIVE_12_AND_84_MUTATION_REJECTIONS'
           echo 'LAS_NATIVE_TLC_NEGATIVES=SCOPED_ALL_12_PASS_NOT_RELEASE_APPROVAL'
