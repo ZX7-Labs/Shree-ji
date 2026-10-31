@@ -1,0 +1,24 @@
+{
+  "schema": "las-five-targeted-root-tlc-scoped-v1",
+  "private_source_sha256": "5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f",
+  "public_run_id": 41228980098,
+  "public_job_id": 124618975842,
+  "public_head_sha": "e29819bb706b86d2c6fba91a6e164cd172339e7f",
+  "checked_markers": [
+    "LAS_NATIVE_BRIDGE=SOURCE_PINNED:5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f",
+    "LAS_ROOT_TLC=PROFILE_1_PASS",
+    "LAS_ROOT_TLC=PROFILE_2_PASS",
+    "LAS_ROOT_TLC=PROFILE_3_PASS",
+    "LAS_ROOT_TLC=PROFILE_4_PASS",
+    "LAS_ROOT_TLC=PROFILE_5_PASS",
+    "LAS_ROOT_TLC=SCOPED_FIVE_PROFILE_PASS_NOT_202_OR_RELEASE",
+    "LAS_ROOT_TLC=EPHEMERAL_CLEANUP"
+  ],
+  "tool": "pinned TLC 1.7.4",
+  "source_selection": "models 2-6 of 9 authoritative Root workflow parse list, no source names exposed",
+  "positive_models": 5,
+  "nonvacuous_classifier": "canonical_tlc_result_evidence.py",
+  "full_202_coverage": false,
+  "source_name_publication": false,
+  "release_authorized": false
+}
