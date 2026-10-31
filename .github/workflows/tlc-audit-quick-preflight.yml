@@ -64,7 +64,7 @@ jobs:
           if 'FAIL:CASE_${short}' in source or 'FAIL:PAIR_${short}' in source:
               raise SystemExit('public deterministic path-hash regression')
           # This checks the actual embedded Python program syntax, not TLC.
-          match = re.search(r"<<'PY'\\n(.*?)\\nPY\\nthen", source, re.S)
+          match = re.search(r"(?ms)^if ! python3 -I -B - .* <<'PY'\n(.*?)\nPY\nthen$", source)
           if not match:
               raise SystemExit('missing canonical-map-extraction heredoc')
           compile(match.group(1), '<embedded-canonical-map-extractor>', 'exec')
