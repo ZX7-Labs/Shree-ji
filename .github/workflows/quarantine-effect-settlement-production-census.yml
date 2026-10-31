@@ -16,8 +16,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
-      TARGET_BRANCH_PROOF: 0a9d756901b297941bbaf17509c374fcbbbf6e38862e10a80ec265fc97ce52df
-      EXPECTED_PRIVATE_COMMIT_PROOF: 1adce8a16b15daa5022b11634ffccb7c21785e6ccb449a6055acf2e2d5514e43
+      TARGET_BRANCH_PROOF: bfef81c13787a130d485ec445be47cddd779df8fff141805a4c663fdd6034b8c
+      EXPECTED_PRIVATE_COMMIT_PROOF: d2b0cfcc6e4a583a694fcbfec561b1980de853a14d2a250e5fcee96b48941b22
       EXPECTED_PRIVATE_TEST_RUNNER_SHA256: 529de5130fd7f8cb9331fb535e8c762ec75afae6143fbe879c3917bd926495df
     steps:
       - name: Checkout exact public census and pinned controller without retained credentials
@@ -78,6 +78,9 @@ jobs:
           if (( rc == 17 )) && grep -Fxq 'LAS_SETTLEMENT_REACHABILITY=FAIL:NO_NONFORWARDING_PRODUCTION_DRIVER' "$private/census"; then
             echo 'LAS_SETTLEMENT_REACHABILITY=BLOCKED:NO_NONFORWARDING_PRODUCTION_DRIVER'
             exit 17
+          elif (( rc == 18 )) && grep -Fxq 'LAS_SETTLEMENT_REACHABILITY=BLOCKED:NO_EXTERNAL_PRODUCTION_HOST_CALL' "$private/census"; then
+            echo 'LAS_SETTLEMENT_REACHABILITY=BLOCKED:NO_EXTERNAL_PRODUCTION_HOST_CALL'
+            exit 18
           elif (( rc == 0 )); then
             grep -Fxq 'LAS_SETTLEMENT_REACHABILITY=CANDIDATE_FOUND_INDEPENDENT_REVIEW_REQUIRED' "$private/census" || {
               echo 'LAS_SETTLEMENT_REACHABILITY=FAIL:UNEXPECTED_RECEIPT'; exit 1
