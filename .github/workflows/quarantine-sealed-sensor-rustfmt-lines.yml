@@ -92,4 +92,12 @@ jobs:
               raise SystemExit(2)
           print('LAS_SENSOR_FMT=SOURCE_PRIVATE_HUNKS_'+str(len(lines)))
           print('LAS_SENSOR_FMT=LINES_'+','.join(lines))
+          # Only punctuation/whitespace shape may leave the private runner.
+          for item in [x for x in raw.splitlines() if x.startswith(('+','-')) and not x.startswith(('+++','---'))][:24]:
+              val=item[1:]
+              core=val.strip()
+              cat='SYNTAX' if core in ('>', 'where', '{', '}', '> where', '};') else 'OTHER'
+              ending='COMMA' if core.endswith(',') else 'OTHER'
+              indent=len(val)-len(val.lstrip(' '))
+              print('LAS_SENSOR_FMT_SHAPE='+item[0]+':'+str(len(val))+':'+str(min(indent,80))+':'+cat+':'+ending)
           PY
