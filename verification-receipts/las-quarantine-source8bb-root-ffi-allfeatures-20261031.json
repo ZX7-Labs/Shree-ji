@@ -1,0 +1,27 @@
+{
+  "schema": "las-source8bb-root-ffi-all-features-v1",
+  "private_source_commit_sha256": "5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f",
+  "public_run_id": 41229217960,
+  "public_job_id": 124619675403,
+  "public_head": "04ad7f70b710e2208f2750f08ed9db41bbbe9c61",
+  "source_pinned": true,
+  "confirmed_markers": [
+    "LAS_NATIVE_BRIDGE=SOURCE_PINNED:5f885861d5708ad82d2bf5d550adf53cd7ad8137f01a4dddf5a7efaf4f8aa58f",
+    "LAS_ROOT_FFI=COMPILE_PASS",
+    "LAS_ROOT_FFI=CLIPPY_PASS",
+    "LAS_ROOT_FFI=EXACT_SCOPED_RUST_FFI_PASS_NOT_RELEASE_APPROVAL",
+    "LAS_ROOT_FFI=ALL_FEATURE_COMPILE_PASS",
+    "LAS_ROOT_FFI=ALL_FEATURE_CLIPPY_PASS",
+    "LAS_ROOT_FFI=ALL_FEATURES_ALL_TARGETS_PASS_NOT_RELEASE_APPROVAL",
+    "LAS_ROOT_FFI=EPHEMERAL_CLEANUP"
+  ],
+  "rust_toolchain": "1.98.1",
+  "ada_gprbuild_version": "26.0.1",
+  "gnat_version": "16.1.0",
+  "profiles": [
+    "root-ffi,linux-peer-credentials Rust check/clippy/lib test",
+    "all-features all-targets Rust check/clippy/test"
+  ],
+  "private_source_log_public": false,
+  "full_system_release_proven": false
+}
