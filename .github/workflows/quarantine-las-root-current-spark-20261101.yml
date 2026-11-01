@@ -1,0 +1,164 @@
+name: Quarantine current exact private Root SPARK proof
+on:
+  push:
+    branches:
+      - quarantine/las-root-current-native-20261101
+    paths:
+      - .github/workflows/quarantine-las-root-current-spark-20261101.yml
+permissions:
+  contents: read
+jobs:
+  exact-private-spark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    env:
+      TARGET_BRANCH_PROOF: 2e7d4bb17d6ca183c895b195861e75f8bfd9de9b031d4b4306a0e7ad836de47e
+      EXPECTED_PRIVATE_COMMIT_PROOF: 6a2f0085f0f7fe676155389c9720e431312025b8c237279efd801656c536ce86
+      EXPECTED_PRIVATE_RUNNER_BLOB_PROOF: d4df90336770cf5275996ccf750325a091b071a86a708799281845dc0eb5c74f
+    steps:
+      - name: Recover exact read-only private source without publishing code
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PRIVATE_REPOSITORY" || -z "$PRIVATE_READ_TOKEN" ]]; then
+            echo 'LAS_NATIVE_BRIDGE=FAIL:ACCESS'; exit 1
+          fi
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_READ_TOKEN"
+          private="$RUNNER_TEMP/private-source"
+          mkdir -m 700 "$private"
+          cd "$private"
+          git init -q
+          git remote add origin "https://github.com/$PRIVATE_REPOSITORY.git"
+          authorization="$(printf 'x-access-token:%s' "$PRIVATE_READ_TOKEN" | base64 -w0)"
+          echo "::add-mask::$authorization"
+          all_refs="$RUNNER_TEMP/private-heads"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" ls-remote --heads origin > "$all_refs" 2> "$RUNNER_TEMP/secret-fetch-error" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:READ'; exit 1
+          }
+          match=''
+          while read -r _sha candidate; do
+            candidate_proof="$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')"
+            if [[ "$candidate_proof" == "$TARGET_BRANCH_PROOF" ]]; then
+              [[ -z "$match" ]] || { echo 'LAS_NATIVE_BRIDGE=FAIL:AMBIGUOUS_REF'; exit 1; }
+              match="$candidate"
+            fi
+          done < "$all_refs"
+          rm -f "$all_refs" "$RUNNER_TEMP/secret-fetch-error"
+          [[ -n "$match" ]] || { echo 'LAS_NATIVE_BRIDGE=FAIL:TARGET'; exit 1; }
+          echo "::add-mask::$match"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" fetch -q --depth=1 origin "$match" > /dev/null 2> "$RUNNER_TEMP/secret-fetch-error" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:FETCH'; exit 1
+          }
+          rm -f "$RUNNER_TEMP/secret-fetch-error"
+          unset authorization PRIVATE_READ_TOKEN PRIVATE_REPOSITORY
+          git -c core.fsmonitor=false checkout -q --detach FETCH_HEAD
+          actual="$(git -c core.fsmonitor=false rev-parse --verify HEAD)"
+          echo "::add-mask::$actual"
+          proof="$(printf '%s' "$actual" | sha256sum | awk '{print $1}')"
+          [[ "$proof" == "$EXPECTED_PRIVATE_COMMIT_PROOF" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:SOURCE_PIN'; exit 1
+          }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:DIRTY'; exit 1
+          }
+          script='tools/verification/run_bridge_native_suite.sh'
+          [[ -f "$script" && ! -L "$script" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:RUNNER_MISSING'; exit 1
+          }
+          blob="$(git -c core.fsmonitor=false hash-object "$script")"
+          blob_proof="$(printf '%s' "$blob" | sha256sum | awk '{print $1}')"
+          [[ "$blob_proof" == "$EXPECTED_PRIVATE_RUNNER_BLOB_PROOF" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:RUNNER_PIN'; exit 1
+          }
+          echo "LAS_NATIVE_BRIDGE=SOURCE_PINNED:$proof"
+
+      - name: Prove current Root Authority capacity 1 2 16 256 with GNATprove 16.1.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-source"
+          ALR_ZIP="$RUNNER_TEMP/alr.zip"
+          ALR_PREFIX="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+            --output "$ALR_ZIP" \
+            "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip" >/dev/null 2>&1
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $ALR_ZIP" | sha256sum --check --strict >/dev/null
+          mkdir -p "$ALR_PREFIX"
+          unzip -q "$ALR_ZIP" -d "$ALR_PREFIX"
+          export PATH="$ALR_PREFIX/bin:$PATH"
+          alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >"$RUNNER_TEMP/alire-setup.private" 2>&1
+
+          ALR_WS="$RUNNER_TEMP/alire-root-spark-only"
+          mkdir -p "$ALR_WS"
+          (
+            cd "$ALR_WS"
+            alr -n init --in-place --no-skel --lib las_root_spark_only >"$RUNNER_TEMP/alire-init.private" 2>&1
+            alr with gnatprove=16.1.0 >"$RUNNER_TEMP/alire-prover.private" 2>&1
+          )
+
+          PROOF_DIR="$RUNNER_TEMP/root-authority-proof"
+          mkdir -p "$PROOF_DIR/obj"
+          cat > "$PROOF_DIR/root_authority_proof_instances.ads" <<'EOF_PROOF'
+          pragma SPARK_Mode (On);
+          with Root_Authority;
+
+          package Root_Authority_Proof_Instances is
+             package Capacity_1   is new Root_Authority (Max_Grants => 1);
+             package Capacity_2   is new Root_Authority (Max_Grants => 2);
+             package Capacity_16  is new Root_Authority (Max_Grants => 16);
+             package Capacity_256 is new Root_Authority (Max_Grants => 256);
+          end Root_Authority_Proof_Instances;
+          EOF_PROOF
+
+          cat > "$PROOF_DIR/root_authority_proof.gpr" <<EOF_GPR
+          project Root_Authority_Proof is
+             for Source_Dirs use
+               ("$RUNNER_TEMP/private-source/src/root_authority", "$PROOF_DIR");
+             for Object_Dir use "$PROOF_DIR/obj";
+             package Compiler is
+                for Default_Switches ("Ada") use ("-gnat2022");
+             end Compiler;
+          end Root_Authority_Proof;
+          EOF_GPR
+
+          if ! (
+            cd "$ALR_WS"
+            alr exec -- gnatprove \
+              -P"$PROOF_DIR/root_authority_proof.gpr" \
+              -U \
+              --mode=all \
+              --level=4 \
+              --proof=progressive:all \
+              --checks-as-errors=on \
+              --proof-warnings=on \
+              --report=statistics \
+              --warnings=error \
+              --pedantic \
+              -j2
+          ) >"$RUNNER_TEMP/spark.private.log" 2>&1; then
+            echo 'LAS_ROOT_SPARK=FAIL:GNATPROVE'; exit 1
+          fi
+          [[ -s "$RUNNER_TEMP/spark.private.log" ]] || {
+            echo 'LAS_ROOT_SPARK=FAIL:VACUOUS_LOG'; exit 1
+          }
+          if grep -q "GNAT BUG DETECTED" "$RUNNER_TEMP/spark.private.log"; then
+            echo 'LAS_ROOT_SPARK=FAIL:TOOL_ICE'; exit 1
+          fi
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_ROOT_SPARK=FAIL:SOURCE_DRIFT'; exit 1
+          }
+          echo 'LAS_ROOT_SPARK=SCOPED_GNATPROVE_PASS_NOT_RELEASE_APPROVAL'
+
+      - name: Scrub private workspace and proof logs
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf -- "$RUNNER_TEMP/private-source" "$RUNNER_TEMP/root-authority-proof" "$RUNNER_TEMP/alire-root-spark-only"
+          rm -f -- "$RUNNER_TEMP/spark.private.log" "$RUNNER_TEMP/alire-setup.private" "$RUNNER_TEMP/alire-init.private" "$RUNNER_TEMP/alire-prover.private"
+          rm -f -- "$RUNNER_TEMP/private-heads" "$RUNNER_TEMP/secret-fetch-error"
+          echo 'LAS_ROOT_SPARK=EPHEMERAL_CLEANUP'
