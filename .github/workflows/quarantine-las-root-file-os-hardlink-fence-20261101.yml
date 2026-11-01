@@ -1,0 +1,144 @@
+name: Root experimental real file OS resource fence hardlink and crash native verification
+on:
+  push:
+    branches:
+      - quarantine/las-root-current-native-20261101
+    paths:
+      - .github/workflows/quarantine-las-root-file-os-hardlink-fence-20261101.yml
+permissions:
+  contents: read
+jobs:
+  exact-private-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      TARGET_BRANCH_PROOF: 07c47c33920f0e86f1fdffec8dd3214e75a648b4a02c6b12f9a5523d32e24e5f
+      EXPECTED_PRIVATE_COMMIT_PROOF: c52fa9172642aa379bf127d906b3a46f65f5d38b776e55dd79483e5a4bfc9125
+      EXPECTED_PRIVATE_RUNNER_BLOB_PROOF: d4df90336770cf5275996ccf750325a091b071a86a708799281845dc0eb5c74f
+    steps:
+      - name: Recover exact read-only private source without publishing code
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PRIVATE_REPOSITORY" || -z "$PRIVATE_READ_TOKEN" ]]; then
+            echo 'LAS_NATIVE_BRIDGE=FAIL:ACCESS'; exit 1
+          fi
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_READ_TOKEN"
+          private="$RUNNER_TEMP/private-source"
+          mkdir -m 700 "$private"
+          cd "$private"
+          git init -q
+          git remote add origin "https://github.com/$PRIVATE_REPOSITORY.git"
+          authorization="$(printf 'x-access-token:%s' "$PRIVATE_READ_TOKEN" | base64 -w0)"
+          echo "::add-mask::$authorization"
+          all_refs="$RUNNER_TEMP/private-heads"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" ls-remote --heads origin > "$all_refs" 2> "$RUNNER_TEMP/secret-fetch-error" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:READ'; exit 1
+          }
+          match=''
+          while read -r _sha candidate; do
+            candidate_proof="$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')"
+            if [[ "$candidate_proof" == "$TARGET_BRANCH_PROOF" ]]; then
+              [[ -z "$match" ]] || { echo 'LAS_NATIVE_BRIDGE=FAIL:AMBIGUOUS_REF'; exit 1; }
+              match="$candidate"
+            fi
+          done < "$all_refs"
+          rm -f "$all_refs" "$RUNNER_TEMP/secret-fetch-error"
+          [[ -n "$match" ]] || { echo 'LAS_NATIVE_BRIDGE=FAIL:TARGET'; exit 1; }
+          echo "::add-mask::$match"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" fetch -q --depth=1 origin "$match" > /dev/null 2> "$RUNNER_TEMP/secret-fetch-error" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:FETCH'; exit 1
+          }
+          rm -f "$RUNNER_TEMP/secret-fetch-error"
+          unset authorization PRIVATE_READ_TOKEN PRIVATE_REPOSITORY
+          git -c core.fsmonitor=false checkout -q --detach FETCH_HEAD
+          actual="$(git -c core.fsmonitor=false rev-parse --verify HEAD)"
+          echo "::add-mask::$actual"
+          proof="$(printf '%s' "$actual" | sha256sum | awk '{print $1}')"
+          [[ "$proof" == "$EXPECTED_PRIVATE_COMMIT_PROOF" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:SOURCE_PIN'; exit 1
+          }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:DIRTY'; exit 1
+          }
+          script='tools/verification/run_bridge_native_suite.sh'
+          [[ -f "$script" && ! -L "$script" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:RUNNER_MISSING'; exit 1
+          }
+          blob="$(git -c core.fsmonitor=false hash-object "$script")"
+          blob_proof="$(printf '%s' "$blob" | sha256sum | awk '{print $1}')"
+          [[ "$blob_proof" == "$EXPECTED_PRIVATE_RUNNER_BLOB_PROOF" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:RUNNER_PIN'; exit 1
+          }
+          echo "LAS_NATIVE_BRIDGE=SOURCE_PINNED:$proof"
+
+      - name: Execute source-owned non-vacuous 12-stage native suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-source"
+          private_log="$(mktemp "$RUNNER_TEMP/las-native-private.XXXXXXXX")"
+          chmod 600 "$private_log"
+          trap 'rm -f -- "$private_log"' EXIT
+          if ! bash tools/verification/run_bridge_native_suite.sh "$PWD" > "$private_log" 2>&1; then
+            echo 'LAS_NATIVE_BRIDGE=FAIL:PRIVATE_SUITE'; exit 1
+          fi
+          grep -Fxq 'LAS_NATIVE_SCOPED=PASS' "$private_log" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:PASS_MARKER'; exit 1
+          }
+          grep -Fxq 'LAS_NATIVE_STAGES=12' "$private_log" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:STAGES'; exit 1
+          }
+          grep -Fxq 'LAS_NATIVE_CASES=316' "$private_log" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:CASES'; exit 1
+          }
+          grep -Fxq "LAS_PRIVATE_PROOF=$EXPECTED_PRIVATE_COMMIT_PROOF" "$private_log" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:SOURCE_RESULT'; exit 1
+          }
+          echo 'LAS_NATIVE_BRIDGE=SCOPED_PRIVATE_PYTHON_PASS_NOT_PRODUCT_RELEASE'
+
+      - name: Execute exact private real Linux file effect with two modes and five negative mutations
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-source/tools/experiments/root_linux_file_effect"
+          logs="$(mktemp -d "$RUNNER_TEMP/las-real-file-effect.XXXXXXXX")"
+          chmod 700 "$logs"
+          if ! python3 -I -B -m unittest discover -s . -p 'test_*.py' -q >"$logs/normal.private" 2>&1; then
+            echo 'LAS_REAL_FILE_EFFECT=FAIL:NORMAL_NATIVE'; exit 1
+          fi
+          grep -Eq '^Ran 28 tests in ' "$logs/normal.private" || {
+            echo 'LAS_REAL_FILE_EFFECT=FAIL:NORMAL_VACUOUS'; exit 1
+          }
+          if ! python3 -O -I -B -m unittest discover -s . -p 'test_*.py' -q >"$logs/optimized.private" 2>&1; then
+            echo 'LAS_REAL_FILE_EFFECT=FAIL:OPTIMIZED_NATIVE'; exit 1
+          fi
+          grep -Eq '^Ran 28 tests in ' "$logs/optimized.private" || {
+            echo 'LAS_REAL_FILE_EFFECT=FAIL:OPTIMIZED_VACUOUS'; exit 1
+          }
+          if ! python3 -I -B run_mutation_controls.py >"$logs/negative.private" 2>&1; then
+            echo 'LAS_REAL_FILE_EFFECT=FAIL:NEGATIVE_MUTATIONS'; exit 1
+          fi
+          grep -Fq '"total_mutants": 7' "$logs/negative.private" &&
+          grep -Fq '"all_killed": true' "$logs/negative.private" || {
+            echo 'LAS_REAL_FILE_EFFECT=FAIL:VACUOUS_MUTATIONS'; exit 1
+          }
+          cd "$RUNNER_TEMP/private-source"
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_REAL_FILE_EFFECT=FAIL:SOURCE_DRIFT'; exit 1
+          }
+          rm -rf -- "$logs"
+          echo 'LAS_REAL_FILE_EFFECT=REAL_LINUX_OS_EFFECT_SCOPED_TEST_PASS_NOT_ROOT_RELEASE'
+
+      - name: Scrub ephemeral checkout
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf -- "$RUNNER_TEMP/private-source"
+          rm -f -- "$RUNNER_TEMP/private-heads" "$RUNNER_TEMP/secret-fetch-error"
+          echo 'LAS_NATIVE_BRIDGE=EPHEMERAL_CLEANUP'
