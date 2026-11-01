@@ -151,6 +151,9 @@ jobs:
           run_gate CHECK_ALL_FEATURES env RUSTFLAGS=-Dwarnings GPRBUILD="$RUNNER_TEMP/las-gprbuild-wrapper" cargo +1.98.1 check --locked --lib --all-features
           run_gate TEST_DEFAULT env RUSTFLAGS=-Dwarnings cargo +1.98.1 test --locked --lib -- --test-threads=1
           run_gate CLIPPY_DEFAULT env RUSTFLAGS=-Dwarnings cargo +1.98.1 clippy --locked --lib -- -D warnings
+          run_gate TEST_LINUX env RUSTFLAGS=-Dwarnings cargo +1.98.1 test --locked --lib --features linux-peer-credentials -- --test-threads=1
+          run_gate TEST_ALL_FEATURES env RUSTFLAGS=-Dwarnings GPRBUILD="$RUNNER_TEMP/las-gprbuild-wrapper" cargo +1.98.1 test --locked --lib --all-features -- --test-threads=1
+          run_gate CLIPPY_ALL_FEATURES env RUSTFLAGS=-Dwarnings GPRBUILD="$RUNNER_TEMP/las-gprbuild-wrapper" cargo +1.98.1 clippy --locked --lib --all-features -- -D warnings
           test -z "$(git status --porcelain --untracked-files=no)" || {
             echo 'LAS_PUBLIC_PRIVATE_TRACKED_TREE=FAIL'; exit 1;
           }
