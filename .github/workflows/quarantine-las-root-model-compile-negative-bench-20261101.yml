@@ -116,7 +116,7 @@ jobs:
                 > "$private/negative.private" 2>&1; then
             echo 'LAS_ROOT_MODEL=FAIL:PRODUCTION_MODEL_COMPILED'; exit 1
           fi
-          if ! grep -Eq 'error\\[E0599\\]' "$private/negative.private"; then
+          if ! grep -Eq 'error\[E0599\]' "$private/negative.private"; then
             echo 'LAS_ROOT_MODEL=FAIL:NEGATIVE_CONTROL_VACUOUS'; exit 1
           fi
           if ! rustc +1.98.1 --cfg test --edition=2024 -D warnings \
@@ -133,11 +133,11 @@ jobs:
           lines=pathlib.Path(sys.argv[1]).read_text(errors='replace').splitlines()
           scenarios=set()
           for ln in lines:
-              m=re.fullmatch(r'LAS_BENCH\\t([a-z_]+)\\trecords=32\\tsamples=3\\twarmup=1\\t'
-                             r'min_ns_per_record=\\d+\\tmedian_ns_per_record=\\d+\\t'
-                             r'p95_ns_per_record=\\d+\\tmax_ns_per_record=\\d+',ln)
+              m=re.fullmatch(r'LAS_BENCH\t([a-z_]+)\trecords=32\tsamples=3\twarmup=1\t'
+                             r'min_ns_per_record=\d+\tmedian_ns_per_record=\d+\t'
+                             r'p95_ns_per_record=\d+\tmax_ns_per_record=\d+',ln)
               if m: scenarios.add(m[1])
-          if not any(x.startswith('LAS_BENCH_CONFIG\\trecords=32\\tsamples=3') for x in lines):
+          if not any(x.startswith('LAS_BENCH_CONFIG\trecords=32\tsamples=3') for x in lines):
               raise SystemExit(1)
           if scenarios!={'clean_single_shot','lost_ack_replay_safe','crash_recovery'}:
               raise SystemExit(2)
