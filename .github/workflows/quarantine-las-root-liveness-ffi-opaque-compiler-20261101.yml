@@ -118,7 +118,7 @@ jobs:
             python3 -I -B - "$logs/check.private" <<'PY_BUILD_DIAG'
           import pathlib,re,sys
           c=pathlib.Path(sys.argv[1]).read_text(errors="replace")
-          codes=sorted(set(re.findall(r'(?m)^error\\[([A-Z][0-9]{4})\\]:',c)))
+          codes=sorted(set(re.findall(r'(?m)^error\[([A-Z][0-9]{4})\]:',c)))
           patterns={
               "UNUSED_IMPORT":r"unused import",
               "UNUSED_VARIABLE":r"unused variable",
@@ -134,7 +134,7 @@ jobs:
           for key,pattern in patterns.items():
               n=len(re.findall(pattern,c,re.I))
               if n: print("LAS_ROOT_FFI_DIAG=CLASS:"+key+":"+str(min(n,99)))
-          print("LAS_ROOT_FFI_DIAG=ERROR_COUNT:"+str(min(len(re.findall(r'(?m)^error(?:\\[[A-Z][0-9]{4}\\])?:',c)),999)))
+          print("LAS_ROOT_FFI_DIAG=ERROR_COUNT:"+str(min(len(re.findall(r'(?m)^error(?:\[[A-Z][0-9]{4}\])?:',c)),999)))
           PY_BUILD_DIAG
             echo 'LAS_ROOT_FFI=FAIL:BUILD'; exit 1
           fi
