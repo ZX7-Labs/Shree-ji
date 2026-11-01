@@ -1,0 +1,214 @@
+name: Root fake-actuator production denial FFI native Rust
+on:
+  push:
+    branches:
+      - quarantine/las-root-current-native-20261101
+    paths:
+      - .github/workflows/quarantine-las-root-model-only-ffi-20261101.yml
+permissions:
+  contents: read
+jobs:
+  exact-private-ffi:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    env:
+      TARGET_BRANCH_PROOF: eed28e09c026ad19e62dd533f0233b9021aee6c05c23d6707b0f06d2091048df
+      EXPECTED_PRIVATE_COMMIT_PROOF: 31e77042e5c0d967ede59c814e4574047079ef08b634925c7e6ed0f725663885
+      EXPECTED_PRIVATE_RUNNER_BLOB_PROOF: d4df90336770cf5275996ccf750325a091b071a86a708799281845dc0eb5c74f
+    steps:
+      - name: Install pinned Rust and Ada GPRBuild toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal >"$RUNNER_TEMP/rustup.private" 2>&1
+          rustup component add --toolchain 1.98.1 rustfmt clippy >>"$RUNNER_TEMP/rustup.private" 2>&1
+          ALR_ZIP="$RUNNER_TEMP/alr.zip"; ALR_PREFIX="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --output "$ALR_ZIP" \
+            "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip" >/dev/null 2>&1
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $ALR_ZIP" | sha256sum --check --strict >/dev/null
+          mkdir -p "$ALR_PREFIX"; unzip -q "$ALR_ZIP" -d "$ALR_PREFIX"; export PATH="$ALR_PREFIX/bin:$PATH"
+          alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >"$RUNNER_TEMP/alire.private" 2>&1
+          ALR_WS="$RUNNER_TEMP/alire-workspace"; mkdir -p "$ALR_WS"
+          (cd "$ALR_WS" && alr -n init --in-place --no-skel --lib las_verify_toolchain >>"$RUNNER_TEMP/alire.private" 2>&1)
+          GPRBUILD_WRAPPER="$RUNNER_TEMP/gprbuild-wrapper"
+          cat > "$GPRBUILD_WRAPPER" <<EOF_GPR
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$ALR_WS"
+          exec "$ALR_PREFIX/bin/alr" exec -- gprbuild "\$@"
+          EOF_GPR
+          chmod +x "$GPRBUILD_WRAPPER"; echo "GPRBUILD=$GPRBUILD_WRAPPER" >> "$GITHUB_ENV"
+
+      - name: Recover exact read-only private source without publishing code
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PRIVATE_REPOSITORY" || -z "$PRIVATE_READ_TOKEN" ]]; then
+            echo 'LAS_NATIVE_BRIDGE=FAIL:ACCESS'; exit 1
+          fi
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_READ_TOKEN"
+          private="$RUNNER_TEMP/private-source"
+          mkdir -m 700 "$private"
+          cd "$private"
+          git init -q
+          git remote add origin "https://github.com/$PRIVATE_REPOSITORY.git"
+          authorization="$(printf 'x-access-token:%s' "$PRIVATE_READ_TOKEN" | base64 -w0)"
+          echo "::add-mask::$authorization"
+          all_refs="$RUNNER_TEMP/private-heads"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" ls-remote --heads origin > "$all_refs" 2> "$RUNNER_TEMP/secret-fetch-error" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:READ'; exit 1
+          }
+          match=''
+          while read -r _sha candidate; do
+            candidate_proof="$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')"
+            if [[ "$candidate_proof" == "$TARGET_BRANCH_PROOF" ]]; then
+              [[ -z "$match" ]] || { echo 'LAS_NATIVE_BRIDGE=FAIL:AMBIGUOUS_REF'; exit 1; }
+              match="$candidate"
+            fi
+          done < "$all_refs"
+          rm -f "$all_refs" "$RUNNER_TEMP/secret-fetch-error"
+          [[ -n "$match" ]] || { echo 'LAS_NATIVE_BRIDGE=FAIL:TARGET'; exit 1; }
+          echo "::add-mask::$match"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" fetch -q --depth=1 origin "$match" > /dev/null 2> "$RUNNER_TEMP/secret-fetch-error" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:FETCH'; exit 1
+          }
+          rm -f "$RUNNER_TEMP/secret-fetch-error"
+          unset authorization PRIVATE_READ_TOKEN PRIVATE_REPOSITORY
+          git -c core.fsmonitor=false checkout -q --detach FETCH_HEAD
+          actual="$(git -c core.fsmonitor=false rev-parse --verify HEAD)"
+          echo "::add-mask::$actual"
+          proof="$(printf '%s' "$actual" | sha256sum | awk '{print $1}')"
+          [[ "$proof" == "$EXPECTED_PRIVATE_COMMIT_PROOF" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:SOURCE_PIN'; exit 1
+          }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:DIRTY'; exit 1
+          }
+          script='tools/verification/run_bridge_native_suite.sh'
+          [[ -f "$script" && ! -L "$script" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:RUNNER_MISSING'; exit 1
+          }
+          blob="$(git -c core.fsmonitor=false hash-object "$script")"
+          blob_proof="$(printf '%s' "$blob" | sha256sum | awk '{print $1}')"
+          [[ "$blob_proof" == "$EXPECTED_PRIVATE_RUNNER_BLOB_PROOF" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:RUNNER_PIN'; exit 1
+          }
+          echo "LAS_NATIVE_BRIDGE=SOURCE_PINNED:$proof"
+
+      - name: Verify exact Root FFI Linux compilation, Clippy and nonvacuous Rust tests
+        shell: bash
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.1
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-source"
+          [[ -x "$GPRBUILD" ]] || {
+            echo 'LAS_ROOT_FFI=FAIL:GPRBUILD_TOOLCHAIN'; exit 1
+          }
+          logs="$(mktemp -d "$RUNNER_TEMP/las-root-ffi.XXXXXXXX")"
+          chmod 700 "$logs"
+          trap 'rm -rf -- "$logs"' EXIT
+          if ! RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 check --locked --features root-ffi,linux-peer-credentials --all-targets >"$logs/check.private" 2>&1; then
+            echo 'LAS_ROOT_FFI=FAIL:BUILD'; exit 1
+          fi
+          echo 'LAS_ROOT_FFI=COMPILE_PASS'
+          if ! GPRBUILD="$GPRBUILD" cargo +1.98.1 clippy --locked --features root-ffi,linux-peer-credentials --all-targets -- -D warnings >"$logs/clippy.private" 2>&1; then
+            # The compiler log is private. Publish ONLY generic lint names,
+            # error-code identifiers and cardinalities (never messages,
+            # private paths or source snippets) for safe root-cause triage.
+            python3 - "$logs/clippy.private" <<'PY_DIAG'
+          import pathlib,re,sys
+          content=pathlib.Path(sys.argv[1]).read_text(errors="replace")
+          rustc=sorted(set(re.findall(r'(?m)^error\[([A-Z][0-9]{4})\]:',content)))
+          lint=sorted(set(re.findall(r'clippy::[a-z][a-z_0-9]{1,60}',content)))
+          errors=len(re.findall(r'(?m)^error(?:\[[A-Z][0-9]{4}\])?:',content))
+          warnings=len(re.findall(r'(?m)^warning:',content))
+          print("LAS_ROOT_FFI_DIAG=RUSTC_CODES:"+(",".join(rustc) if rustc else "NONE"))
+          print("LAS_ROOT_FFI_DIAG=CLIPPY_LINTS:"+(",".join(lint[:12]) if lint else "NONE"))
+          print("LAS_ROOT_FFI_DIAG=ERROR_COUNT:"+str(min(errors,999)))
+          print("LAS_ROOT_FFI_DIAG=WARNING_COUNT:"+str(min(warnings,999)))
+          PY_DIAG
+            # A second machine-JSON diagnostic provides only opaque Git index
+            # ordinals and line numbers. Source filenames and messages remain
+            # entirely in the ephemeral runner, never in public logs.
+            GPRBUILD="$GPRBUILD" cargo +1.98.1 clippy --locked --features root-ffi,linux-peer-credentials --all-targets --message-format=json -- -D warnings >"$logs/clippy-json.private" 2>&1 || :
+            python3 - "$logs/clippy-json.private" <<'PY_LOCATION'
+          import json,subprocess,sys
+          names=subprocess.check_output(["git","-c","core.fsmonitor=false","ls-files","-z"]).decode("utf-8").split("\0")
+          lookup={s:i+1 for i,s in enumerate(sorted(x for x in names if x))}
+          results=set()
+          for row in open(sys.argv[1],encoding="utf-8",errors="replace"):
+              try: event=json.loads(row)
+              except (ValueError,TypeError): continue
+              if event.get("reason")!="compiler-message": continue
+              msg=event.get("message") or {}
+              if msg.get("level")!="error": continue
+              cd=msg.get("code") or {}
+              code=cd.get("code") or "UNKNOWN"
+              if not isinstance(code,str) or len(code)>80 or not all(c.isascii() and (c.isalnum() or c in ":_") for c in code): code="OTHER"
+              for span in msg.get("spans",[]):
+                  if not span.get("is_primary"): continue
+                  name=span.get("file_name","")
+                  if name.startswith("./"):name=name[2:]
+                  idx=lookup.get(name,0)
+                  line=span.get("line_start",0)
+                  if type(line)!=int or line<0 or line>100000:line=0
+                  results.add((idx,line,code))
+          for idx,line,code in sorted(results)[:12]:
+              print(f"LAS_ROOT_FFI_DIAG=LOCATION:{idx}:{line}:{code}")
+          PY_LOCATION
+            echo 'LAS_ROOT_FFI=FAIL:CLIPPY'; exit 1
+          fi
+          echo 'LAS_ROOT_FFI=CLIPPY_PASS'
+          if ! RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --features root-ffi,linux-peer-credentials --lib -- --test-threads=1 >"$logs/tests.private" 2>&1; then
+            echo 'LAS_ROOT_FFI=FAIL:UNIT_TESTS'; exit 1
+          fi
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$logs/tests.private" || {
+            echo 'LAS_ROOT_FFI=FAIL:VACUOUS_TESTS'; exit 1
+          }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_ROOT_FFI=FAIL:SOURCE_DRIFT'; exit 1
+          }
+          echo 'LAS_ROOT_FFI=EXACT_SCOPED_RUST_FFI_PASS_NOT_RELEASE_APPROVAL'
+
+      - name: Verify all-feature Root FFI full target set without source publication
+        shell: bash
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.1
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-source"
+          logs="$(mktemp -d "$RUNNER_TEMP/las-ffi-all.XXXXXXXX")"
+          chmod 700 "$logs"
+          trap 'rm -rf -- "$logs"' EXIT
+          if ! RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 check --locked --all-features --all-targets > "$logs/check.private" 2>&1; then
+            echo 'LAS_ROOT_FFI=FAIL:ALL_FEATURE_COMPILE'; exit 1
+          fi
+          echo 'LAS_ROOT_FFI=ALL_FEATURE_COMPILE_PASS'
+          if ! GPRBUILD="$GPRBUILD" cargo +1.98.1 clippy --locked --all-features --all-targets -- -D warnings > "$logs/clippy.private" 2>&1; then
+            echo 'LAS_ROOT_FFI=FAIL:ALL_FEATURE_CLIPPY'; exit 1
+          fi
+          echo 'LAS_ROOT_FFI=ALL_FEATURE_CLIPPY_PASS'
+          if ! RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --all-features --all-targets -- --test-threads=1 > "$logs/tests.private" 2>&1; then
+            echo 'LAS_ROOT_FFI=FAIL:ALL_FEATURE_TESTS'; exit 1
+          fi
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$logs/tests.private" || {
+            echo 'LAS_ROOT_FFI=FAIL:ALL_FEATURE_VACUOUS'; exit 1
+          }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_ROOT_FFI=FAIL:SOURCE_DRIFT'; exit 1
+          }
+          echo 'LAS_ROOT_FFI=ALL_FEATURES_ALL_TARGETS_PASS_NOT_RELEASE_APPROVAL'
+
+      - name: Scrub private checkout and Ada toolchain diagnostic files
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf -- "$RUNNER_TEMP/private-source" "$RUNNER_TEMP/alire-workspace"
+          rm -f -- "$RUNNER_TEMP/rustup.private" "$RUNNER_TEMP/alire.private" "$RUNNER_TEMP/private-heads" "$RUNNER_TEMP/secret-fetch-error"
+          echo 'LAS_ROOT_FFI=EPHEMERAL_CLEANUP'
