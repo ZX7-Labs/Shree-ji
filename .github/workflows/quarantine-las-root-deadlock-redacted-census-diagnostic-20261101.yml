@@ -1,0 +1,153 @@
+name: Root private canonical 208 deadlock manifest leak-safe ordinal diagnosis
+on:
+  push:
+    branches:
+      - quarantine/las-root-current-native-20261101
+    paths:
+      - .github/workflows/quarantine-las-root-deadlock-redacted-census-diagnostic-20261101.yml
+permissions:
+  contents: read
+jobs:
+  exact-private-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      TARGET_BRANCH_PROOF: f5a022f7339bd8d485f6eeccad4af9674fc802d1691c7bab718eb8252c2c430a
+      EXPECTED_PRIVATE_COMMIT_PROOF: 1c280ef53dfc7701abd3ef3d206e85ee05b55bdca0e0175d517f99223d9bb63d
+      EXPECTED_PRIVATE_RUNNER_BLOB_PROOF: d4df90336770cf5275996ccf750325a091b071a86a708799281845dc0eb5c74f
+    steps:
+      - name: Recover exact read-only private source without publishing code
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PRIVATE_REPOSITORY" || -z "$PRIVATE_READ_TOKEN" ]]; then
+            echo 'LAS_NATIVE_BRIDGE=FAIL:ACCESS'; exit 1
+          fi
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_READ_TOKEN"
+          private="$RUNNER_TEMP/private-source"
+          mkdir -m 700 "$private"
+          cd "$private"
+          git init -q
+          git remote add origin "https://github.com/$PRIVATE_REPOSITORY.git"
+          authorization="$(printf 'x-access-token:%s' "$PRIVATE_READ_TOKEN" | base64 -w0)"
+          echo "::add-mask::$authorization"
+          all_refs="$RUNNER_TEMP/private-heads"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" ls-remote --heads origin > "$all_refs" 2> "$RUNNER_TEMP/secret-fetch-error" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:READ'; exit 1
+          }
+          match=''
+          while read -r _sha candidate; do
+            candidate_proof="$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')"
+            if [[ "$candidate_proof" == "$TARGET_BRANCH_PROOF" ]]; then
+              [[ -z "$match" ]] || { echo 'LAS_NATIVE_BRIDGE=FAIL:AMBIGUOUS_REF'; exit 1; }
+              match="$candidate"
+            fi
+          done < "$all_refs"
+          rm -f "$all_refs" "$RUNNER_TEMP/secret-fetch-error"
+          [[ -n "$match" ]] || { echo 'LAS_NATIVE_BRIDGE=FAIL:TARGET'; exit 1; }
+          echo "::add-mask::$match"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" fetch -q --depth=1 origin "$match" > /dev/null 2> "$RUNNER_TEMP/secret-fetch-error" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:FETCH'; exit 1
+          }
+          rm -f "$RUNNER_TEMP/secret-fetch-error"
+          unset authorization PRIVATE_READ_TOKEN PRIVATE_REPOSITORY
+          git -c core.fsmonitor=false checkout -q --detach FETCH_HEAD
+          actual="$(git -c core.fsmonitor=false rev-parse --verify HEAD)"
+          echo "::add-mask::$actual"
+          proof="$(printf '%s' "$actual" | sha256sum | awk '{print $1}')"
+          [[ "$proof" == "$EXPECTED_PRIVATE_COMMIT_PROOF" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:SOURCE_PIN'; exit 1
+          }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:DIRTY'; exit 1
+          }
+          script='tools/verification/run_bridge_native_suite.sh'
+          [[ -f "$script" && ! -L "$script" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:RUNNER_MISSING'; exit 1
+          }
+          blob="$(git -c core.fsmonitor=false hash-object "$script")"
+          blob_proof="$(printf '%s' "$blob" | sha256sum | awk '{print $1}')"
+          [[ "$blob_proof" == "$EXPECTED_PRIVATE_RUNNER_BLOB_PROOF" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:RUNNER_PIN'; exit 1
+          }
+          echo "LAS_NATIVE_BRIDGE=SOURCE_PINNED:$proof"
+
+      - name: Verify exact private 208-profile TLC map and explicit deadlock exemption manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-source"
+          log="$(mktemp -d "$RUNNER_TEMP/las-census.XXXXXXXX")"
+          chmod 700 "$log"
+          trap 'rm -rf -- "$log"' EXIT
+          python3 -I -B - "tools/verify_codespaces_all.sh" "$log/derive.py" <<'PY_EXTRACT' || {
+          from pathlib import Path
+          import sys
+          source=Path(sys.argv[1]).read_text(encoding="utf-8")
+          begin="if ! python3 - \"$ROOT\" > \"$TLC_MAP.pending\" <<'PY'\n"
+          end="\nPY\nthen"
+          if source.count(begin)!=1 or source.count(end)!=1:raise SystemExit(1)
+          body=source.split(begin,1)[1].split(end,1)[0]
+          target=Path(sys.argv[2])
+          target.write_text(body+"\n",encoding="utf-8")
+          target.chmod(0o600)
+          PY_EXTRACT
+            echo 'LAS_CANONICAL_MAP=FAIL:SOURCE_OWNED_EXTRACT'; exit 1
+          }
+          if ! python3 -I -B "$log/derive.py" "$PWD" > "$log/208.private" 2>&1; then
+            # Public log emits only fixed reason codes and Git ordinal locations.
+            # Never disclose private config names, text, exceptions or traces.
+            python3 -I -B - "$log/208.private" <<'PY_REDACTED'
+          import ast,pathlib,re,subprocess,sys
+          content=pathlib.Path(sys.argv[1]).read_text(errors="replace")
+          body=pathlib.Path("tools/verify_codespaces_all.sh").read_text(encoding="utf-8")
+          begin="DEADLOCK_EXEMPT_CONFIGS = {"
+          if body.count(begin)!=1:raise SystemExit(1)
+          items=body.split(begin,1)[1].split("\n}",1)[0]
+          approved=ast.literal_eval("{"+items+"}")
+          names=sorted(x for x in subprocess.check_output(["git","ls-files","-z"]).decode().split("\0") if x)
+          lookup={name:i+1 for i,name in enumerate(names)}
+          discovered=[]
+          for path in sorted(pathlib.Path("spec").rglob("*.cfg")):
+              lines=path.read_text(encoding="utf-8").splitlines()
+              if any(line.strip().split("\\*",1)[0].strip()=="CHECK_DEADLOCK FALSE" for line in lines):
+                  discovered.append(path.as_posix())
+          out=[p for p in discovered if p not in approved]
+          print("LAS_CANONICAL_MAP_DIAG=DISCOVERED_FALSE_COUNT:"+str(len(discovered)))
+          print("LAS_CANONICAL_MAP_DIAG=DECLARED_EXEMPT_COUNT:"+str(len(approved)))
+          print("LAS_CANONICAL_MAP_DIAG=UNLISTED_COUNT:"+str(len(out)))
+          for p in out[:80]:print("LAS_CANONICAL_MAP_DIAG=UNLISTED_GIT_INDEX:"+str(lookup.get(p,0)))
+          categories=["unapproved deadlock exemption","duplicate deadlock declarations","unknown deadlock declaration","TLC negative-control manifest mismatch","TLC deadlock-exempt manifest mismatch","cannot map","ambiguous TLA mapping"]
+          found=[x.replace(" ","_") for x in categories if x in content]
+          print("LAS_CANONICAL_MAP_DIAG=FAILURE_CATEGORIES:"+(",".join(found) if found else "OTHER"))
+          PY_REDACTED
+            echo 'LAS_CANONICAL_MAP=FAIL:SOURCE_MANIFEST'; exit 1
+          fi
+          python3 -I -B - "$log/208.private" <<'PY_CENSUS' || {
+          import pathlib,sys
+          rows=[line.split("\t") for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()]
+          if len(rows)!=208 or any(len(row)!=4 for row in rows):raise SystemExit(1)
+          if len({row[0] for row in rows})!=208:raise SystemExit(1)
+          if sum(bool(row[3]) for row in rows)!=12:raise SystemExit(1)
+          target=[row for row in rows if row[0]=="spec/root_authority/RootExternalEffectProviderFence.cfg"]
+          if len(target)!=1 or target[0][1]!="spec/root_authority/RootExternalEffectProviderFence.tla" or target[0][2]!="1":raise SystemExit(1)
+          PY_CENSUS
+            echo 'LAS_CANONICAL_MAP=FAIL:INVENTORY_OR_DEADLOCK'; exit 1
+          }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_CANONICAL_MAP=FAIL:SOURCE_DRIFT'; exit 1
+          }
+          echo 'LAS_CANONICAL_MAP=208_SOURCE_PINNED_PROFILES_12_NEGATIVE_EXPLICIT_DEADLOCK_PASS_NOT_TLC'
+          
+      - name: Scrub ephemeral checkout
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf -- "$RUNNER_TEMP/private-source"
+          rm -f -- "$RUNNER_TEMP/private-heads" "$RUNNER_TEMP/secret-fetch-error"
+          echo 'LAS_NATIVE_BRIDGE=EPHEMERAL_CLEANUP'
