@@ -95,6 +95,38 @@ jobs:
           test "$(rustc +1.98.1 --version | awk '{print $2}')" = '1.98.1'
           echo 'LAS_PUBLIC_RUST_TOOLCHAIN=PASS'
 
+      - name: Install checksum-pinned Ada GPRBuild for Root FFI
+        shell: bash
+        run: |
+          set -euo pipefail
+          ALR_ZIP="$RUNNER_TEMP/las-alire-2.1.1.zip"
+          mkdir -p "$RUNNER_TEMP/las-alire"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+            --output "$ALR_ZIP" \
+            'https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip' >/dev/null 2>&1 || {
+              echo 'LAS_PUBLIC_ADA_TOOLCHAIN_DOWNLOAD=FAIL'; exit 1;
+            }
+          echo '09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  '"$ALR_ZIP" | sha256sum --check --strict >/dev/null || {
+            echo 'LAS_PUBLIC_ADA_TOOLCHAIN_CHECKSUM=FAIL'; exit 1;
+          }
+          unzip -q "$ALR_ZIP" -d "$RUNNER_TEMP/las-alire"
+          export PATH="$RUNNER_TEMP/las-alire/bin:$PATH"
+          alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >/dev/null 2>&1 || {
+            echo 'LAS_PUBLIC_ADA_TOOLCHAIN_INSTALL=FAIL'; exit 1;
+          }
+          mkdir -p "$RUNNER_TEMP/las-root-ffi-workspace"
+          (cd "$RUNNER_TEMP/las-root-ffi-workspace" && alr -n init --in-place --no-skel --lib las_root_ffi_smoke >/dev/null 2>&1) || {
+            echo 'LAS_PUBLIC_ADA_WORKSPACE_INIT=FAIL'; exit 1;
+          }
+          cat > "$RUNNER_TEMP/las-gprbuild-wrapper" <<'EOF_GPR'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$RUNNER_TEMP/las-root-ffi-workspace"
+          exec "$RUNNER_TEMP/las-alire/bin/alr" exec -- gprbuild "$@"
+          EOF_GPR
+          chmod 0700 "$RUNNER_TEMP/las-gprbuild-wrapper"
+          echo 'LAS_PUBLIC_ADA_TOOLCHAIN=PASS'
+
       - name: Execute exact revision native Rust tests and compile gates
         shell: bash
         run: |
@@ -116,7 +148,7 @@ jobs:
           }
           run_gate FMT cargo +1.98.1 fmt --all -- --check
           run_gate CHECK_DEFAULT env RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --lib
-          run_gate CHECK_ALL_FEATURES env RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --lib --all-features
+          run_gate CHECK_ALL_FEATURES env RUSTFLAGS=-Dwarnings GPRBUILD="$RUNNER_TEMP/las-gprbuild-wrapper" cargo +1.98.1 check --locked --lib --all-features
           run_gate TEST_DEFAULT env RUSTFLAGS=-Dwarnings cargo +1.98.1 test --locked --lib -- --test-threads=1
           run_gate CLIPPY_DEFAULT env RUSTFLAGS=-Dwarnings cargo +1.98.1 clippy --locked --lib -- -D warnings
           test -z "$(git status --porcelain --untracked-files=no)" || {
