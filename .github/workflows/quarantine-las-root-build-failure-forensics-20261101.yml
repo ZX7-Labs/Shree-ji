@@ -117,12 +117,12 @@ jobs:
           import pathlib,re,subprocess,sys
           data=pathlib.Path(sys.argv[1]).read_text(encoding="utf-8",errors="replace")
           paths=subprocess.check_output(["git","-c","core.fsmonitor=false","ls-files","-z"])
-          known={p.decode("utf-8"):i+1 for i,p in enumerate(sorted(x for x in paths.split(b"\\0") if x))}
-          codes=sorted(set(re.findall(r'(?m)^error\\[([A-Z][0-9]{4})\\]:',data)))
-          n_errors=len(re.findall(r'(?m)^error(?:\\[[A-Z][0-9]{4}\\])?:',data))
+          known={p.decode("utf-8"):i+1 for i,p in enumerate(sorted(x for x in paths.split(b"\0") if x))}
+          codes=sorted(set(re.findall(r'(?m)^error\[([A-Z][0-9]{4})\]:',data)))
+          n_errors=len(re.findall(r'(?m)^error(?:\[[A-Z][0-9]{4}\])?:',data))
           n_warn=len(re.findall(r'(?m)^warning:',data))
           loc=set()
-          for m in re.finditer(r'(?m)^\\s*-->\\s+([^\\n:]+):(\\d+):(\\d+)',data):
+          for m in re.finditer(r'(?m)^\s*-->\s+([^\n:]+):(\d+):(\d+)',data):
               p=m.group(1).removeprefix("./")
               idx=known.get(p,0)
               if idx:
