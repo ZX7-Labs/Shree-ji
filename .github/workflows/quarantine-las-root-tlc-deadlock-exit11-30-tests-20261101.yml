@@ -1,0 +1,190 @@
+name: Root 4-profile TLC deadlock exit11 source-bound 30-case native differential
+on:
+  push:
+    branches:
+      - quarantine/las-root-current-native-20261101
+    paths:
+      - .github/workflows/quarantine-las-root-tlc-deadlock-exit11-30-tests-20261101.yml
+permissions:
+  contents: read
+jobs:
+  source-pinned-two-tlc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    env:
+      TARGET_BRANCH_PROOF: 003f7911ad70012d8db9b3e9b544dd63f188d13fefaa45a0c0231b72dd614407
+      EXPECTED_PRIVATE_COMMIT_PROOF: 7c93f0ad6ed1457cdb5b87a511778e206605152749364db9ce15c2a33536787c
+      EXPECTED_PRIVATE_RUNNER_BLOB_PROOF: d4df90336770cf5275996ccf750325a091b071a86a708799281845dc0eb5c74f
+    steps:
+      - name: Recover exact read-only private source without publishing code
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_READ_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PRIVATE_REPOSITORY" || -z "$PRIVATE_READ_TOKEN" ]]; then
+            echo 'LAS_NATIVE_BRIDGE=FAIL:ACCESS'; exit 1
+          fi
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_READ_TOKEN"
+          private="$RUNNER_TEMP/private-source"
+          mkdir -m 700 "$private"
+          cd "$private"
+          git init -q
+          git remote add origin "https://github.com/$PRIVATE_REPOSITORY.git"
+          authorization="$(printf 'x-access-token:%s' "$PRIVATE_READ_TOKEN" | base64 -w0)"
+          echo "::add-mask::$authorization"
+          all_refs="$RUNNER_TEMP/private-heads"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" ls-remote --heads origin > "$all_refs" 2> "$RUNNER_TEMP/secret-fetch-error" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:READ'; exit 1
+          }
+          match=''
+          while read -r _sha candidate; do
+            candidate_proof="$(printf '%s' "$candidate" | sha256sum | awk '{print $1}')"
+            if [[ "$candidate_proof" == "$TARGET_BRANCH_PROOF" ]]; then
+              [[ -z "$match" ]] || { echo 'LAS_NATIVE_BRIDGE=FAIL:AMBIGUOUS_REF'; exit 1; }
+              match="$candidate"
+            fi
+          done < "$all_refs"
+          rm -f "$all_refs" "$RUNNER_TEMP/secret-fetch-error"
+          [[ -n "$match" ]] || { echo 'LAS_NATIVE_BRIDGE=FAIL:TARGET'; exit 1; }
+          echo "::add-mask::$match"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $authorization" fetch -q --depth=1 origin "$match" > /dev/null 2> "$RUNNER_TEMP/secret-fetch-error" || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:FETCH'; exit 1
+          }
+          rm -f "$RUNNER_TEMP/secret-fetch-error"
+          unset authorization PRIVATE_READ_TOKEN PRIVATE_REPOSITORY
+          git -c core.fsmonitor=false checkout -q --detach FETCH_HEAD
+          actual="$(git -c core.fsmonitor=false rev-parse --verify HEAD)"
+          echo "::add-mask::$actual"
+          proof="$(printf '%s' "$actual" | sha256sum | awk '{print $1}')"
+          [[ "$proof" == "$EXPECTED_PRIVATE_COMMIT_PROOF" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:SOURCE_PIN'; exit 1
+          }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:DIRTY'; exit 1
+          }
+          script='tools/verification/run_bridge_native_suite.sh'
+          [[ -f "$script" && ! -L "$script" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:RUNNER_MISSING'; exit 1
+          }
+          blob="$(git -c core.fsmonitor=false hash-object "$script")"
+          blob_proof="$(printf '%s' "$blob" | sha256sum | awk '{print $1}')"
+          [[ "$blob_proof" == "$EXPECTED_PRIVATE_RUNNER_BLOB_PROOF" ]] || {
+            echo 'LAS_NATIVE_BRIDGE=FAIL:RUNNER_PIN'; exit 1
+          }
+          echo "LAS_NATIVE_BRIDGE=SOURCE_PINNED:$proof"
+
+      - name: Execute four genuine deadlock-enabled TLC differentials in private temporary configs
+        shell: bash
+        env:
+          JAVA_TOOL_OPTIONS: -Xmx5g
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-source"
+          private="$(mktemp -d "$RUNNER_TEMP/las-root-diff.XXXXXXXX")"
+          chmod 700 "$private"
+          jar="$private/tla2tools.jar"
+          if ! curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+                  --output "$jar" \
+                  "https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar" \
+                  > "$private/fetch.private" 2>&1; then
+            echo 'LAS_ROOT_DIFF=FAIL:TOOL_FETCH'; exit 1
+          fi
+          printf 'bee4a54f3ee3d4afc347c3240ec2d9e93b075104  %s\n' "$jar" |
+            sha1sum --check --strict > "$private/jarcheck.private" 2>&1 || {
+            echo 'LAS_ROOT_DIFF=FAIL:TOOL_PIN'; exit 1
+          }
+          work="tools/verification/root_deadlock_differential"
+          if ! python3 -I -B -m unittest discover -s "$work" -p 'test_*.py' -q > "$private/unit-normal.private" 2>&1; then
+            echo 'LAS_ROOT_DIFF=FAIL:NORMAL_UNIT'; exit 1
+          fi
+          grep -Eq '^Ran 30 tests in ' "$private/unit-normal.private" || {
+            echo 'LAS_ROOT_DIFF=FAIL:VACUOUS_NORMAL'; exit 1
+          }
+          if ! python3 -O -I -B -m unittest discover -s "$work" -p 'test_*.py' -q > "$private/unit-optimized.private" 2>&1; then
+            echo 'LAS_ROOT_DIFF=FAIL:OPTIMIZED_UNIT'; exit 1
+          fi
+          grep -Eq '^Ran 30 tests in ' "$private/unit-optimized.private" || {
+            echo 'LAS_ROOT_DIFF=FAIL:VACUOUS_OPTIMIZED'; exit 1
+          }
+          if ! python3 -I -B "$work/root_tlc_deadlock_differential.py" \
+                --source "$PWD" --jar "$jar" --scratch "$private" --timeout 180 \
+                > "$private/result.private" 2>&1; then
+            python3 -I -B - "$private/result.private" <<'PY_DIAGNOSTIC'
+          import pathlib,re,sys
+          raw=pathlib.Path(sys.argv[1]).read_text(encoding="utf-8",errors="replace")
+          labels=re.findall(r'(?m)^LAS_DIFF=FAIL:([A-Z_]+)
+          python3 -I -B - "$private/result.private" <<'PY_REDACTED' || {
+          import json, pathlib, sys
+          rows=pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+          if len(rows)!=1 or not rows[0].startswith("LAS_DIFF_RESULT="):raise SystemExit(1)
+          x=json.loads(rows[0].split("=",1)[1])
+          if x.get("profiles")!=4 or len(x.get("results",[]))!=4:raise SystemExit(1)
+          dead=x.get("bounded_deadlocks",0)
+          clear=x.get("bounded_no_deadlocks",0)
+          if type(dead)!=int or type(clear)!=int or dead<0 or clear<0 or dead+clear!=4:raise SystemExit(1)
+          if any(y.get("distinct_states",0)<2 for y in x["results"]):raise SystemExit(1)
+          print("LAS_ROOT_DIFF=BOUNDED_COUNTEREXAMPLE_COUNT:"+str(dead))
+          print("LAS_ROOT_DIFF=BOUNDED_NO_DEADLOCK_COUNT:"+str(clear))
+          PY_REDACTED
+            echo 'LAS_ROOT_DIFF=FAIL:RECEIPT'; exit 1
+          }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_ROOT_DIFF=FAIL:SOURCE_DRIFT'; exit 1
+          }
+          echo 'LAS_ROOT_DIFF=FOUR_BOUNDED_DIFFERENTIALS_CLASSIFIED_NOT_GENERAL_RELEASE'
+
+      - name: Scrub private source and TLC traces
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf -- "$RUNNER_TEMP/private-source"
+          find "$RUNNER_TEMP" -maxdepth 1 -name 'las-root-diff.*' -type d -exec rm -rf -- {} +
+          rm -f -- "$RUNNER_TEMP/private-heads" "$RUNNER_TEMP/secret-fetch-error"
+          echo 'LAS_ROOT_TLC=EPHEMERAL_CLEANUP'
+,raw)
+          allowed={"INFRASTRUCTURE_OR_CORRUPTED_TRACE","NO_SINGLE_FINAL_RECORD",
+          "NO_STATE_CENSUS","VACUOUS_OR_IMPOSSIBLE_CENSUS",
+          "CHECKER_ERROR_OR_INCOMPLETE_EVIDENCE","NONEMPTY_TOOL_STDERR",
+          "TIMED_OUT","EXPECTED_ONE_EXPLICIT_FALSE",
+          "UNSAFE_CONFIG_TRANSFORMATION","SOURCE_CHANGED_DURING_PREPARE",
+          "MISSING_OR_SYMLINK_SOURCE","UNAVAILABLE_CFG",
+          "UNTRUSTED_TLC_JAR","OTHER_UNVERIFIED",
+          "INFRASTRUCTURE_OR_SOURCE_UNVERIFIED"}
+          label=labels[-1] if len(labels)==1 and labels[-1] in allowed else "OTHER_UNVERIFIED"
+          print("LAS_ROOT_DIFF_SAFE_DIAG="+label)
+          PY_DIAGNOSTIC
+            echo 'LAS_ROOT_DIFF=FAIL:CHECKER_OR_CLASSIFIER'; exit 1
+          fi
+          python3 -I -B - "$private/result.private" <<'PY_REDACTED' || {
+          import json, pathlib, sys
+          rows=pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+          if len(rows)!=1 or not rows[0].startswith("LAS_DIFF_RESULT="):raise SystemExit(1)
+          x=json.loads(rows[0].split("=",1)[1])
+          if x.get("profiles")!=4 or len(x.get("results",[]))!=4:raise SystemExit(1)
+          dead=x.get("bounded_deadlocks",0)
+          clear=x.get("bounded_no_deadlocks",0)
+          if type(dead)!=int or type(clear)!=int or dead<0 or clear<0 or dead+clear!=4:raise SystemExit(1)
+          if any(y.get("distinct_states",0)<2 for y in x["results"]):raise SystemExit(1)
+          print("LAS_ROOT_DIFF=BOUNDED_COUNTEREXAMPLE_COUNT:"+str(dead))
+          print("LAS_ROOT_DIFF=BOUNDED_NO_DEADLOCK_COUNT:"+str(clear))
+          PY_REDACTED
+            echo 'LAS_ROOT_DIFF=FAIL:RECEIPT'; exit 1
+          }
+          [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)" ]] || {
+            echo 'LAS_ROOT_DIFF=FAIL:SOURCE_DRIFT'; exit 1
+          }
+          echo 'LAS_ROOT_DIFF=FOUR_BOUNDED_DIFFERENTIALS_CLASSIFIED_NOT_GENERAL_RELEASE'
+
+      - name: Scrub private source and TLC traces
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf -- "$RUNNER_TEMP/private-source"
+          find "$RUNNER_TEMP" -maxdepth 1 -name 'las-root-diff.*' -type d -exec rm -rf -- {} +
+          rm -f -- "$RUNNER_TEMP/private-heads" "$RUNNER_TEMP/secret-fetch-error"
+          echo 'LAS_ROOT_TLC=EPHEMERAL_CLEANUP'
