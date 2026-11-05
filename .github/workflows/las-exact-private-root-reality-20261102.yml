@@ -3,7 +3,7 @@ name: Public runner - pinned private Root Reality Rust candidate (quarantine)
 on:
   push:
     branches:
-      - quarantine/exact-private-root-reality-20261102
+      - quarantine/exact-private-verification-20261106
     paths:
       - .github/workflows/las-exact-private-root-reality-20261102.yml
   workflow_dispatch:
@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: las-exact-pr58-scope-20261102
+  group: las-exact-scope-20261106
   cancel-in-progress: false
 
 jobs:
@@ -21,8 +21,8 @@ jobs:
     timeout-minutes: 45
     env:
       # Only SHA-256 of the private ref and commit are public. No private source or SHA committed here.
-      PRIVATE_REF_PROOF: 1671d9b05c80e96a488aca0a636e527c4f33026d0eeb7af146d962a2e5d2620d
-      EXPECTED_PRIVATE_COMMIT_PROOF: b53896bf17f938615d8ae9018d7efbcd4b3df5961099253edc6e3510e1c6a6fc
+      PRIVATE_REF_PROOF: 03a0d3846bf8e541feed0b7f454b946f67e896fd283b1da3a31367b6ff4f8209
+      EXPECTED_PRIVATE_COMMIT_PROOF: 51212300ae5b175e1f9307118891c738f481c79f4ce22a06216190b6d217a126
     steps:
       - name: Resolve and fetch exactly one pinned private read-only source revision
         shell: bash
