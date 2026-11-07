@@ -222,3 +222,38 @@ jobs:
             echo "LAS_PRIVATE_TARGET_RELEASE_LIBRARY=FAIL"
           fi
           exit "$rc"
+
+      - name: Check all-feature Rust compile
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          log="$RUNNER_TEMP/all-feature-check.private.log"
+          set +e
+          RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --all-features --all-targets >"$log" 2>&1
+          rc=$?
+          set -e
+          echo "LAS_PRIVATE_TARGET_ALL_FEATURE_CHECK_RC=$rc"
+          echo "LAS_PRIVATE_TARGET_ALL_FEATURE_CHECK_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')"
+          if [[ "$rc" -eq 0 ]]; then echo "LAS_PRIVATE_TARGET_ALL_FEATURE_CHECK=PASS"; else echo "LAS_PRIVATE_TARGET_ALL_FEATURE_CHECK=FAIL"; fi
+          exit "$rc"
+
+      - name: Check all-feature Rust Clippy
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          log="$RUNNER_TEMP/all-feature-clippy.private.log"
+          set +e
+          RUSTFLAGS=-Dwarnings cargo +1.98.1 clippy --locked --all-features --all-targets -- -D warnings >"$log" 2>&1
+          rc=$?
+          set -e
+          echo "LAS_PRIVATE_TARGET_ALL_FEATURE_CLIPPY_RC=$rc"
+          echo "LAS_PRIVATE_TARGET_ALL_FEATURE_CLIPPY_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')"
+          if [[ "$rc" -ne 0 ]]; then
+            grep -oE 'clippy::[a-z_0-9]+' "$log" | sort -u | head -n 25 | sed 's/^/LAS_PRIVATE_TARGET_ALL_FEATURE_LINT_ID=/' || true
+            echo "LAS_PRIVATE_TARGET_ALL_FEATURE_CLIPPY=FAIL"
+          else
+            echo "LAS_PRIVATE_TARGET_ALL_FEATURE_CLIPPY=PASS"
+          fi
+          exit "$rc"
