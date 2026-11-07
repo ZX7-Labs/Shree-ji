@@ -88,6 +88,67 @@ jobs:
             "$@" >"$log" 2>&1
             rc=$?
             set -e
+            # Independent PUBLIC runner-owned receipt checker. A Cargo exit 0
+            # without actual completed native test rows is not acceptance.
+            # Do not expose test names, source files or raw private logs.
+            if [[ "$code" == TEST_* && "$rc" -eq 0 ]]; then
+              if python3 -I -B - "$log" "$code" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+          
+          log = Path(sys.argv[1])
+          gate = sys.argv[2]
+          if not re.fullmatch(r"TEST_[A-Z_]+", gate) or not 0 < log.stat().st_size <= 50_000_000:
+              raise SystemExit("ERROR: invalid native test receipt source or log budget")
+          content = log.read_text(encoding="utf-8")
+          summary = re.compile(r"^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out; finished in [^\r\n]+$")
+          row = re.compile(r"^test (\S+) \.\.\.[ \t]+(ok|FAILED|ignored)[ \t]*$")
+          running = re.compile(r"^running (\d+) tests?$")
+          groups = 0
+          passed_total = 0
+          observations = []
+          declared = None
+          for line in content.splitlines():
+              count = running.fullmatch(line)
+              if count:
+                  if declared is not None:
+                      raise SystemExit("ERROR: overlapping libtest summary")
+                  declared = int(count.group(1))
+              elif line.startswith("test result:"):
+                  result = summary.fullmatch(line)
+                  if result is None or declared is None:
+                      raise SystemExit("ERROR: missing or malformed libtest summary")
+                  status, passed, failed, ignored, measured, filtered = result.groups()
+                  passed, failed, ignored, measured, filtered = map(
+                      int, (passed, failed, ignored, measured, filtered)
+                  )
+                  if (status != "ok" or failed or ignored or measured or filtered
+                          or declared != passed or len(observations) != passed
+                          or len({name for name, _ in observations}) != passed
+                          or any(result != "ok" for _, result in observations)):
+                      raise SystemExit("ERROR: unfinished, substituted or skipped native tests")
+                  groups += 1
+                  passed_total += passed
+                  declared = None
+                  observations.clear()
+              elif line.startswith("test "):
+                  match = row.fullmatch(line)
+                  if declared is None or match is None:
+                      raise SystemExit("ERROR: malformed or orphaned libtest row")
+                  observations.append(match.groups())
+          if groups == 0 or passed_total < 10 or declared is not None or observations:
+              raise SystemExit("ERROR: vacuous or incomplete native test execution")
+          print("LAS_RUST_MATRIX_" + gate + "_NONVACUOUS=PASS")
+          print("LAS_RUST_MATRIX_" + gate + "_PASSED_TESTS=" + str(passed_total))
+          print("LAS_RUST_MATRIX_" + gate + "_SUMMARY_GROUPS=" + str(groups))
+          PY
+              then
+                :
+              else
+                rc=97
+              fi
+            fi
             echo "LAS_RUST_MATRIX_${code}_RC=$rc"
             echo "LAS_RUST_MATRIX_${code}_LOG_SHA256=$(sha256sum "$log" | awk '{print $1}')"
             if [[ "$rc" -eq 0 ]]; then
@@ -111,5 +172,7 @@ jobs:
           run_gate TEST_LINUX env RUSTFLAGS=-Dwarnings cargo +1.98.1 test --locked --features linux-peer-credentials --all-targets -- --test-threads=1
           run_gate TEST_ROOT env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --features root-ffi --all-targets -- --test-threads=1
           run_gate TEST_ALL env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --all-features --all-targets -- --test-threads=1
+          run_gate TEST_RELEASE_DEFAULT env RUSTFLAGS=-Dwarnings cargo +1.98.1 test --locked --release --lib -- --test-threads=1
+          run_gate TEST_RELEASE_ALL env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --release --all-features --lib -- --test-threads=1
           echo "LAS_RUST_MATRIX_FAIL_COUNT=$failed"
           test "$failed" -eq 0
