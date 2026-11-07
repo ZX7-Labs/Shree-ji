@@ -103,7 +103,7 @@ jobs:
               raise SystemExit("ERROR: invalid native test receipt source or log budget")
           content = log.read_text(encoding="utf-8")
           summary = re.compile(r"^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out; finished in [^\r\n]+$")
-          row = re.compile(r"^test (\S+) \.\.\.[ \t]+(ok|FAILED|ignored)[ \t]*$")
+          row = re.compile(r"^test ([^\r\n]+?) \.\.\.[ \t]+(ok|FAILED|ignored)[ \t]*$")
           running = re.compile(r"^running (\d+) tests?$")
           groups = 0
           passed_total = 0
