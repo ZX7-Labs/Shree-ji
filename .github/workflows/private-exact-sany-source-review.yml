@@ -1,0 +1,133 @@
+name: Verify exact private source SANY closure (scoped)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/private-exact-sany-source-review.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-exact-sany-source-review
+  cancel-in-progress: false
+
+env:
+  TARGET_REF_HASH: 6c2920c58a71643d7846b5751eff97784d3fee374a43e36da8201bd97cdaafcf
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 748a0995e144d97fe282b68aa3dc88c2e7aedbc3e85976a326d12114b329066c
+  EXPECTED_PRIVATE_TREE_PROOF: 6145fd718b21e11e2d817068ad96a61c5a745976d1a6f02a6513a42180d84afd
+  EXPECTED_SANY_MODEL_COUNT: "243"
+
+jobs:
+  source_bound_sany:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Recover exact private revision without public source publication
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+          root="$GITHUB_WORKSPACE/target"
+          mkdir "$root"
+          cd "$root"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          ref_inventory="$RUNNER_TEMP/private-refs"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$ref_inventory"
+          matched_ref=""
+          matched_head=""
+          while read -r remote_sha ref; do
+            if [[ "$(printf '%s' "$ref" | sha256sum | awk '{print $1}')" == "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+              matched_head="$remote_sha"
+            fi
+          done <"$ref_inventory"
+          rm -f "$ref_inventory"
+          test -n "$matched_ref"
+          test -n "$matched_head"
+          echo "::add-mask::$matched_ref"
+          echo "::add-mask::$matched_head"
+          git -c core.fsmonitor=false -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          actual="$(git -c core.fsmonitor=false rev-parse FETCH_HEAD)"
+          echo "::add-mask::$actual"
+          test "$actual" = "$matched_head"
+          test "$(printf '%s' "$actual" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git -c core.fsmonitor=false checkout -q --detach "$actual"
+          tree="$(git -c core.fsmonitor=false rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git -c core.fsmonitor=false status --porcelain --untracked-files=all)"
+          echo "LAS_SANY_PRIVATE_SOURCE_ADMISSION=PASS"
+          unset PRIVATE_REPOSITORY PRIVATE_TOKEN auth matched_ref matched_head remote_sha ref actual tree
+
+      - name: Execute exact source-owned checked SANY against every model
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          test -z "$(git -c core.fsmonitor=false status --porcelain --untracked-files=all)"
+          test "$(printf '%s' "$(git rev-parse HEAD)" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          if ! command -v javac >/dev/null 2>&1; then
+            echo "LAS_SANY_SETUP=NO_JAVAC" >&2
+            exit 1
+          fi
+          jar="$RUNNER_TEMP/tla2tools.jar"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+            --output "$jar" \
+            'https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar' >/dev/null 2>&1
+          echo "bee4a54f3ee3d4afc347c3240ec2d9e93b075104  $jar" | sha1sum --check --strict >/dev/null
+          classes="$RUNNER_TEMP/sany-classes"
+          mkdir -m 0700 "$classes"
+          javac --release 17 -cp "$jar" -d "$classes" \
+            tools/verification/CheckedSany.java >"$RUNNER_TEMP/sany-javac.private.log" 2>&1
+          test -s "$classes/CheckedSany.class"
+          inventory="$RUNNER_TEMP/models.inventory"
+          find spec -type f -name '*.tla' -print0 | sort -z > "$inventory"
+          count=0
+          while IFS= read -r -d '' module; do
+            count=$((count + 1))
+          done < "$inventory"
+          [[ "$count" -eq "$EXPECTED_SANY_MODEL_COUNT" ]]
+          echo "LAS_SANY_REQUIRED_COUNT=$count"
+          failures=0
+          checked=0
+          digest_inventory="$RUNNER_TEMP/sany-log-digests"
+          : > "$digest_inventory"
+          while IFS= read -r -d '' model; do
+            checked=$((checked + 1))
+            model_dir="$(dirname "$model")"
+            model_basename="$(basename "$model")"
+            private_log="$RUNNER_TEMP/sany-case-$checked.private.log"
+            private_out="$RUNNER_TEMP/sany-case-$checked"
+            set +e
+            (
+              cd "$model_dir"
+              python3 -I -B "$GITHUB_WORKSPACE/target/tools/verification/checked_sany.py" \
+                --jar "$jar" --classes "$classes" --model "$model_basename" \
+                --private-output "$private_out" --emit-private-log
+            ) >"$private_log" 2>&1
+            rc=$?
+            set -e
+            printf '%04d %s %s\n' "$checked" "$rc" "$(sha256sum "$private_log" | awk '{print $1}')" >> "$digest_inventory"
+            if [[ "$rc" -ne 0 ]]; then
+              failures=$((failures + 1))
+            fi
+          done < "$inventory"
+          echo "LAS_SANY_EXECUTED_COUNT=$checked"
+          echo "LAS_SANY_FAIL_COUNT=$failures"
+          echo "LAS_SANY_DIGEST_MANIFEST_SHA256=$(sha256sum "$digest_inventory" | awk '{print $1}')"
+          test "$checked" -eq "$EXPECTED_SANY_MODEL_COUNT"
+          test "$failures" -eq 0
+          test -z "$(git -c core.fsmonitor=false status --porcelain --untracked-files=all)"
+          test "$(printf '%s' "$(git rev-parse HEAD)" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          echo "LAS_SANY_SCOPED_RESULT=PASS"
