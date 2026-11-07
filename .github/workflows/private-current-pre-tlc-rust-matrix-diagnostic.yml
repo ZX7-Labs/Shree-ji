@@ -11,9 +11,9 @@ permissions:
   contents: read
 
 env:
-  TARGET_REF_HASH: 6c2920c58a71643d7846b5751eff97784d3fee374a43e36da8201bd97cdaafcf
-  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 748a0995e144d97fe282b68aa3dc88c2e7aedbc3e85976a326d12114b329066c
-  EXPECTED_PRIVATE_TREE_PROOF: 6145fd718b21e11e2d817068ad96a61c5a745976d1a6f02a6513a42180d84afd
+  TARGET_REF_HASH: af0d56a467d595cbb494bb1174899ca1fd0ebe33e4d5b8f7e459539fee0578ab
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: e01693f374b4c35bb340fa65eb7df1f48d8f0c064aef86cc96f49b9fa0ca3f26
+  EXPECTED_PRIVATE_TREE_PROOF: a7d0cbf54c0b507b95bb0123dd03ca73b3da03be45db86b761813daf416d1f80
 
 jobs:
   rust_matrix:
@@ -75,11 +75,35 @@ jobs:
           unset PRIVATE_TOKEN auth matched_ref actual tree
           echo "LAS_RUST_MATRIX_RECOVERY=PASS"
 
+      - name: Verify source-owned 22-case Rust test evidence policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd target
+          source_pin() {
+            file="$1"; sha="$2"
+            test -f "$file" && test ! -L "$file"
+            test "$(git -c core.fsmonitor=false hash-object -- "$file")" = "$sha"
+          }
+          source_pin tools/verification/canonical_rust_test_evidence.py 38e03d7b78d95c516f5b0499f0e0c5a5b05e04ef
+          source_pin tools/verification/canonical_rust_suite_policy.py 0d158e9dcf0acb81823d4e9199d15b44619204d9
+          source_pin tools/verification/test_canonical_rust_suite_policy.py ccc9c7701282f9a2a17754bad33dfe5722b8f4f0
+          source_pin src/defence_evolution/protected_evaluation_suite_performance.rs 4a57888d64bb37500e70a1be1d8214d672a2e11c
+          receipt="$RUNNER_TEMP/suite-policy-tests.private.log"
+          python3 -I -B -m unittest discover -s tools/verification -p test_canonical_rust_suite_policy.py >"$receipt" 2>&1
+          grep -Eq '^Ran 22 tests in [0-9.]+s$' "$receipt"
+          grep -Fx OK "$receipt" >/dev/null
+          echo LAS_SOURCE_SUITE_POLICY_TESTS=22/22
+          echo "LAS_SOURCE_SUITE_POLICY_LOG_SHA256=$(sha256sum "$receipt" | awk '{print $1}')"
+          test -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)"
+
       - name: Run privacy-preserving Rust gate matrix
         shell: bash
         run: |
           set -euo pipefail
           cd target
+          test_name="$(python3 -I -B tools/verification/canonical_rust_suite_policy.py --mode target)"
+          [[ "$test_name" =~ ^[A-Za-z0-9_:]+$ ]]
           failed=0
           run_gate() {
             code="$1"; shift
@@ -88,107 +112,19 @@ jobs:
             "$@" >"$log" 2>&1
             rc=$?
             set -e
-            # Reuse the exact audited private canonical verifier instead of
-            # inventing another libtest grammar. Pin its immutable Git blob
-            # against the independently reviewed private source checkout.
-            # The controller separately checks the canonical JSON result,
-            # count, ignored rows, and internally consistent completion facts.
-            # No test names, source content, or raw private logs enter stdout.
+            # Exact private source owns the skip/measurement evidence rule.
             if [[ "$code" == TEST_* && "$rc" -eq 0 ]]; then
-              verifier="tools/verification/canonical_rust_test_evidence.py"
-              receipt="$RUNNER_TEMP/${code}.native-test-receipt"
-              if [[ ! -f "$verifier" || -L "$verifier" ]] ||
-                 [[ "$(git -c core.fsmonitor=false hash-object -- "$verifier")" != "0304175fe9aef6b2d5af78e6d3256f9cbd7eecde" ]]; then
-                echo "LAS_RUST_MATRIX_TEST_VERIFIER_IDENTITY=REFUSED"
-                rc=97
-              elif ! python3 -I -B "$verifier" "$log" >"$receipt" 2>/dev/null; then
-                # Diagnose only the *shape* of the source-owned refusal.
-                # Do not print private test names, paths, stderr or raw log.
-                echo "LAS_RUST_MATRIX_TEST_REJECT_STAGE=CANONICAL"
-                python3 -I -B - "$receipt" "$code" <<'PY'
-          import json
-          from pathlib import Path
-          import re
-          import sys
-
-          path, gate = Path(sys.argv[1]), sys.argv[2]
-          allowed = {"missing-or-malformed-libtest-summary",
-                     "zero-passing-or-failed-tests",
-                     "missing-or-contradictory-completed-test-rows"}
-          if re.fullmatch(r"TEST_[A-Z_]+", gate) and path.is_file():
-              data = path.read_bytes()
-              if data.startswith(b"LAS_RUST_TEST_EVIDENCE=") and len(data) <= 4096:
-                  try:
-                      item = json.loads(data.split(b"=", 1)[1])
-                      if type(item) is dict:
-                          errors = item.get("validation_errors")
-                          rows = item.get("observed_test_rows")
-                          for error in sorted(set(errors)) if type(errors) is list else []:
-                              if error in allowed:
-                                  print("LAS_RUST_MATRIX_" + gate + "_SOURCE_REJECT=" + error)
-                          for name in ("passed", "failed", "ignored", "summary_records"):
-                              value = item.get(name)
-                              if type(value) is int and 0 <= value <= 1000000:
-                                  print("LAS_RUST_MATRIX_" + gate + "_SOURCE_" + name.upper() + "=" + str(value))
-                          if type(rows) is dict:
-                              for name in ("started", "ok", "ignored", "failed", "pending"):
-                                  value = rows.get(name)
-                                  if type(value) is int and 0 <= value <= 1000000:
-                                      print("LAS_RUST_MATRIX_" + gate + "_OBSERVED_" + name.upper() + "=" + str(value))
-                  except (ValueError, TypeError, UnicodeError):
-                      pass
-          PY
-                echo "LAS_RUST_MATRIX_TEST_RECEIPT=REFUSED"
-                rc=97
-              elif ! python3 -I -B - "$receipt" "$code" <<'PY'
-          import json
-          from pathlib import Path
-          import re
-          import sys
-
-          path, gate = Path(sys.argv[1]), sys.argv[2]
-          if not re.fullmatch(r"TEST_[A-Z_]+", gate) or not path.is_file():
-              raise SystemExit("ERROR: invalid native test receipt identity")
-          data = path.read_bytes()
-          prefix = b"LAS_RUST_TEST_EVIDENCE="
-          if not 0 < len(data) <= 4096 or not data.startswith(prefix) or not data.endswith(b"\n"):
-              raise SystemExit("ERROR: invalid native test receipt encoding")
-          def unique(pairs):
-              result = {}
-              for key, value in pairs:
-                  if key in result:
-                      raise ValueError("duplicate receipt key")
-                  result[key] = value
-              return result
-          result = json.loads(data[len(prefix):], object_pairs_hook=unique)
-          required = {"nonvacuous", "validation_errors", "passed", "failed", "ignored",
-                      "summary_records", "observed_test_rows", "selected_test_names"}
-          if type(result) is not dict or set(result) != required:
-              raise SystemExit("ERROR: malformed native test receipt")
-          rows = result["observed_test_rows"]
-          if type(rows) is not dict or set(rows) != {"started", "ok", "ignored", "failed", "pending"}:
-              raise SystemExit("ERROR: malformed test row census")
-          numbers = [result["passed"], result["failed"], result["ignored"], result["summary_records"]]
-          if any(type(x) is not int for x in numbers):
-              raise SystemExit("ERROR: noninteger test summary census")
-          if any(type(x) is not int for x in rows.values()):
-              raise SystemExit("ERROR: noninteger completion census")
-          if (result["nonvacuous"] is not True or result["validation_errors"] != []
-                  or result["selected_test_names"] is not None
-                  or result["passed"] < 10 or result["failed"] != 0 or result["ignored"] != 0
-                  or result["summary_records"] < 1 or rows["ok"] != result["passed"]
-                  or rows["started"] < rows["ok"] or rows["ignored"] != 0
-                  or rows["failed"] != 0 or rows["pending"] != 0):
-              raise SystemExit("ERROR: vacuous, skipped or inconsistent native test receipt")
-          print("LAS_RUST_MATRIX_" + gate + "_NONVACUOUS=PASS")
-          print("LAS_RUST_MATRIX_" + gate + "_PASSED_TESTS=" + str(result["passed"]))
-          print("LAS_RUST_MATRIX_" + gate + "_SUMMARY_GROUPS=" + str(result["summary_records"]))
-          PY
-              then
-                echo "LAS_RUST_MATRIX_TEST_REJECT_STAGE=PUBLIC_STRUCTURED_RECEIPT"
-                echo "LAS_RUST_MATRIX_TEST_RECEIPT=REFUSED"
+              mode=suite
+              if [[ "$code" == TEST_MEASUREMENT_RELEASE ]]; then mode=release-measurement; fi
+              receipt="$RUNNER_TEMP/private-native-suite-policy.log"
+              if python3 -I -B tools/verification/canonical_rust_suite_policy.py --mode "$mode" "$log" >"$receipt" 2>&1 &&
+                 grep -Fx 'LAS_NATIVE_SUITE_RECEIPT=PASS' "$receipt" >/dev/null; then
+                echo "LAS_RUST_MATRIX_NATIVE_SUITE_POLICY=PASS"
+              else
+                echo "LAS_RUST_MATRIX_NATIVE_SUITE_POLICY=REFUSED"
                 rc=97
               fi
+              echo "LAS_RUST_MATRIX_NATIVE_SUITE_RECEIPT_SHA256=$(sha256sum "$receipt" | awk '{print $1}')"
               rm -f "$receipt"
             fi
             echo "LAS_RUST_MATRIX_${code}_RC=$rc"
@@ -216,5 +152,6 @@ jobs:
           run_gate TEST_ALL env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --all-features --all-targets -- --test-threads=1
           run_gate TEST_RELEASE_DEFAULT env RUSTFLAGS=-Dwarnings cargo +1.98.1 test --locked --release --lib -- --test-threads=1
           run_gate TEST_RELEASE_ALL env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --release --all-features --lib -- --test-threads=1
+          run_gate TEST_MEASUREMENT_RELEASE env RUSTFLAGS=-Dwarnings GPRBUILD="$GPRBUILD" cargo +1.98.1 test --locked --release --all-features --lib "$test_name" -- --exact --ignored --test-threads=1 --nocapture
           echo "LAS_RUST_MATRIX_FAIL_COUNT=$failed"
           test "$failed" -eq 0
