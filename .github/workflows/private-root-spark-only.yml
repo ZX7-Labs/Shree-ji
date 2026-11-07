@@ -5,9 +5,15 @@ on:
     branches: [main]
     paths:
       - "RUN_ROOT_SPARK_ONLY"
+      - ".github/workflows/private-root-spark-only.yml"
 
 permissions:
   contents: read
+
+env:
+  TARGET_REF_HASH: 6c2920c58a71643d7846b5751eff97784d3fee374a43e36da8201bd97cdaafcf
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 748a0995e144d97fe282b68aa3dc88c2e7aedbc3e85976a326d12114b329066c
+  EXPECTED_PRIVATE_TREE_PROOF: 6145fd718b21e11e2d817068ad96a61c5a745976d1a6f02a6513a42180d84afd
 
 jobs:
   prove:
@@ -29,14 +35,33 @@ jobs:
           git init -q
           git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
           auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
-          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin refs/heads/work/root-formal-clean-candidate
-          git checkout -q --detach FETCH_HEAD
-          actual="$(git rev-parse HEAD)"
+          # Only an opaque branch identity and exact immutable revision are public.
+          refs="$RUNNER_TEMP/private-heads"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$refs"
+          matched_ref=""
+          while read -r _sha ref; do
+            ref_hash="$(printf '%s' "$ref" | sha256sum | awk '{print $1}')"
+            if [[ "$ref_hash" == "$TARGET_REF_HASH" ]]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+            fi
+          done < "$refs"
+          rm -f "$refs"
+          test -n "$matched_ref"
+          echo "::add-mask::$matched_ref"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref"
+          actual="$(git rev-parse FETCH_HEAD)"
           echo "::add-mask::$actual"
-          printf '%s' "$actual" > "$RUNNER_TEMP/private_snapshot_sha"
           proof="$(printf '%s' "$actual" | sha256sum | awk '{print $1}')"
+          test "$proof" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
+          git checkout -q --detach "$actual"
+          test "$(git rev-parse HEAD)" = "$actual"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain --untracked-files=all)"
           echo "LAS_SPARK_ONLY_SNAPSHOT_PROOF=$proof"
-          unset PRIVATE_TOKEN auth
+          unset PRIVATE_TOKEN auth matched_ref actual tree _sha ref ref_hash
 
       - name: Run exact Root SPARK gate
         shell: bash
@@ -112,3 +137,4 @@ jobs:
             echo "LAS_SPARK_ONLY_ICE=NO"
           fi
           echo "LAS_SPARK_ONLY_LOG_SHA256=$(sha256sum "$RUNNER_TEMP/spark.log" | awk '{print $1}')"
+          exit "$rc"
