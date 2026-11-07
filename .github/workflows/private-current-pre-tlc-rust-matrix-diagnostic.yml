@@ -102,6 +102,42 @@ jobs:
                 echo "LAS_RUST_MATRIX_TEST_VERIFIER_IDENTITY=REFUSED"
                 rc=97
               elif ! python3 -I -B "$verifier" "$log" >"$receipt" 2>/dev/null; then
+                # Diagnose only the *shape* of the source-owned refusal.
+                # Do not print private test names, paths, stderr or raw log.
+                echo "LAS_RUST_MATRIX_TEST_REJECT_STAGE=CANONICAL"
+                python3 -I -B - "$receipt" "$code" <<'PY'
+          import json
+          from pathlib import Path
+          import re
+          import sys
+
+          path, gate = Path(sys.argv[1]), sys.argv[2]
+          allowed = {"missing-or-malformed-libtest-summary",
+                     "zero-passing-or-failed-tests",
+                     "missing-or-contradictory-completed-test-rows"}
+          if re.fullmatch(r"TEST_[A-Z_]+", gate) and path.is_file():
+              data = path.read_bytes()
+              if data.startswith(b"LAS_RUST_TEST_EVIDENCE=") and len(data) <= 4096:
+                  try:
+                      item = json.loads(data.split(b"=", 1)[1])
+                      if type(item) is dict:
+                          errors = item.get("validation_errors")
+                          rows = item.get("observed_test_rows")
+                          for error in sorted(set(errors)) if type(errors) is list else []:
+                              if error in allowed:
+                                  print("LAS_RUST_MATRIX_" + gate + "_SOURCE_REJECT=" + error)
+                          for name in ("passed", "failed", "ignored", "summary_records"):
+                              value = item.get(name)
+                              if type(value) is int and 0 <= value <= 1000000:
+                                  print("LAS_RUST_MATRIX_" + gate + "_SOURCE_" + name.upper() + "=" + str(value))
+                          if type(rows) is dict:
+                              for name in ("started", "ok", "ignored", "failed", "pending"):
+                                  value = rows.get(name)
+                                  if type(value) is int and 0 <= value <= 1000000:
+                                      print("LAS_RUST_MATRIX_" + gate + "_OBSERVED_" + name.upper() + "=" + str(value))
+                  except (ValueError, TypeError, UnicodeError):
+                      pass
+          PY
                 echo "LAS_RUST_MATRIX_TEST_RECEIPT=REFUSED"
                 rc=97
               elif ! python3 -I -B - "$receipt" "$code" <<'PY'
@@ -149,6 +185,7 @@ jobs:
           print("LAS_RUST_MATRIX_" + gate + "_SUMMARY_GROUPS=" + str(result["summary_records"]))
           PY
               then
+                echo "LAS_RUST_MATRIX_TEST_REJECT_STAGE=PUBLIC_STRUCTURED_RECEIPT"
                 echo "LAS_RUST_MATRIX_TEST_RECEIPT=REFUSED"
                 rc=97
               fi
