@@ -16,6 +16,7 @@ concurrency:
 env:
   DIAG_RSA_PUB_B64: LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUlJQm9qQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FZOEFNSUlCaWdLQ0FZRUFvREZvQVpUYUFhRm1hOEdqMElLMQprWTc2MHptV2RReWxuOUNNSXlScGUreGh0SVgrWlcvdjBCcGQ3UGljdkpvVnlJajVPTStRTUlVTGRxdURueW1PCk5pSzVzNXBkVHliNXI0NVZ3Z3Q1T2ppc2JDdFUwa1VqZ2xwL1VPaXFtNEZWdjk3aUJ2NXJXZXVnS2c0NmlQWVgKTGI4Nnd4bWJZRXNtVUdNc1BsOHV6aTBsdGtoTW16QmdOR1pucnpRV1AveUdlTW1TaDM5MFZkZ3VHVnBtc3RtcgphTlcxcGJ0RU5ibkI1dDQzVi92c1UzMm4yQzZGWnFMQ1pNR1hDTWZUSXgxTVc1QTJvM213UTUwMXB1NitZS0FuCnRRYlU3a3BMdktXbnZlUHIvcVh6aE5ENW04bFY3RFJ6QUozcEpxWkFPOE5UVEV0OEdLRDJzWERXNFY5M1FHMTcKZ0M3VEVabW0zZEtNKy9BeEZ6NndoZUE2blV1RVRSTlVISFFqUi9RaUsvQldkbnZ3QjJBWExKbWFsQkcrZ05MUgpERG1xRWFpYklZaFVvc3RXaEgzdng4OVlqVFgvL2lsRmtnckViMzhYSmZMaDczbWVwZnh0bDl5SWpLQlltNzdGCnlCclNjejRwcVFRcGltbFZkZWZhckl1ak56d0VuSXFKVW1ib0hPNkNWcFpKQWdNQkFBRT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg==
   DIAG_RSA_PUB_SHA256: 09dd314ef0de438c41b3e841274ef58e71f2acc658c0ad58294fce668ed3feba
+  EXPECTED_PRIVATE_TREE_PROOF: 6145fd718b21e11e2d817068ad96a61c5a745976d1a6f02a6513a42180d84afd
 
 jobs:
   tlc:
@@ -101,6 +102,10 @@ jobs:
           actual="$(git rev-parse HEAD)"
           echo "::add-mask::$actual"
           test "$actual" = "$resolved_sha"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain --untracked-files=all)"
           proof="$(printf '%s' "$actual" | sha256sum | awk '{print $1}')"
           test "$proof" = "$EXPECTED_PRIVATE_SNAPSHOT_PROOF"
           echo "LAS_TLC_SNAPSHOT_PROOF=$proof"
@@ -118,20 +123,24 @@ jobs:
 
           python3 - tools/verify_codespaces_all.sh "$RUNNER_TEMP/map.py" "$RUNNER_TEMP/run-fn.sh" <<'PY'
           from pathlib import Path
-          import re, sys
-          src = Path(sys.argv[1]).read_text(encoding="utf-8")
-          map_match = re.search(
-              r'python3 - "\$ROOT" > "\$TLC_MAP" <<\'PY\'\n(.*?)\nPY\n\nrun_tlc_profile\(\) \{',
-              src, re.S)
-          if not map_match:
-              raise SystemExit("canonical TLC map generator not found")
-          Path(sys.argv[2]).write_text(map_match.group(1) + "\n", encoding="utf-8")
-          fn_match = re.search(
-              r'(run_tlc_profile\(\) \{.*?\n\})\n\nwhile IFS=\$\'\\t\' read -r cfg tla deadlock expectation; do',
-              src, re.S)
-          if not fn_match:
-              raise SystemExit("canonical TLC runner not found")
-          runner = fn_match.group(1)
+          import sys
+
+          source = Path(sys.argv[1]).read_text(encoding="utf-8")
+          map_head = 'if ! python3 - "$ROOT" > "$TLC_MAP.pending" <<' + "'PY'\n"
+          map_tail = '\nPY\nthen\n  echo "ERROR: required canonical TLC map generation failed"'
+          runner_head = '\nrun_tlc_profile() {\n'
+          runner_tail = "\nwhile IFS=$'\\t' read -r cfg tla deadlock expectation; do"
+          if (source.count(map_head) != 1 or source.count(map_tail) != 1
+                  or source.count(runner_head) != 1 or source.count(runner_tail) != 1):
+              raise SystemExit("exact canonical profile source has drifted")
+          map_body = source.split(map_head, 1)[1].split(map_tail, 1)[0]
+          runner = runner_head[1:] + source.split(runner_head, 1)[1].split(runner_tail, 1)[0]
+          if (runner.count('run_tlc_profile() {') != 1
+                  or runner.count('tlc_profile_log_path() {') != 1
+                  or '  local args=(-workers auto -lncheck final -fp 0)' not in runner
+                  or not runner.rstrip().endswith('}')):
+              raise SystemExit("exact canonical TLC execution boundary has drifted")
+          Path(sys.argv[2]).write_text(map_body + "\n", encoding="utf-8")
           Path(sys.argv[3]).write_text(runner + "\n", encoding="utf-8")
           PY
           grep -Fx '  local args=(-workers auto -lncheck final -fp 0)' "$RUNNER_TEMP/run-fn.sh" >/dev/null
@@ -140,6 +149,18 @@ jobs:
           python3 "$RUNNER_TEMP/map.py" "$ROOT" > "$TLC_MAP"
           count="$(wc -l < "$TLC_MAP" | tr -d ' ')"
           echo "LAS_TLC_PROFILE_COUNT=$count"
+          # Independent exact tree census for the reviewed snapshot: 207
+          # formal source configurations including 12 intentional negatives.
+          python3 - "$TLC_MAP" <<'PY'
+          from pathlib import Path
+          import sys
+          rows = Path(sys.argv[1]).read_bytes().splitlines()
+          if len(rows) != 207 or any(len(row.split(b"\t")) != 4 for row in rows):
+              raise SystemExit("canonical profile census mismatch")
+          if sum(bool(row.split(b"\t")[3]) for row in rows) != 12:
+              raise SystemExit("canonical negative-profile census mismatch")
+          print("LAS_TLC_EXPECTED_NEGATIVE_COUNT=12")
+          PY
           test "$count" -gt 0
           test "$TARGET_INDEX" -ge 0
           test "$TARGET_INDEX" -lt "$count"
