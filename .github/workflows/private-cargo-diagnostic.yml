@@ -22,10 +22,13 @@ jobs:
           test -s RUN_CARGO_DIAGNOSTIC
           ref_hash="$(awk -F= '$1=="TARGET_REF_HASH"{print $2}' RUN_CARGO_DIAGNOSTIC)"
           proof="$(awk -F= '$1=="EXPECTED_PRIVATE_SNAPSHOT_PROOF"{print $2}' RUN_CARGO_DIAGNOSTIC)"
+          feature_mode="$(awk -F= '$1=="FEATURE_MODE"{print $2}' RUN_CARGO_DIAGNOSTIC)"
           [[ "$ref_hash" =~ ^[0-9a-f]{64}$ ]]
           [[ "$proof" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$feature_mode" == "default" || "$feature_mode" == "all" ]]
           echo "TARGET_REF_HASH=$ref_hash" >> "$GITHUB_ENV"
           echo "EXPECTED_PRIVATE_SNAPSHOT_PROOF=$proof" >> "$GITHUB_ENV"
+          echo "FEATURE_MODE=$feature_mode" >> "$GITHUB_ENV"
 
       - name: Checkout exact hidden private revision
         shell: bash
@@ -78,10 +81,13 @@ jobs:
           cd "$RUNNER_TEMP/private-target"
           rustup toolchain install 1.98.1 --profile minimal
           json="$RUNNER_TEMP/cargo.jsonl"
+          feature_args=()
+          if [[ "$FEATURE_MODE" == "all" ]]; then feature_args=(--all-features); fi
           set +e
-          RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --all-targets --message-format=json >"$json" 2>/dev/null
+          RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --all-targets "${feature_args[@]}" --message-format=json >"$json" 2>/dev/null
           rc=$?
           set -e
+          echo "LAS_DIAG_FEATURE_MODE=$FEATURE_MODE"
           echo "LAS_DIAG_CARGO_RC=$rc"
           python3 - "$json" "$RUNNER_TEMP/private-target" <<'PY'
           import hashlib, json, os, re, sys
