@@ -10,9 +10,9 @@ permissions:
   contents: read
 
 env:
-  REQUEST_MARKER: verify-restored-non-root-promotion-boundary
-  TARGET_REF_HASH: e9a03e2b78968bace8bffb3fec4263ef49768b71148a8bf8b8f809842022b361
-  EXPECTED_PRIVATE_SNAPSHOT_PROOF: 45418b1dd926f2bb7c0ba5a6d668cc894b98d791351431625ee7732ae5d735b0
+  REQUEST_MARKER: private-opaque-candidate-check-20261107
+  TARGET_REF_HASH: 187706c8bacc8e66ab1c132b2ad9b40db3283d1ccd2d4921cc645f251724de4c
+  EXPECTED_PRIVATE_SNAPSHOT_PROOF: ab273a39497617482e58bee3afd7f745fccea4721f2b3679171aed4d5b141eaf
 
 jobs:
   targeted:
