@@ -184,7 +184,7 @@ jobs:
             echo "LAS_EDC_SEPARATION_FILTER_RC=$separation_rc"
           fi
           exit "$rc"
-- name: Check strict private Clippy
+      - name: Check strict private Clippy
         shell: bash
         run: |
           set -euo pipefail
