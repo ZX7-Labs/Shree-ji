@@ -208,11 +208,23 @@ jobs:
               'run_tlc_profile "$cfg" "$tla" "$deadlock" "$expectation"' \
               'test "$FAIL" -eq 0' \
               > "$RUNNER_TEMP/probe-run.sh"
-            bash "$RUNNER_TEMP/probe-run.sh" \
+            # The GitHub job has a 180-minute hard deadline. Terminate
+            # TLC under a smaller budget (165 minutes) so the same job has
+            # enough time to encrypt and upload an honest *failed* partial
+            # transcript. This does not make unfinished model checking PASS.
+            command -v timeout >/dev/null
+            timeout --signal=TERM --kill-after=30s 9900s \
+              bash "$RUNNER_TEMP/probe-run.sh" \
               "$ROOT" "$RUNNER_TEMP" "$cfg" "$tla" "$deadlock" "$expectation"
           ) >"$log" 2>&1
           rc=$?
           set -e
+          # 124 means the inner timeout expired. 137 may also be OOM or
+          # external SIGKILL; it must not be misclassified as a timeout.
+          echo "LAS_TLC_INNER_EXIT=$rc"
+          if [[ "$rc" -eq 124 ]]; then
+            echo "LAS_TLC_INNER_BUDGET_EXHAUSTED=TRUE"
+          fi
 
           printf '%s' "$DIAG_RSA_PUB_B64" | base64 -d > "$RUNNER_TEMP/diag-public.pem"
           test "$(sha256sum "$RUNNER_TEMP/diag-public.pem" | awk '{print $1}')" = "$DIAG_RSA_PUB_SHA256"
