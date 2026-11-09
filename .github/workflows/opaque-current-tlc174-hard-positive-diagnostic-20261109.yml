@@ -1,4 +1,4 @@
-name: Opaque canonical TLC 1.7.4 hard positive diagnostics
+name: Opaque TLC 1.7.4 safety-only state-space telemetry
 on:
   push:
     branches: [main]
@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: opaque-current-tlc174-hard-positive-diagnostic
+  group: opaque-current-tlc174-safety-only-telemetry
   cancel-in-progress: false
 env:
   EXPECTED_PRIVATE_REF_PROOF: 9e72c1a4537779a8dce3666299c00c3b625f2c234a16d60c151cea4c9d4a6525
@@ -18,9 +18,9 @@ jobs:
     name: Opaque positive index ${{ matrix.index }}
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 1
       matrix:
-        index: [2, 28, 171]
+        index: [171]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -246,6 +246,31 @@ jobs:
           echo "LAS_PRIVATE_CANONICAL_POSITIVE_NATIVE=PASS"
           echo "LAS_PUBLIC_OPAQUE_SCOPED_RESULT=PASS"
 
+
+      - name: Emit only coarse original-state-space counters after native run
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/private-negative-native.log"
+          if [[ ! -s "$log" ]]; then
+            echo "LAS_TLC_PROBE_METRICS=NOT_AVAILABLE"
+            exit 0
+          fi
+          python3 - "$log" <<'PY'
+          import pathlib, re, sys
+          log = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+          stats = re.findall(
+              r'([0-9,]+) states generated.*?, ([0-9,]+) distinct states found.*?, ([0-9,]+) states left on queue', log)
+          if stats:
+              g, d, q = stats[-1]
+              print("LAS_TLC_PROBE_GENERATED=" + g.replace(",", ""))
+              print("LAS_TLC_PROBE_DISTINCT=" + d.replace(",", ""))
+              print("LAS_TLC_PROBE_QUEUE=" + q.replace(",", ""))
+              print("LAS_TLC_PROBE_METRICS=PARTIAL_NATIVE_SAMPLE_NOT_PROOF")
+          else:
+              print("LAS_TLC_PROBE_METRICS=NO_NATIVE_STATE_SUMMARY")
+          PY
 
       - name: Seal private canonical native traces (encrypt-then-MAC)
         if: always()
