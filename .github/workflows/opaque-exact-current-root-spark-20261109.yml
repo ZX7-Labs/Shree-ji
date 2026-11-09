@@ -205,7 +205,18 @@ jobs:
           try:
               total,runtime,contracts,justified,unproved=read_summary(raw_bytes.decode("utf-8"))
           except (ValueError,UnicodeError) as exc:
+              # Exactly the parser's own reason and table shape, never private
+              # source paths, units, user code or raw GNATprove text.
               print("LAS_SPARK_CENSUS=INCOMPLETE_OR_UNPARSEABLE")
+              print("LAS_SPARK_CENSUS_PARSE_CLASS=" + str(exc) if isinstance(exc, ValueError)
+                    else "LAS_SPARK_CENSUS_PARSE_CLASS=INVALID_ENCODING")
+              lines=raw_bytes.decode("utf-8","replace").splitlines()
+              print("LAS_SPARK_REPORT_HEADER_CANDIDATES=" + str(sum("SPARK Analysis results" in x for x in lines)))
+              for name in ("Total","Run-time Checks","Functional Contracts","Assertions"):
+                  matches=[x for x in lines if x.strip().startswith(name) and (len(x.strip())==len(name) or x.strip()[len(name)].isspace())]
+                  widths=[len(re.split(r"\s{2,}",x.strip())) for x in matches]
+                  print("LAS_SPARK_REPORT_"+name.upper().replace(" ","_").replace("-","_")+"_ROWS="+str(len(matches)))
+                  print("LAS_SPARK_REPORT_"+name.upper().replace(" ","_").replace("-","_")+"_COLS="+",".join(str(x) for x in widths[:4]))
               raise SystemExit(1) from exc
           print("LAS_SPARK_CENSUS_TOTAL=" + str(total))
           print("LAS_SPARK_CENSUS_RUNTIME=" + str(runtime))

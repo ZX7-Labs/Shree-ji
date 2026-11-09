@@ -248,19 +248,10 @@ jobs:
               echo "LAS_ROOT_PERF_${kind}=FAIL_OR_INCOMPLETE"
               exit 1
             fi
-            python3 -I -B - "$log" "$target" <<'PY'
-          import pathlib, re, sys
-          raw = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8",errors="replace")
-          target = sys.argv[2]
-          if not re.search(r"(?m)^running 1 test\s*$",raw):
-              raise SystemExit("LAS_ROOT_NATIVE_TEST=VACUOUS_OR_AMBIGUOUS")
-          if not re.search(r"(?m)^test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured;",raw):
-              raise SystemExit("LAS_ROOT_NATIVE_TEST=FAILED_OR_SKIPPED")
-          if not re.search(r"(?m)^test "+re.escape(target)+r" \.\.\. ok$",raw):
-              raise SystemExit("LAS_ROOT_NATIVE_TEST=WRONG_TARGET")
-          if "p95_" in target and not re.search(r"LAS_ROOT_ADAPTER_BENCH[\t ]",raw):
-              raise SystemExit("LAS_ROOT_NATIVE_TEST=MEASUREMENT_MISSING")
-          PY
+            if ! python3 -I -B tools/verification/canonical_rust_test_evidence.py "$log" --expected-test "$target" >"$RUNNER_TEMP/root-native-canonical-${kind}-private.log" 2>&1; then
+              echo "LAS_ROOT_NATIVE_TEST=SOURCE_OWNED_NONVACUITY_REJECT"
+              exit 1
+            fi
             echo "LAS_ROOT_NATIVE_${kind^^}=PASS"
           done
           test -z "$(git status --porcelain --untracked-files=all)"
