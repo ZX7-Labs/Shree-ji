@@ -39,10 +39,10 @@ jobs:
           EXTENDS Integers
           VARIABLE x
           Init == x = 0
-          Next == /\ x < 2000000
+          Next == /\ x < 10000000
                   /\ x' = x + 1
           Spec == Init /\ [][Next]_x
-          TypeOK == x \in 0..2000000
+          TypeOK == x \in 0..10000000
           ====================================================
           TLA
           cat > ResumeProbe.cfg <<'CFG'
@@ -103,8 +103,8 @@ jobs:
               if not matches:
                   raise SystemExit("missing TLC terminal state-space counters")
               generated,distinct,queue=(int(x.replace(",","")) for x in matches[-1])
-              if generated<2000001 or distinct!=2000001 or queue!=0:
-                  raise SystemExit("not a complete 2,000,001-state graph")
+              if generated<10000001 or distinct!=10000001 or queue!=0:
+                  raise SystemExit("not a complete 10,000,001-state graph")
               out.append((generated,distinct,queue))
           if out[0]!=out[1]:
               raise SystemExit("recovered and direct TLC terminal counters differ")
