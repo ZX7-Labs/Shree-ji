@@ -126,6 +126,25 @@ def audit(directory,manifest):
     original=baseline(manifest.read_bytes())
     candidate=collect(directory)
     unchanged,debt,changed,removed,denied=evaluate(original,candidate)
+    # Original source-backed negative controls, without executing a legacy workflow.
+    # A byte-level mutation of any known unsafe old workflow must not retain
+    # grandfather privilege and must be denied by the active risk classifier.
+    original_negative_paths=(
+        ".github/workflows/private-targeted-format.yml",
+        ".github/workflows/private-linux-guarded-first-frame-apply.yml",
+        ".github/workflows/private-current-runtime-hardening-20261014.yml",
+    )
+    for original_path in original_negative_paths:
+        require(original_path in original and original_path in candidate,
+                "missing actual historical legacy negative fixture")
+        require(original[original_path]==gitsha(candidate[original_path]),
+                "original legacy fixture identity drift")
+        mutation=candidate[original_path]+b"\n# INERT_CANARY_BYTE_MUTATION\n"
+        _,_,_,_,mutation_denied=evaluate(
+            {original_path:original[original_path]}, {original_path:mutation})
+        require(original_path in mutation_denied,
+                "real legacy mutation was incorrectly granted exemption")
+    print("LAS_DELTA_REAL_LEGACY_MUTATION_NEGATIVES="+str(len(original_negative_paths)))
     print("LAS_DELTA_BASELINE_FILES="+str(len(original)))
     print("LAS_DELTA_CANDIDATE_FILES="+str(len(candidate)))
     print("LAS_DELTA_UNCHANGED_FILES="+str(unchanged))
