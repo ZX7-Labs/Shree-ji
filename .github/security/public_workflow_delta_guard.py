@@ -19,7 +19,7 @@ PATH=re.compile(r"\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml\Z")
 SHA=re.compile(r"[a-f0-9]{40}\Z")
 EXPLICIT_READ=re.compile(r"(?m)^permissions:\s*\n\s+contents:\s*read\s*(?:\n|$)")
 TRIGGER=re.compile(r"(?m)^on:\s*(?:\n|$)")
-USE=re.compile(r"(?m)^\s*uses:\s*(\S+)")
+USE=re.compile(r"(?m)^\s*(?:-\s*)?uses:\s*(\S+)")
 PINNED_USE=re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[a-f0-9]{40}\Z")
 DENY=(
  ("WRITE_CREDENTIAL",re.compile(r"\b(?:PRIVATE_WRITE_TOKEN|[A-Z0-9_]*PRIVATE_[A-Z0-9_]*WRITE[A-Z0-9_]*|[A-Z0-9_]*WRITE_PAT[A-Z0-9_]*)\b")),
@@ -29,7 +29,7 @@ DENY=(
  ("GH_MUTATION",re.compile(r"\bgh\s+(?:pr\s+merge|release\s+create|workflow\s+run|issue\s+(?:close|create)|repo\s+(?:delete|create)|api\b[^\n]{0,200}(?:-X|--method)\s+(?:POST|PATCH|PUT|DELETE))\b",re.I)),
  ("CURL_WRITE",re.compile(r"\bcurl\b[^\n]{0,260}(?:-X|--request)\s+(?:POST|PATCH|PUT|DELETE)\b",re.I)),
  ("PRIVILEGED_EVENT",re.compile(r"(?m)^\s*(?:pull_request_target|workflow_run|repository_dispatch|workflow_call):\s*(?:\n|$)",re.I)),
- ("DYNAMIC_ACTION",re.compile(r"(?m)^\s*uses:\s*(?:actions/github-script|docker://)",re.I)),
+ ("DYNAMIC_ACTION",re.compile(r"(?m)^\s*(?:-\s*)?uses:\s*(?:actions/github-script|docker://)",re.I)),
 )
 class Denied(ValueError):
     pass
