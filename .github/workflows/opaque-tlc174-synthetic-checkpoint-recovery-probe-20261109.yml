@@ -109,7 +109,7 @@ jobs:
             exit 1
           fi
           checkpoint_ok=0
-          for attempt in $(seq 1 25); do
+          for attempt in $(seq 1 105); do
             if grep -Eiq 'checkpoint.*(complete|finished|writ|successful|done)' "$root/interrupt.log" && \
                 [[ "$(find "$root/state" -type f | wc -l)" -gt 1 ]]; then
               checkpoint_ok=1
@@ -134,13 +134,18 @@ jobs:
             echo "LAS_SYNTH_INTERRUPTED=INCONCLUSIVE_FINISHED"
             exit 1
           fi
+          checkpointdir="$(find "$root/state" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          if [[ -z "$checkpointdir" || ! -d "$checkpointdir" ]]; then
+            echo "LAS_SYNTH_CHECKPOINT_DIRECTORY=MISSING"
+            exit 1
+          fi
           echo "LAS_SYNTH_JMX_CHECKPOINT=CREATED"
           cd "$root/original"
           set +e
           timeout --signal=TERM --kill-after=5s 100s \
             java -XX:+UseParallelGC -Xmx1536m -jar "$RUNNER_TEMP/tla2tools.jar" \
             -workers 1 -fp 0 -lncheck final -checkpoint 1 \
-            -recover "$root/state" -config ResumeProbe.cfg ResumeProbe >"$root/recover.log" 2>&1
+            -recover "$checkpointdir" -config ResumeProbe.cfg ResumeProbe >"$root/recover.log" 2>&1
           recover_rc=$?
           set -e
           if [[ "$recover_rc" -ne 0 ]]; then
