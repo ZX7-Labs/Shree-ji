@@ -49,6 +49,25 @@ def inventory(root):
                 raise ValueError("unbounded source inventory")
     return items
 
+def trusted_guard_bootstrap(path, old, new, markers):
+    """Only the audited initial installation may define a PR-target checker.
+
+    A changed existing guard is NOT excepted, even if all sentinels remain.
+    This is a source pattern check, not proof of branch protection.
+    """
+    return (
+        old is None
+        and path==".github/workflows/opaque-public-controller-new-authority-guard-20261109.yml"
+        and markers==("PR_TARGET",)
+        and "permissions:\n  contents: read" in new
+        and new.count("persist-credentials: false")==2
+        and new.count("actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683")==2
+        and 'checker="baseline/.github/security/public_controller_change_gate.py"' in new
+        and 'test -f "$checker"' in new
+        and '"$checker" --baseline baseline --candidate candidate' in new
+        and "refs/pull/{0}/merge" in new
+    )
+
 def analyze(before,after):
     denied=[]
     added=changed=deleted=0
@@ -80,9 +99,10 @@ def analyze(before,after):
                 continue
             current_rules=flags(new)
             old_rules=flags(prior)
-            if current_rules:
-                # A risky legacy workflow may only be edited when ALL detected
-                # risk indicators are removed, not while its mutation path lives.
+            if current_rules and not trusted_guard_bootstrap(path,old,new,current_rules):
+                # Legacy workflows may only be edited if all detected risky
+                # markers are removed. The initial trusted-base guard is a
+                # narrowly audited exception; edits to it remain forbidden.
                 denied.append("NEW_OR_STILL_PRESENT_WORKFLOW_AUTHORITY")
             elif old_rules:
                 pass  # exact risk-removing replacement, still review required
@@ -140,6 +160,19 @@ def self_test():
         ("alter security script", {**old,".github/security/existing.py":b"changed"},False),
         ("new curl POST", {**old,".github/workflows/new.yml":b"run: curl -X POST https://example.invalid\n"},False),
         ("new PR target", {**old,".github/workflows/new.yml":b"on:\n  pull_request_target:\n"},False),
+        ("fake trusted guard", {**old,
+            ".github/workflows/opaque-public-controller-new-authority-guard-20261109.yml":
+            b"on:\n  pull_request_target:\n"},False),
+        ("true trusted guard bootstrap", {**old,
+            ".github/workflows/opaque-public-controller-new-authority-guard-20261109.yml":
+            (b"on:\n  pull_request_target:\npermissions:\n  contents: read\n"
+             b"uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683\n"
+             b"uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683\n"
+             b"persist-credentials: false\npersist-credentials: false\n"
+             b'checker="baseline/.github/security/public_controller_change_gate.py"\n'
+             b'test -f "$checker"\n'
+             b'python3 "$checker" --baseline baseline --candidate candidate\n'
+             b"refs/pull/{0}/merge\n")},True),
     )
     for name,new,want in cases:
         before={**old}
