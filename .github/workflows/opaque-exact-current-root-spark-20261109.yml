@@ -141,4 +141,80 @@ jobs:
             echo "LAS_PRIVATE_ROOT_SPARK_FULL_PROOF=FAIL_OR_INCOMPLETE"
             exit "$rc"
           fi
-          echo "LAS_PRIVATE_ROOT_SPARK_FULL_PROOF=PASS"
+          echo "LAS_PRIVATE_ROOT_SPARK_NATIVE_COMMAND=PASS"
+
+      - name: Fail-closed original GNATprove proof-obligation census
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I -B - "$RUNNER_TEMP/root-authority-proof/obj/gnatprove/gnatprove.out" <<'PY'
+          import hashlib
+          import pathlib
+          import re
+          import sys
+
+          def read_summary(raw):
+              lines = raw.splitlines()
+              headers = [i for i, line in enumerate(lines)
+                         if "SPARK Analysis results" in line and "Justified" in line and "Unproved" in line]
+              if len(headers) != 1:
+                  raise ValueError("proof summary header missing or duplicated")
+              rows = {}
+              for line in lines[headers[0]+1:headers[0]+45]:
+                  cols = re.split(r"\s{2,}", line.strip())
+                  if len(cols) != 7:
+                      continue
+                  label = cols[0]
+                  if label in ("Total", "Run-time Checks", "Functional Contracts", "Assertions",
+                               "Data Dependencies", "Initialization", "Termination"):
+                      if label in rows:
+                          raise ValueError("duplicate proof category")
+                      if not re.fullmatch(r"(?:[0-9]+|\.)", cols[1]):
+                          raise ValueError("invalid proof total")
+                      rows[label] = cols
+              if "Total" not in rows or "Run-time Checks" not in rows:
+                  raise ValueError("missing required proof categories")
+              total = int(rows["Total"][1])
+              def numeric(cell):
+                  m = re.fullmatch(r"([0-9]+|\.)\s*(?:\([0-9]+%\))?", cell)
+                  if not m:
+                      raise ValueError("unrecognized proof column")
+                  return 0 if m.group(1) == "." else int(m.group(1))
+              justified = numeric(rows["Total"][-2])
+              unproved = numeric(rows["Total"][-1])
+              runtime = numeric(rows["Run-time Checks"][1])
+              contracts = numeric(rows.get("Functional Contracts", ["Functional Contracts", "."])[1])
+              return total, runtime, contracts, justified, unproved
+
+          # Synthetic format/negative controls; no private strings in public logs.
+          header = "SPARK Analysis results        Total          Flow   Interval        Provers   Justified   Unproved\n"
+          ok = header + "Run-time Checks    4    .    .    4    .    .\nTotal    4    .    .    4    .    .\n"
+          assert read_summary(ok) == (4,4,0,0,0)
+          for broken in (ok.replace("Total    4", "Total    0"), ok.replace("4    .    .\n", "4    .    1\n")):
+              # Parse may succeed but the acceptance predicate must reject it.
+              try:
+                  t, rte, ctr, justified, unproved = read_summary(broken)
+              except ValueError:
+                  continue
+              if t > 0 and rte > 0 and justified == 0 and unproved == 0:
+                  raise AssertionError("proof fixture false-green")
+          path = pathlib.Path(sys.argv[1])
+          if not path.is_file() or path.is_symlink() or path.stat().st_size > 16_000_000:
+              raise SystemExit("LAS_SPARK_CENSUS=INCOMPLETE_REPORT")
+          raw_bytes = path.read_bytes()
+          try:
+              total,runtime,contracts,justified,unproved=read_summary(raw_bytes.decode("utf-8"))
+          except (ValueError,UnicodeError) as exc:
+              print("LAS_SPARK_CENSUS=INCOMPLETE_OR_UNPARSEABLE")
+              raise SystemExit(1) from exc
+          print("LAS_SPARK_CENSUS_TOTAL=" + str(total))
+          print("LAS_SPARK_CENSUS_RUNTIME=" + str(runtime))
+          print("LAS_SPARK_CENSUS_CONTRACTS=" + str(contracts))
+          print("LAS_SPARK_CENSUS_JUSTIFIED=" + str(justified))
+          print("LAS_SPARK_CENSUS_UNPROVED=" + str(unproved))
+          print("LAS_SPARK_CENSUS_SHA256=" + hashlib.sha256(raw_bytes).hexdigest())
+          if total <= 0 or runtime <= 0 or justified != 0 or unproved != 0:
+              raise SystemExit("LAS_SPARK_CENSUS=FAIL_NONVACUITY_OR_PROOF_DEBT")
+          print("LAS_SPARK_CENSUS=PASS")
+          PY
+          echo "LAS_PRIVATE_ROOT_SPARK_NONVACUOUS_PROOF=PASS"
