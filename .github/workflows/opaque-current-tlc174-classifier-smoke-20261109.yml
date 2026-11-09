@@ -148,4 +148,81 @@ jobs:
               echo "LAS_EXACT_CLASSIFIER_OPTIMIZED=PASS"
             fi
           done
+          echo "LAS_PUBLIC_OPAQUE_CLASSIFIER_RESULT=PASS"
+
+      - name: Run one exact private canonical expected-negative TLC model
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$GITHUB_WORKSPACE/target"
+          cd "$ROOT"
+          python3 - tools/verify_codespaces_all.sh "$RUNNER_TEMP/canonical-map.py" "$RUNNER_TEMP/canonical-fns.sh" <<'PY'
+          from pathlib import Path
+          import sys
+          source = Path(sys.argv[1]).read_text(encoding="utf-8")
+          map_head = 'if ! python3 - "$ROOT" > "$TLC_MAP.pending" <<' + "'PY'\n"
+          map_tail = '\nPY\nthen\n  echo "ERROR: required canonical TLC map generation failed"'
+          runner_head = '\nrun_tlc_profile() {\n'
+          runner_tail = "\nwhile IFS=$'\\t' read -r cfg tla deadlock expectation; do"
+          if any(source.count(x) != 1 for x in
+                 (map_head, map_tail, runner_head, runner_tail)):
+              raise SystemExit("canonical TLC source extraction boundaries changed")
+          map_body = source.split(map_head, 1)[1].split(map_tail, 1)[0]
+          runner = runner_head[1:] + source.split(runner_head, 1)[1].split(runner_tail, 1)[0]
+          if (runner.count("run_tlc_profile() {") != 1 or
+                  runner.count("tlc_profile_log_path() {") != 1 or
+                  '  local args=(-workers auto -lncheck final -fp 0)' not in runner or
+                  not runner.rstrip().endswith("}")):
+              raise SystemExit("canonical TLC runner source changed")
+          Path(sys.argv[2]).write_text(map_body + "\n", encoding="utf-8")
+          Path(sys.argv[3]).write_text(runner + "\n", encoding="utf-8")
+          PY
+          python3 "$RUNNER_TEMP/canonical-map.py" "$ROOT" >"$RUNNER_TEMP/private-map.tsv" 2>"$RUNNER_TEMP/private-map-error"
+          python3 - "$RUNNER_TEMP/private-map.tsv" <<'PY'
+          from pathlib import Path
+          import sys
+          rows = Path(sys.argv[1]).read_bytes().splitlines()
+          if len(rows) != 207 or any(len(row.split(b"\t")) != 4 for row in rows):
+              raise SystemExit("canonical model map cardinality mismatch")
+          if sum(bool(row.split(b"\t")[3]) for row in rows) != 12:
+              raise SystemExit("source-owned negative control census mismatch")
+          if not rows[22].split(b"\t")[3]:
+              raise SystemExit("chosen canonical profile is not expected-negative")
+          PY
+          line="$(sed -n '23p' "$RUNNER_TEMP/private-map.tsv")"
+          IFS=$'\t' read -r cfg tla deadlock expectation <<<"$line"
+          test -n "$cfg"
+          test -n "$tla"
+          test -n "$expectation"
+          cat >"$RUNNER_TEMP/private-negative-driver.sh" <<'SH'
+          set -euo pipefail
+          ROOT="$1"
+          RUNNER_TEMP="$2"
+          cfg="$3"
+          tla="$4"
+          deadlock="$5"
+          expectation="$6"
+          TMP="$RUNNER_TEMP/private-negative-temp"
+          TLA_JAR="$RUNNER_TEMP/tla2tools.jar"
+          PASS=0
+          FAIL=0
+          FAILED=()
+          mkdir -p "$TMP"
+          cd "$ROOT"
+          source "$RUNNER_TEMP/canonical-fns.sh"
+          run_tlc_profile "$cfg" "$tla" "$deadlock" "$expectation"
+          test "$PASS" -eq 1
+          test "$FAIL" -eq 0
+          SH
+          set +e
+          timeout --signal=TERM --kill-after=10s 240s bash "$RUNNER_TEMP/private-negative-driver.sh" "$ROOT" "$RUNNER_TEMP" "$cfg" "$tla" "$deadlock" "$expectation" >"$RUNNER_TEMP/private-negative-native.log" 2>&1
+          rc=$?
+          set -e
+          if [[ "$rc" -ne 0 ]] || ! grep -Fq 'PASS: TLC negative control detected:' "$RUNNER_TEMP/private-negative-native.log"; then
+            echo "LAS_PRIVATE_CANONICAL_NEGATIVE_NATIVE=FAIL"
+            echo "LAS_PRIVATE_CANONICAL_NEGATIVE_NATIVE_RC=$rc"
+            echo "Private native TLC diagnostic intentionally suppressed."
+            exit 1
+          fi
+          echo "LAS_PRIVATE_CANONICAL_NEGATIVE_NATIVE=PASS"
           echo "LAS_PUBLIC_OPAQUE_SCOPED_RESULT=PASS"
