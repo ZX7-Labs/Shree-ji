@@ -101,7 +101,40 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/target"
-          if ! timeout --signal=TERM --kill-after=10s 900s env RUSTFLAGS=-Dwarnings cargo +1.98.1 clippy --locked --all-targets --all-features -- -D warnings >"$RUNNER_TEMP/clippy-allfeatures-private.log" 2>&1; then
+          set +e
+          timeout --signal=TERM --kill-after=10s 900s env RUSTFLAGS=-Dwarnings cargo +1.98.1 clippy --locked --all-targets --all-features --message-format=json -- -D warnings >"$RUNNER_TEMP/clippy-allfeatures-private.jsonl" 2>"$RUNNER_TEMP/clippy-allfeatures-private.stderr"
+          rc=$?
+          set -e
+          if [[ "$rc" -ne 0 ]]; then
+            python3 -I -B - "$RUNNER_TEMP/clippy-allfeatures-private.jsonl" "$RUNNER_TEMP/clippy-allfeatures-private.stderr" "$rc" <<'PY'
+          import collections, hashlib, json, pathlib, re, sys
+          raw = pathlib.Path(sys.argv[1]).read_bytes()
+          err = pathlib.Path(sys.argv[2]).read_bytes()
+          codes = collections.Counter()
+          total = 0
+          for line in raw.splitlines():
+              try:
+                  obj = json.loads(line)
+              except (ValueError, UnicodeError):
+                  continue
+              if obj.get("reason") != "compiler-message":
+                  continue
+              diagnostic = obj.get("message") or {}
+              if diagnostic.get("level") != "error":
+                  continue
+              total += 1
+              code = diagnostic.get("code")
+              code = code.get("code") if isinstance(code, dict) else None
+              if isinstance(code, str) and re.fullmatch(r"(?:E[0-9]{4}|clippy::[a-z_0-9]{2,64}|[a-z_0-9]{2,64})", code):
+                  codes[code] += 1
+              else:
+                  codes["UNCLASSIFIED_ERROR"] += 1
+          print("LAS_RUST_ALLFEATURES_CLIPPY_RC=" + sys.argv[3])
+          print("LAS_RUST_ALLFEATURES_DIAGNOSTIC_ERROR_COUNT=" + str(total))
+          print("LAS_RUST_ALLFEATURES_DIAGNOSTIC_IDS=" + ",".join(f"{k}:{v}" for k,v in sorted(codes.items())))
+          print("LAS_RUST_ALLFEATURES_DIAGNOSTIC_STDERR_BYTES=" + str(len(err)))
+          print("LAS_RUST_ALLFEATURES_DIAGNOSTIC_SHA256=" + hashlib.sha256(raw + b"\\0" + err).hexdigest())
+          PY
             echo "LAS_RUST_ALLFEATURES_CLIPPY=FAIL_OR_INCOMPLETE"
             exit 1
           fi
