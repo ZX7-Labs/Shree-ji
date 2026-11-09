@@ -1,0 +1,34 @@
+name: Review only public verifier new-authority delta canary
+on:
+  push:
+    branches: [review/public-verifier-authority-20261109]
+    paths:
+      - '.github/security/public_workflow_delta_guard.py'
+      - '.github/security/public_workflow_baseline_20261109.tsv'
+      - '.github/workflows/opaque-public-authority-delta-canary-20261109.yml'
+permissions:
+  contents: read
+jobs:
+  delta-canary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout only public verification controller
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Test exact existing legacy debt against new authorization changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          for mode in normal optimized; do
+            if [[ "$mode" == normal ]]; then flags=(); else flags=(-O); fi
+            python3 "${flags[@]}" -I -B .github/security/public_workflow_delta_guard.py --self-test
+            python3 "${flags[@]}" -I -B .github/security/public_workflow_delta_guard.py --scan .github/workflows --manifest .github/security/public_workflow_baseline_20261109.tsv
+          done
+          echo "LAS_DELTA_NATIVE_REVIEW_CANARY=PASS"
+          echo "LAS_DELTA_PRIVATE_SOURCE_FETCH=NO"
+          echo "LAS_DELTA_CREDENTIALS_ACCESSED=NO"
+          echo "LAS_DELTA_PRODUCTION_PERMISSION=NOT_GRANTED"
