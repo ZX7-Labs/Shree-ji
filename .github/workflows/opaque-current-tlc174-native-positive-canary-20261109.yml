@@ -1,0 +1,288 @@
+name: Opaque canonical TLC 1.7.4 positive canary
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opaque-current-tlc174-native-positive-canary-20261109.yml"
+permissions:
+  contents: read
+concurrency:
+  group: opaque-current-tlc174-native-positive-canary
+  cancel-in-progress: false
+env:
+  EXPECTED_PRIVATE_REF_PROOF: 9e72c1a4537779a8dce3666299c00c3b625f2c234a16d60c151cea4c9d4a6525
+  EXPECTED_PRIVATE_HEAD_PROOF: 0ca2a0057461a7bb63c52603a2c83fd726c6b045ccf4ba699e90e47c9197c340
+  EXPECTED_PRIVATE_TREE_PROOF: 9e2bbf22fc4e9f6d72fe71b06a8755186b7a953260d2e2c66ad3bfd3292de4ec
+jobs:
+  native-positive:
+    name: Opaque positive index ${{ matrix.index }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        index: [0, 1, 3]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      TARGET_INDEX: ${{ matrix.index }}
+    steps:
+      - name: Download and validate pinned TLC 1.7.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          jar="$RUNNER_TEMP/tla2tools.jar"
+          set +e
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 4 --retry-all-errors --retry-delay 2 --connect-timeout 25 --max-time 180 --output "$jar" "https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar" >"$RUNNER_TEMP/public-curl.log" 2>&1
+          curl_rc=$?
+          if [[ "$curl_rc" -ne 0 ]]; then
+            rm -f "$jar"
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 25 --max-time 180 --output "$jar" "https://sourceforge.net/projects/tlaplus.mirror/files/v1.7.4/tla2tools.jar/download" >"$RUNNER_TEMP/public-curl-fallback.log" 2>&1
+            curl_rc=$?
+          fi
+          set -e
+          if [[ "$curl_rc" -ne 0 || ! -s "$jar" ]]; then
+            echo "LAS_TLC174_DOWNLOAD=FAIL"
+            echo "LAS_TLC174_DOWNLOAD_RC=$curl_rc"
+            exit 1
+          fi
+          echo "bee4a54f3ee3d4afc347c3240ec2d9e93b075104  $jar" | sha1sum --check --strict >/dev/null
+          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  $jar" | sha256sum --check --strict >/dev/null
+          jar tf "$jar" | grep -Fx 'tlc2/TLC.class' >/dev/null
+          echo "LAS_TLC174_PINNED_JAR=PASS"
+
+      - name: Execute a finite native TLC 1.7.4 model
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          cat > RunnerProbe.tla <<'TLA'
+          ---- MODULE RunnerProbe ----
+          EXTENDS Integers
+          VARIABLE x
+          Init == x = 0
+          Next == x' = 1 - x
+          Spec == Init /\ [][Next]_x
+          TypeOK == x \in {0, 1}
+          ====
+          TLA
+          cat > RunnerProbe.cfg <<'CFG'
+          SPECIFICATION Spec
+          INVARIANT TypeOK
+          CFG
+          set +e
+          timeout --signal=TERM --kill-after=10s 120s java -Xmx768m -cp tla2tools.jar tlc2.TLC -workers 1 -config RunnerProbe.cfg RunnerProbe >native-tlc.log 2>&1
+          native_rc=$?
+          set -e
+          if [[ "$native_rc" -ne 0 ]]; then
+            echo "LAS_TLC174_NATIVE_MODEL=FAIL"
+            echo "LAS_TLC174_NATIVE_RC=$native_rc"
+            # This is a public, synthetic two-state model with no private
+            # source or secrets, so its native diagnostic is safe to display.
+            sed -n '1,80p' native-tlc.log
+            exit 1
+          fi
+          grep -Fq 'Model checking completed. No error has been found.' native-tlc.log
+          grep -Eq 'states generated,.*states left on queue' native-tlc.log
+          grep -Fq 'Finished in ' native-tlc.log
+          echo "LAS_TLC174_NATIVE_MODEL=PASS"
+
+      - name: Read exact private revision with masked identity
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          if [[ -z "$PRIVATE_REPOSITORY" || -z "$PRIVATE_TOKEN" ]]; then
+            echo "LAS_PRIVATE_SOURCE_ACCESS=BLOCKED"
+            exit 1
+          fi
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+          root="$GITHUB_WORKSPACE/target"
+          mkdir "$root"
+          cd "$root"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          if ! git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$RUNNER_TEMP/opaque-heads" 2>"$RUNNER_TEMP/opaque-git-error"; then
+            echo "LAS_PRIVATE_SOURCE_ACCESS=BLOCKED"
+            exit 1
+          fi
+          matched_ref=""
+          matched_sha=""
+          while read -r sha ref; do
+            ref_proof="$(printf '%s' "$ref" | sha256sum | awk '{print $1}')"
+            if [[ "$ref_proof" == "$EXPECTED_PRIVATE_REF_PROOF" ]]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+              matched_sha="$sha"
+            fi
+          done <"$RUNNER_TEMP/opaque-heads"
+          rm -f "$RUNNER_TEMP/opaque-heads"
+          test -n "$matched_ref"
+          test -n "$matched_sha"
+          echo "::add-mask::$matched_ref"
+          echo "::add-mask::$matched_sha"
+          test "$(printf '%s' "$matched_sha" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_HEAD_PROOF"
+          if ! git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref" >/dev/null 2>"$RUNNER_TEMP/opaque-git-error"; then
+            echo "LAS_PRIVATE_FETCH=BLOCKED"
+            exit 1
+          fi
+          actual="$(git rev-parse FETCH_HEAD)"
+          echo "::add-mask::$actual"
+          test "$(printf '%s' "$actual" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_HEAD_PROOF"
+          git checkout -q --detach "$actual" 2>"$RUNNER_TEMP/opaque-git-error"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          echo "LAS_PRIVATE_EXACT_REVIEW=PINNED"
+
+      - name: Run exact source-owned classifier on public compute with private logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          for mode in normal optimized; do
+            log="$RUNNER_TEMP/private-classifier-$mode.log"
+            if [[ "$mode" == normal ]]; then
+              if ! timeout --signal=TERM --kill-after=5s 90s python3 -I -B tools/verification/canonical_tlc_result_classification.py -v >"$log" 2>&1; then
+                echo "LAS_EXACT_CLASSIFIER_NORMAL=FAIL"
+                exit 1
+              fi
+            else
+              if ! timeout --signal=TERM --kill-after=5s 90s python3 -O -I -B tools/verification/canonical_tlc_result_classification.py -v >"$log" 2>&1; then
+                echo "LAS_EXACT_CLASSIFIER_OPTIMIZED=FAIL"
+                exit 1
+              fi
+            fi
+            grep -q '^Ran 45 tests in ' "$log"
+            grep -Fxq 'OK' "$log"
+            if [[ "$mode" == normal ]]; then
+              echo "LAS_EXACT_CLASSIFIER_NORMAL=PASS"
+            else
+              echo "LAS_EXACT_CLASSIFIER_OPTIMIZED=PASS"
+            fi
+          done
+          echo "LAS_PUBLIC_OPAQUE_CLASSIFIER_RESULT=PASS"
+
+      - name: Run one exact private canonical expected-negative TLC model
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$GITHUB_WORKSPACE/target"
+          cd "$ROOT"
+          python3 - tools/verify_codespaces_all.sh "$RUNNER_TEMP/canonical-map.py" "$RUNNER_TEMP/canonical-fns.sh" <<'PY'
+          from pathlib import Path
+          import sys
+          source = Path(sys.argv[1]).read_text(encoding="utf-8")
+          map_head = 'if ! python3 - "$ROOT" > "$TLC_MAP.pending" <<' + "'PY'\n"
+          map_tail = '\nPY\nthen\n  echo "ERROR: required canonical TLC map generation failed"'
+          runner_head = '\nrun_tlc_profile() {\n'
+          runner_tail = "\nwhile IFS=$'\\t' read -r cfg tla deadlock expectation; do"
+          if any(source.count(x) != 1 for x in
+                 (map_head, map_tail, runner_head, runner_tail)):
+              raise SystemExit("canonical TLC source extraction boundaries changed")
+          map_body = source.split(map_head, 1)[1].split(map_tail, 1)[0]
+          runner = runner_head[1:] + source.split(runner_head, 1)[1].split(runner_tail, 1)[0]
+          if (runner.count("run_tlc_profile() {") != 1 or
+                  runner.count("tlc_profile_log_path() {") != 1 or
+                  '  local args=(-workers auto -lncheck final -fp 0)' not in runner or
+                  not runner.rstrip().endswith("}")):
+              raise SystemExit("canonical TLC runner source changed")
+          Path(sys.argv[2]).write_text(map_body + "\n", encoding="utf-8")
+          Path(sys.argv[3]).write_text(runner + "\n", encoding="utf-8")
+          PY
+          python3 "$RUNNER_TEMP/canonical-map.py" "$ROOT" >"$RUNNER_TEMP/private-map.tsv" 2>"$RUNNER_TEMP/private-map-error"
+          python3 - "$RUNNER_TEMP/private-map.tsv" "$TARGET_INDEX" <<'PY'
+          from pathlib import Path
+          import sys
+          rows = Path(sys.argv[1]).read_bytes().splitlines()
+          if len(rows) != 207 or any(len(row.split(b"\t")) != 4 for row in rows):
+              raise SystemExit("canonical model map cardinality mismatch")
+          if sum(bool(row.split(b"\t")[3]) for row in rows) != 12:
+              raise SystemExit("source-owned negative control census mismatch")
+          index = int(sys.argv[2])
+          if not (0 <= index < len(rows)) or rows[index].split(b"\t")[3]:
+              raise SystemExit("chosen canonical profile is not expected-positive")
+          PY
+          line="$(sed -n "$((TARGET_INDEX + 1))p" "$RUNNER_TEMP/private-map.tsv")"
+          IFS=$'\t' read -r cfg tla deadlock expectation <<<"$line"
+          test -n "$cfg"
+          test -n "$tla"
+          test -z "$expectation"
+          cat >"$RUNNER_TEMP/private-negative-driver.sh" <<'SH'
+          set -euo pipefail
+          ROOT="$1"
+          RUNNER_TEMP="$2"
+          cfg="$3"
+          tla="$4"
+          deadlock="$5"
+          expectation="$6"
+          TMP="$RUNNER_TEMP/private-negative-temp"
+          TLA_JAR="$RUNNER_TEMP/tla2tools.jar"
+          PASS=0
+          FAIL=0
+          FAILED=()
+          mkdir -p "$TMP"
+          cd "$ROOT"
+          source "$RUNNER_TEMP/canonical-fns.sh"
+          run_tlc_profile "$cfg" "$tla" "$deadlock" "$expectation"
+          test "$PASS" -eq 1
+          test "$FAIL" -eq 0
+          SH
+          set +e
+          timeout --signal=TERM --kill-after=10s 240s bash "$RUNNER_TEMP/private-negative-driver.sh" "$ROOT" "$RUNNER_TEMP" "$cfg" "$tla" "$deadlock" "$expectation" >"$RUNNER_TEMP/private-negative-native.log" 2>&1
+          rc=$?
+          set -e
+          if [[ "$rc" -ne 0 ]] || ! grep -Fq 'PASS: TLC: ' "$RUNNER_TEMP/private-negative-native.log"; then
+            echo "LAS_PRIVATE_CANONICAL_POSITIVE_NATIVE=FAIL"
+            echo "LAS_PRIVATE_CANONICAL_POSITIVE_NATIVE_RC=$rc"
+            echo "Private native TLC diagnostic intentionally suppressed."
+            exit 1
+          fi
+          echo "LAS_PRIVATE_CANONICAL_POSITIVE_NATIVE=PASS"
+          echo "LAS_PUBLIC_OPAQUE_SCOPED_RESULT=PASS"
+
+
+      - name: Seal private canonical native traces (encrypt-then-MAC)
+        if: always()
+        shell: bash
+        env:
+          DIAG_RSA_PUB_B64: LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUlJQm9qQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FZOEFNSUlCaWdLQ0FZRUFvREZvQVpUYUFhRm1hOEdqMElLMQprWTc2MHptV2RReWxuOUNNSXlScGUreGh0SVgrWlcvdjBCcGQ3UGljdkpvVnlJajVPTStRTUlVTGRxdURueW1PCk5pSzVzNXBkVHliNXI0NVZ3Z3Q1T2ppc2JDdFUwa1VqZ2xwL1VPaXFtNEZWdjk3aUJ2NXJXZXVnS2c0NmlQWVgKTGI4Nnd4bWJZRXNtVUdNc1BsOHV6aTBsdGtoTW16QmdOR1pucnpRV1AveUdlTW1TaDM5MFZkZ3VHVnBtc3RtcgphTlcxcGJ0RU5ibkI1dDQzVi92c1UzMm4yQzZGWnFMQ1pNR1hDTWZUSXgxTVc1QTJvM213UTUwMXB1NitZS0FuCnRRYlU3a3BMdktXbnZlUHIvcVh6aE5ENW04bFY3RFJ6QUozcEpxWkFPOE5UVEV0OEdLRDJzWERXNFY5M1FHMTcKZ0M3VEVabW0zZEtNKy9BeEZ6NndoZUE2blV1RVRSTlVISFFqUi9RaUsvQldkbnZ3QjJBWExKbWFsQkcrZ05MUgpERG1xRWFpYklZaFVvc3RXaEgzdng4OVlqVFgvL2lsRmtnckViMzhYSmZMaDczbWVwZnh0bDl5SWpLQlltNzdGCnlCclNjejRwcVFRcGltbFZkZWZhckl1ak56d0VuSXFKVW1ib0hPNkNWcFpKQWdNQkFBRT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg==
+          DIAG_RSA_PUB_SHA256: 09dd314ef0de438c41b3e841274ef58e71f2acc658c0ad58294fce668ed3feba
+        run: |
+          set -euo pipefail
+          if [[ ! -s "$RUNNER_TEMP/private-negative-native.log" ]]; then
+            echo "LAS_NATIVE_TRACE_SEAL=NOT_AVAILABLE"
+            exit 0
+          fi
+          test -d "$RUNNER_TEMP/private-negative-temp"
+          printf '%s' "$DIAG_RSA_PUB_B64" | base64 -d > "$RUNNER_TEMP/owner-public.pem"
+          test "$(sha256sum "$RUNNER_TEMP/owner-public.pem" | awk '{print $1}')" = "$DIAG_RSA_PUB_SHA256"
+          tar -C "$RUNNER_TEMP" -cf "$RUNNER_TEMP/private-native-evidence.tar" private-negative-native.log private-negative-temp private-map.tsv
+          aes_hex="$(openssl rand -hex 32)"
+          mac_hex="$(openssl rand -hex 32)"
+          iv_hex="$(openssl rand -hex 16)"
+          printf '%s%s' "$aes_hex" "$mac_hex" | xxd -r -p > "$RUNNER_TEMP/native-envelope-keys"
+          openssl enc -aes-256-cbc -K "$aes_hex" -iv "$iv_hex" -in "$RUNNER_TEMP/private-native-evidence.tar" -out "$RUNNER_TEMP/native-evidence.enc"
+          printf '%s' "$iv_hex" | xxd -r -p > "$RUNNER_TEMP/native-iv.bin"
+          cat "$RUNNER_TEMP/native-iv.bin" "$RUNNER_TEMP/native-evidence.enc" > "$RUNNER_TEMP/native-auth-material.bin"
+          openssl dgst -sha256 -mac HMAC -macopt "hexkey:$mac_hex" -binary "$RUNNER_TEMP/native-auth-material.bin" > "$RUNNER_TEMP/native-evidence.mac"
+          openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/owner-public.pem" -in "$RUNNER_TEMP/native-envelope-keys" -out "$RUNNER_TEMP/native-envelope-keys.enc" -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256
+          tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/native-evidence-ciphertext.tgz" native-evidence.enc native-evidence.mac native-iv.bin native-envelope-keys.enc
+          echo "LAS_NATIVE_TRACE_SEAL=PASS"
+          echo "LAS_NATIVE_CIPHERTEXT_SHA256=$(sha256sum "$RUNNER_TEMP/native-evidence-ciphertext.tgz" | awk '{print $1}')"
+          rm -f "$RUNNER_TEMP/private-native-evidence.tar" "$RUNNER_TEMP/native-envelope-keys" "$RUNNER_TEMP/native-auth-material.bin" "$RUNNER_TEMP/owner-public.pem"
+
+      - name: Upload encrypted native receipt only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: encrypted-positive-index-${{ matrix.index }}
+          path: ${{ runner.temp }}/native-evidence-ciphertext.tgz
+          if-no-files-found: ignore
+          retention-days: 1
+          compression-level: 0
