@@ -122,8 +122,25 @@ jobs:
           done
           if [[ "$checkpoint_ok" -ne 1 ]]; then
             echo "LAS_SYNTH_CHECKPOINT=INCOMPLETE"
-            find "$root/state" -maxdepth 2 -type f -printf '%f %s bytes\n' | head -n 20
-            grep -i 'checkpoint' "$root/interrupt.log" | tail -n 8 || true
+            # Synthetic-only diagnostics: no private source is read by this probe.
+            if kill -0 "$pid" 2>/dev/null; then
+              echo "LAS_SYNTH_CHECKPOINT_PROCESS=ALIVE"
+            else
+              echo "LAS_SYNTH_CHECKPOINT_PROCESS=EXITED"
+            fi
+            if grep -Fq 'Model checking completed. No error has been found.' "$root/interrupt.log"; then
+              echo "LAS_SYNTH_MODEL_FINISHED_BEFORE_CHECKPOINT=TRUE"
+            else
+              echo "LAS_SYNTH_MODEL_FINISHED_BEFORE_CHECKPOINT=FALSE"
+            fi
+            if grep -Fq 'LAS_SYNTH_JMX_CHECKPOINT_REQUEST=PASS' "$root/jmx.log"; then
+              echo "LAS_SYNTH_JMX_REQUEST=PASS"
+            else
+              echo "LAS_SYNTH_JMX_REQUEST=FAIL"
+              sed -n '1,22p' "$root/jmx.log" || true
+            fi
+            find "$root/state" -maxdepth 3 -type f -printf '%f %s bytes\n' | head -n 20
+            grep -Ei 'checkpoint|states generated|distinct states|finished in|model checking completed|error:' "$root/interrupt.log" | tail -n 20 || true
             exit 1
           fi
           test "$(grep -F 'LAS_SYNTH_JMX_CHECKPOINT_REQUEST=PASS' "$root/jmx.log" | wc -l)" -eq 1
