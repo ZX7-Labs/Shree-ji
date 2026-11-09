@@ -16,7 +16,7 @@ jobs:
       - name: Checkout trusted pre-change public revision, without persisted credentials
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.event.before }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || (github.ref == 'refs/heads/review/public-write-regression-gate-20261109' && '354914fa0ac1fd13895f1e3973b2c4b1a8e0fca0' || github.event.before) }}
           fetch-depth: 1
           persist-credentials: false
           path: baseline
