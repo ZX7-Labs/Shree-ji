@@ -1,0 +1,41 @@
+name: Review-only public verifier source authority inventory
+on:
+  push:
+    branches: [review/public-verifier-authority-20261109]
+    paths:
+      - '.github/security/public_workflow_boundary_audit.py'
+      - '.github/workflows/opaque-public-authority-source-audit-review-20261109.yml'
+permissions:
+  contents: read
+jobs:
+  source-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Read-only checkout of public verification controller
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Run synthetic negative controls and expected-deny full public source audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 -I -B .github/security/public_workflow_boundary_audit.py --self-test
+          python3 -O -I -B .github/security/public_workflow_boundary_audit.py --self-test
+          set +e
+          python3 -I -B .github/security/public_workflow_boundary_audit.py --scan .github/workflows
+          normal_rc=$?
+          python3 -O -I -B .github/security/public_workflow_boundary_audit.py --scan .github/workflows
+          optimized_rc=$?
+          set -e
+          if [[ "$normal_rc" -ne 3 || "$optimized_rc" -ne 3 ]]; then
+            echo "LAS_BOUNDARY_EXPECTED_DENIAL=NOT_CONFIRMED"
+            exit 1
+          fi
+          echo "LAS_BOUNDARY_EXPECTED_DENIAL=CONFIRMED"
+          echo "LAS_BOUNDARY_PUBLIC_SOURCE_ONLY=PASS"
+          echo "LAS_BOUNDARY_PRIVATE_CHECKOUT=NO"
+          echo "LAS_BOUNDARY_NATIVE_TLC_OR_SPARK_RERUN=NO"
+          echo "LAS_BOUNDARY_EFFECTIVE_ENFORCEMENT=NOT_IMPLEMENTED"
