@@ -86,26 +86,45 @@ jobs:
             exit 1
           fi
           echo "LAS_RUST_TOOLCHAIN=PINNED"
-      - name: Install native Ada Root FFI prerequisites for all-feature build
+      - name: Install canonical source-pinned Ada and SPARK toolchain via Alire
         shell: bash
         run: |
           set -euo pipefail
-          # The exact private build.rs requires gprbuild for root-ffi; never
-          # misclassify absent Ada compiler as a Clippy source warning.
-          if ! sudo apt-get update -qq >"$RUNNER_TEMP/ada-apt-private.log" 2>&1; then
-            echo "LAS_ADA_FFI_ENV=BLOCKED_PACKAGE_INDEX"
+          test "$(uname -m)" = "x86_64"
+          ALR_ZIP="$RUNNER_TEMP/alr.zip"
+          ALR_PREFIX="$RUNNER_TEMP/las-alr"
+          ALR_WS="$RUNNER_TEMP/las-alire-proof-workspace"
+          if ! curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --connect-timeout 25 --max-time 300 --silent --show-error --output "$ALR_ZIP" "https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip" >"$RUNNER_TEMP/alire-download-private.log" 2>&1; then
+            echo "LAS_ALIRE_DOWNLOAD=BLOCKED"
             exit 1
           fi
-          if ! sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gnat-13 gprbuild >>"$RUNNER_TEMP/ada-apt-private.log" 2>&1; then
-            echo "LAS_ADA_FFI_ENV=BLOCKED_INSTALL"
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $ALR_ZIP" | sha256sum --check --strict >/dev/null
+          mkdir -p "$ALR_PREFIX" "$ALR_WS"
+          unzip -q "$ALR_ZIP" -d "$ALR_PREFIX"
+          export PATH="$ALR_PREFIX/bin:$PATH"
+          echo "LAS_ALIRE_2_1_1_PINNED=PASS"
+          if ! alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1 >"$RUNNER_TEMP/alire-toolchain-private.log" 2>&1; then
+            echo "LAS_ADA_SOURCE_PINNED_TOOLCHAIN=BLOCKED"
             exit 1
           fi
-          command -v gprbuild >/dev/null
-          command -v gnatmake >/dev/null
-          gnatmake -v >"$RUNNER_TEMP/gnat-version-private.log" 2>&1
-          gprbuild --version >"$RUNNER_TEMP/gprbuild-version-private.log" 2>&1
-          dpkg-query -W gnat-13 gprbuild >"$RUNNER_TEMP/ada-package-versions-private.log" 2>&1
-          echo "LAS_ADA_FFI_ENV=PINNED_OS_FAMILY_GNAT13_GPRBUILD"
+          if ! ( cd "$ALR_WS" &&
+                 alr -n init --in-place --no-skel --lib las_verify_toolchain &&
+                 alr with gnatprove=16.1.0 &&
+                 alr exec -- gnatmake --version &&
+                 alr exec -- gprbuild --version &&
+                 alr exec -- gnatprove --version ) >"$RUNNER_TEMP/alire-proof-workspace-private.log" 2>&1; then
+            echo "LAS_ADA_SPARK_PROOF_WORKSPACE=BLOCKED"
+            exit 1
+          fi
+          cat >"$RUNNER_TEMP/gprbuild-via-alire" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$RUNNER_TEMP/las-alire-proof-workspace"
+          exec "$RUNNER_TEMP/las-alr/bin/alr" exec -- gprbuild "$@"
+          SH
+          chmod 0755 "$RUNNER_TEMP/gprbuild-via-alire"
+          printf 'GPRBUILD=%s\n' "$RUNNER_TEMP/gprbuild-via-alire" >>"$GITHUB_ENV"
+          echo "LAS_ADA_GNAT16_GPRBUILD26_GNATPROVE16=PINNED"
       - name: Canonical Rust format validation
         shell: bash
         run: |
@@ -121,118 +140,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/target"
-          # Temporary diagnostic instrument: forwards GPRBUILD arguments and exit
-          # unchanged, but retains source-owned GNAT build output only in runner
-          # ephemeral temp; not an acceptance-mode command.
-          cat >"$RUNNER_TEMP/opaque-gprbuild-logger.sh" <<'SH'
-          #!/usr/bin/env bash
-          exec /usr/bin/gprbuild "$@" >"$RUNNER_TEMP/private-gprbuild-native.log" 2>&1
-          SH
-          chmod 700 "$RUNNER_TEMP/opaque-gprbuild-logger.sh"
-          set +e
-          timeout --signal=TERM --kill-after=10s 900s env RUSTFLAGS=-Dwarnings GPRBUILD="$RUNNER_TEMP/opaque-gprbuild-logger.sh" cargo +1.98.1 check --locked --all-targets --all-features --message-format=json >"$RUNNER_TEMP/rust-check-private.jsonl" 2>"$RUNNER_TEMP/rust-check-private.stderr"
-          rc=$?
-          set -e
-          if [[ "$rc" -ne 0 ]]; then
-            python3 -I -B - "$RUNNER_TEMP/rust-check-private.jsonl" "$RUNNER_TEMP/rust-check-private.stderr" "$rc" <<'PY'
-          import collections, hashlib, json, pathlib, re, sys
-          raw = pathlib.Path(sys.argv[1]).read_bytes()
-          err = pathlib.Path(sys.argv[2]).read_bytes()
-          codes = collections.Counter()
-          errors = 0
-          for line in raw.splitlines():
-              try:
-                  item = json.loads(line)
-              except (UnicodeError, ValueError):
-                  continue
-              if item.get("reason") != "compiler-message":
-                  continue
-              diagnostic = item.get("message") or {}
-              if diagnostic.get("level") != "error":
-                  continue
-              errors += 1
-              value = diagnostic.get("code")
-              code = value.get("code") if isinstance(value, dict) else None
-              codes[code if isinstance(code,str) and re.fullmatch(r"(?:E[0-9]{4}|clippy::[a-z0-9_]{2,64}|[a-z0-9_]{2,64})",code) else "UNCLASSIFIED_ERROR"] += 1
-          safe_vocab = ("unexpected","argument","option","clippy","feature","manifest","cargo","rustc","warning","error","failed","toolchain","component","install","file","path","source","package","compile","compilation","unrecognized","unknown","invalid","lockfile","config","target","flag","workspace","not","found","subcommand","override","unstable","environment","returned","exit","dependency","permission","parse","link","duplicate","run","no","such","requires","variable","missing","build","script","gnat","gprbuild","ada")
-          words = set(re.findall(r"[a-z_][a-z0-9_-]*",err.decode("utf-8","replace").lower()))
-          print("LAS_RUST_ALLFEATURES_CHECK_RC="+sys.argv[3])
-          print("LAS_RUST_ALLFEATURES_CHECK_DIAGNOSTIC_ERROR_COUNT="+str(errors))
-          print("LAS_RUST_ALLFEATURES_CHECK_DIAGNOSTIC_IDS="+",".join(f"{k}:{v}" for k,v in sorted(codes.items())))
-          print("LAS_RUST_ALLFEATURES_CHECK_STDERR_VOCAB="+",".join(x for x in safe_vocab if x in words))
-          print("LAS_RUST_ALLFEATURES_CHECK_STDERR_BYTES="+str(len(err)))
-          print("LAS_RUST_ALLFEATURES_CHECK_DIAGNOSTIC_SHA256="+hashlib.sha256(raw+b"\\0"+err).hexdigest())
-          # Redact every private symbol, filename, path and quoted string.
-          # Public output may contain ONLY these fixed generic diagnostics.
-          public_words = set(("error failed warning compilation compile build compiler compiler-error command exit status not found no such file directory project archive missing source unit declaration package function procedure operator type mode unused never referenced imported name primitive library static gprbuild gnat ada gcc cargo environment run returned panic panicked during aborted cannot could may should require requires with from was is in at on for before after declared dependency ignored line syntax invalid unexpected expected conflicting duplicate specified unsupported no matching target missing object dependency invocation using access denied detected fatal errors warnings as treated"))
-          public_words.update(("uninitialized","initialized","elaboration","elaborate","visibility","unresolved","mismatch","discriminant","conversion","constraint","invalid","unknown","unbound","multiple","duplicate","expression","lvalue","nonstatic","type","interface","body","spec","predefined","standard","actual","formal","parameters","precondition","accessibility","cannot","use","kind","referenced","bind","binding","unrecognized","success","warning","error","out","of","range","read","write","expected","found"))
-          interesting = ("error", "warning", "failed", "panicked", "gprbuild", "gnat", "compilation")
-          shown = 0
-          for original_line in err.decode("utf-8","replace").splitlines():
-              words = re.findall(r"[a-z][a-z-]*", original_line.lower())
-              if not words or not any(w in words for w in interesting):
-                  continue
-              sanitized = [w if w in public_words else "REDACTED" for w in words]
-              collapsed = []
-              for term in sanitized:
-                  if not collapsed or term != "REDACTED" or collapsed[-1] != "REDACTED":
-                      collapsed.append(term)
-              print("LAS_RUST_ALLFEATURES_REDACTED_CLASS_" + str(shown) + "=" + " ".join(collapsed[:55]))
-              shown += 1
-              if shown >= 12:
-                  break
-          print("LAS_RUST_ALLFEATURES_REDACTED_LINE_COUNT=" + str(shown))
-          native_log = pathlib.Path(sys.argv[2]).with_name("private-gprbuild-native.log")
-          if native_log.is_file():
-              native_text = native_log.read_bytes().decode("utf-8", "replace")
-              print("LAS_RUST_ADA_NATIVE_LOG_BYTES=" + str(len(native_text.encode("utf-8"))))
-              print("LAS_RUST_ADA_NATIVE_ERROR_COUNT=" + str(len(re.findall(r"(?i)\berror\b", native_text))))
-              print("LAS_RUST_ADA_NATIVE_WARNING_COUNT=" + str(len(re.findall(r"(?i)\bwarning\b", native_text))))
-              shown_native = 0
-              for line in native_text.splitlines():
-                  tokens = re.findall(r"[a-z][a-z-]*", line.lower())
-                  if not any(t in tokens for t in ("error","warning","failed","fatal","cannot","expected")):
-                      continue
-                  safe = [w if w in public_words else "REDACTED" for w in tokens]
-                  compact = []
-                  for word in safe:
-                      if word != "REDACTED" or not compact or compact[-1] != "REDACTED":
-                          compact.append(word)
-                  print("LAS_RUST_ADA_REDACTED_CLASS_" + str(shown_native) + "=" + " ".join(compact[:60]))
-                  shown_native += 1
-                  if shown_native >= 15:
-                      break
-              print("LAS_RUST_ADA_REDACTED_LINE_COUNT=" + str(shown_native))
-              # Opaque on-host source-file index, not the private path/name.
-              # Compare indices only against the independently authenticated
-              # private Git tree in the owner's private control plane.
-              ada_files = sorted(
-                  p for p in pathlib.Path("src").rglob("*")
-                  if p.is_file() and p.suffix.lower() in (".adb", ".ads", ".gpr")
-              )
-              index = {p.name.lower(): i for i,p in enumerate(ada_files)}
-              print("LAS_RUST_ADA_SOURCE_INDEX_CENSUS=" + str(len(ada_files)))
-              emitted = set()
-              for line in native_text.splitlines():
-                  match = re.search(r"(?i)([a-z0-9_.-]+\.(?:adb|ads|gpr)):(\d+)(?::(\d+))?", line)
-                  if not match:
-                      continue
-                  file_index = index.get(match.group(1).lower())
-                  if file_index is None:
-                      continue
-                  entry = (file_index, int(match.group(2)), int(match.group(3) or 0))
-                  if entry in emitted:
-                      continue
-                  emitted.add(entry)
-                  if len(emitted) <= 16:
-                      print("LAS_RUST_ADA_SOURCE_LOCATION=" + ":".join(str(x) for x in entry))
-              print("LAS_RUST_ADA_SOURCE_LOCATION_COUNT=" + str(len(emitted)))
-
-          else:
-              print("LAS_RUST_ADA_NATIVE_LOG=MISSING")
-
-
-          PY
+          if ! timeout --signal=TERM --kill-after=10s 900s env RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --all-targets --all-features >"$RUNNER_TEMP/rust-check-private.log" 2>&1; then
             echo "LAS_RUST_ALLFEATURES_CHECK=FAIL_OR_INCOMPLETE"
             exit 1
           fi
@@ -242,48 +150,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/target"
-          set +e
-          timeout --signal=TERM --kill-after=10s 900s env RUSTFLAGS=-Dwarnings cargo +1.98.1 clippy --locked --all-targets --all-features --message-format=json -- -D warnings >"$RUNNER_TEMP/clippy-allfeatures-private.jsonl" 2>"$RUNNER_TEMP/clippy-allfeatures-private.stderr"
-          rc=$?
-          set -e
-          if [[ "$rc" -ne 0 ]]; then
-            python3 -I -B - "$RUNNER_TEMP/clippy-allfeatures-private.jsonl" "$RUNNER_TEMP/clippy-allfeatures-private.stderr" "$rc" <<'PY'
-          import collections, hashlib, json, pathlib, re, sys
-          raw = pathlib.Path(sys.argv[1]).read_bytes()
-          err = pathlib.Path(sys.argv[2]).read_bytes()
-          codes = collections.Counter()
-          total = 0
-          for line in raw.splitlines():
-              try:
-                  obj = json.loads(line)
-              except (ValueError, UnicodeError):
-                  continue
-              if obj.get("reason") != "compiler-message":
-                  continue
-              diagnostic = obj.get("message") or {}
-              if diagnostic.get("level") != "error":
-                  continue
-              total += 1
-              code = diagnostic.get("code")
-              code = code.get("code") if isinstance(code, dict) else None
-              if isinstance(code, str) and re.fullmatch(r"(?:E[0-9]{4}|clippy::[a-z_0-9]{2,64}|[a-z_0-9]{2,64})", code):
-                  codes[code] += 1
-              else:
-                  codes["UNCLASSIFIED_ERROR"] += 1
-          print("LAS_RUST_ALLFEATURES_CLIPPY_RC=" + sys.argv[3])
-          print("LAS_RUST_ALLFEATURES_DIAGNOSTIC_ERROR_COUNT=" + str(total))
-          print("LAS_RUST_ALLFEATURES_DIAGNOSTIC_IDS=" + ",".join(f"{k}:{v}" for k,v in sorted(codes.items())))
-          print("LAS_RUST_ALLFEATURES_DIAGNOSTIC_STDERR_BYTES=" + str(len(err)))
-          # Only predefined generic vocabulary, compiler IDs, counts and hashes
-          # can cross the public log boundary. Never print original stderr.
-          allowed = ("unexpected","argument","option","clippy","feature","manifest","cargo","rustc","warning","error","failed","toolchain","component","install","file","path","source","package","compile","compilation","unrecognized","unknown","invalid","lockfile","config","target","flag","workspace","not","found","subcommand","override","unstable","profiles","environment","returned","exit","dependency","permission","parse","link","duplicate","session","run","no","such","requires","removed","operation","variable","multiple","supported","command","message-format","json","builder","working","directory")
-          wordset = set(re.findall(r"[a-z_][a-z0-9_-]*", err.decode("utf-8", "replace").lower()))
-          tokens = [w for w in allowed if w in wordset]
-          print("LAS_RUST_ALLFEATURES_STDERR_VOCAB=" + ",".join(tokens))
-          print("LAS_RUST_ALLFEATURES_STDERR_LINES=" + str(len(err.splitlines())))
-
-          print("LAS_RUST_ALLFEATURES_DIAGNOSTIC_SHA256=" + hashlib.sha256(raw + b"\\0" + err).hexdigest())
-          PY
+          if ! timeout --signal=TERM --kill-after=10s 900s env RUSTFLAGS=-Dwarnings cargo +1.98.1 clippy --locked --all-targets --all-features -- -D warnings >"$RUNNER_TEMP/clippy-allfeatures-private.log" 2>&1; then
             echo "LAS_RUST_ALLFEATURES_CLIPPY=FAIL_OR_INCOMPLETE"
             exit 1
           fi
