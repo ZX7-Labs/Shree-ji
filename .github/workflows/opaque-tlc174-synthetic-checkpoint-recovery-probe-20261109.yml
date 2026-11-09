@@ -39,10 +39,13 @@ jobs:
           EXTENDS Integers
           VARIABLE x
           Init == x = 0
-          Next == /\ x < 20000000
+          Next == /\ x < 50000
                   /\ x' = x + 1
           Spec == Init /\ [][Next]_x
-          TypeOK == x \in 0..20000000
+          \* Deliberately CPU-heavy invariant makes a small state set live
+          \* long enough for a low-cost JMX snapshot.
+          TypeOK == /\ x \in 0..50000
+                    /\ \A k \in 1..300 : x + k >= x
           ====================================================
           TLA
           cat > ResumeProbe.cfg <<'CFG'
@@ -169,11 +172,11 @@ jobs:
               if not matches:
                   raise SystemExit("terminal state counters missing")
               generated, distinct, queue = (int(s.replace(",", "")) for s in matches[-1])
-              if distinct != 20000001 or queue != 0 or generated < distinct:
+              if distinct != 50001 or queue != 0 or generated < distinct:
                   raise SystemExit("incomplete or unexpected graph")
               results.append((generated, distinct, queue))
           if results[0] != results[1]:
               raise SystemExit("resumed/direct terminal counters disagree")
-          print("LAS_SYNTH_COMPLETE_GRAPH=20000001")
+          print("LAS_SYNTH_COMPLETE_GRAPH=50001")
           print("LAS_SYNTH_RECOVERY_EQUIVALENCE=PASS")
           PY
