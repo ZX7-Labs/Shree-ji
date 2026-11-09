@@ -1,0 +1,269 @@
+name: Recover original long-8 encrypted TLC receipts without native reruns
+
+# Verification-only. Deliberately no private checkout, product source, runner
+# secret other than the standard read-only GITHUB_TOKEN, or artifact uploads.
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opaque-long8-ciphertext-recovery-only-20261109.yml"
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  reconcile:
+    name: Reconcile original long-eight source-pinned encrypted receipts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Download seven immutable encrypted-only artifacts from original native run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: "42574456966"
+          pattern: "encrypted-positive-index-*"
+          path: ciphertext/long7
+          merge-multiple: false
+          digest-mismatch: error
+
+      - name: Download original one-profile encrypted-only artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: "42575218246"
+          artifact-ids: "13662659215"
+          path: ciphertext/long132
+          digest-mismatch: error
+
+      - name: Audit original immutable job and artifact identities, envelopes and negatives
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -I -B - <<'PY_RECOVERY'
+          #!/usr/bin/env python3
+          """Public-only, no-native-run encrypted TLC batch recovery verifier.
+          
+          Verifies immutable GitHub-hosted encrypted artifacts from two original source-pinned
+          runs. Never downloads private code or decrypts ciphertext; no owner keys present.
+          """
+          from __future__ import annotations
+          
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import stat
+          import sys
+          import tarfile
+          import urllib.request
+          
+          RUNS = {
+              "long7": {
+                  "id": 42574456966,
+                  "controller": "acce51966276fae8ddb41934aadfe1954fc4a53d",
+                  "records": {
+                      34: (129018927495, 13657370302, 62517,
+                           "194f132b065848b4a7e5d1e8acc3ab79d7eec65d8d4874c209d1efc20564d41b",
+                           "2f1ed7d6b689a2814d5c9d0d9028f08a9dd8f03576f1d9d413186d36ff36d4a0"),
+                      35: (129018927418, 13656178331, 62515,
+                           "2a5640f09684751557ecb5834c803c801ff8edd28ec45661f537b7a724dd13ad",
+                           "2c9ce5beaa090185dc3885dd3fb07b931da7577f5323a9d51a810854d6f4c314"),
+                      40: (129018927255, 13657573791, 52268,
+                           "6d92cd85bb7e60000fb35311f92fc0f175817e3ef374c3addee14d51805d8e51",
+                           "b530faa486f00564ee967614826b3e64888b3c5c6ec47b4f8f0f1056dcec6e87"),
+                      86: (129018927320, 13658213007, 52270,
+                           "3681d1ac130ef493389e88373a0ba07b62c5dd75d4cfe4821880d709de6d99a3",
+                           "9a67716ba3bdffedf2716529569488e732094e46bc2e15044363ac1a7bfcde5f"),
+                      111: (129018927324, 13660332270, 62513,
+                            "f0168eeb5783bb01f9f86f7c447e091ba37ea9c8c1ea3d69b7bf358f1ac91dc7",
+                            "e9260dfa7f29ece43afbe3028f617ef7b0662378fb666a891450d89e3b977653"),
+                      121: (129018927353, 13661949810, 72752,
+                            "29c56910b4ea21c4f6f877124ca6edac61f9af108d8b519b30ea35cb621b7c66",
+                            "759e98ebc26559a1f32b981becbf72e236dd39ffaed72433caca9ec50e229c19"),
+                      182: (129018927487, 13664172642, 62510,
+                            "323080f033f920dc4ddac125aa530d50b6a34c5f18a3507d97c7f8c5ef123255",
+                            "b2969dc4503f2c8da8ae2ab2bf7dad27e35aced12653edbe9e04d8d54e3d20c1"),
+                  },
+              },
+              "long132": {
+                  "id": 42575218246,
+                  "controller": "42dcae81a366f2eb50479cfed1d350bcd3bf9169",
+                  "records": {
+                      132: (129021297571, 13662659215, 103476,
+                            "67ab5064306a76db70614b8b68bbeea1e03c93cf712a09746465206e8ff6257c",
+                            "9d69529567471997449114dc87199bdcaf1ef1904b8baf81779fb5978ecb84fa"),
+                  },
+              },
+          }
+          
+          EXPECTED_MEMBERS = (
+              "native-envelope-keys.enc", "native-evidence.enc",
+              "native-evidence.mac", "native-iv.bin",
+          )
+          EXPECTED_HEAD_PROOF = "0ca2a0057461a7bb63c52603a2c83fd726c6b045ccf4ba699e90e47c9197c340"
+          EXPECTED_TREE_PROOF = "9e2bbf22fc4e9f6d72fe71b06a8755186b7a953260d2e2c66ad3bfd3292de4ec"
+          
+          
+          def sha256(data: bytes) -> str:
+              return hashlib.sha256(data).hexdigest()
+          
+          
+          def check(condition: bool, reason: str) -> None:
+              if not condition:
+                  raise ValueError(reason)
+          
+          
+          def attest_inventory(inventory: dict, expected: set[int]) -> None:
+              check(bool(expected), "empty source-owned expected tranche")
+              check(all(isinstance(x, int) and x >= 0 for x in expected), "invalid profile index")
+              check(set(inventory) == expected, "missing or unexpected original source index")
+          
+          
+          def verify_ciphertext(tgz: Path, expected_digest: str) -> dict:
+              check(tgz.is_file() and not tgz.is_symlink(), "ciphertext missing/symlink")
+              check(0 < tgz.stat().st_size <= 512 * 1024, "ciphertext size invalid")
+              raw = tgz.read_bytes()
+              check(sha256(raw) == expected_digest, "ciphertext differs from pinned native job")
+              with tarfile.open(fileobj=__import__("io").BytesIO(raw), mode="r:gz") as bundle:
+                  members = bundle.getmembers()
+                  check(sorted(x.name for x in members) == sorted(EXPECTED_MEMBERS), "unexpected envelope member")
+                  check(all(x.isfile() and not x.issym() and not x.islnk() and 0 < x.size <= 1024 * 1024
+                            for x in members), "invalid envelope member type/size")
+                  fields = {x.name: bundle.extractfile(x).read() for x in members}
+                  check(len(fields["native-evidence.mac"]) == 32, "invalid envelope MAC length")
+                  check(len(fields["native-iv.bin"]) == 16, "invalid encryption IV length")
+                  check(len(fields["native-evidence.enc"]) % 16 == 0, "invalid ciphertext block length")
+                  check(0 < sum(len(v) for v in fields.values()) <= 4 * 1024 * 1024, "envelope too large")
+              return {"sha256": sha256(raw), "bytes": len(raw)}
+          
+          
+          def verify_payloads(root: Path) -> dict:
+              check(root.is_dir(), "no downloaded ciphertext")
+              allowed_root = {"long7", "long132"}
+              check({p.name for p in root.iterdir()} == allowed_root, "unexpected batch root")
+              results = {}
+              observed_hashes = set()
+              for batch, info in RUNS.items():
+                  expected = set(info["records"])
+                  folder = root / batch
+                  check(folder.is_dir() and not folder.is_symlink(), "invalid batch folder")
+                  # The 7-artifact download uses per-name subdirectories; single-file
+                  # download for #132 has a distinct directly extracted directory.
+                  if batch == "long7":
+                      subfolders = list(folder.iterdir())
+                      check(all(p.is_dir() and not p.is_symlink() and
+                                re.fullmatch(r"encrypted-positive-index-[0-9]+", p.name)
+                                for p in subfolders), "untrusted profile folder")
+                      found = {}
+                      for p in subfolders:
+                          index = int(p.name.split("-")[-1])
+                          check(index not in found, "duplicate profile receipt")
+                          check([f.name for f in p.iterdir()] == ["native-evidence-ciphertext.tgz"],
+                                "unknown profile payload")
+                          found[index] = p / "native-evidence-ciphertext.tgz"
+                  else:
+                      check([p.name for p in folder.iterdir()] == ["native-evidence-ciphertext.tgz"],
+                            "unexpected 132 profile payload")
+                      found = {132: folder / "native-evidence-ciphertext.tgz"}
+                  attest_inventory(found, expected)
+                  results[batch] = {}
+                  for index, path in sorted(found.items()):
+                      job_id, artifact_id, zip_bytes, zip_sha, encrypted_sha = info["records"][index]
+                      result = verify_ciphertext(path, encrypted_sha)
+                      check(encrypted_sha not in observed_hashes, "ciphertext duplicate")
+                      observed_hashes.add(encrypted_sha)
+                      results[batch][index] = result
+              check(sum(map(len, results.values())) == 8, "source-owned total mismatch")
+              return results
+          
+          
+          def github_get(path: str, token: str, repo: str) -> dict:
+              check(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) is not None,
+                    "invalid repo identifier")
+              req = urllib.request.Request(
+                  "https://api.github.com/repos/" + repo + "/" + path,
+                  headers={"Accept": "application/vnd.github+json",
+                           "X-GitHub-Api-Version": "2022-11-28",
+                           "Authorization": "Bearer " + token},
+              )
+              with urllib.request.urlopen(req, timeout=30) as body:
+                  return json.load(body)
+          
+          
+          def verify_github_metadata(token: str, repo: str) -> None:
+              for batch, info in RUNS.items():
+                  runid = info["id"]
+                  run = github_get(f"actions/runs/{runid}", token, repo)
+                  check(run.get("head_sha") == info["controller"], "unexpected original controller ref")
+                  check(run.get("status") == "completed" and run.get("conclusion") == "failure",
+                        "incorrect historical aggregate status")
+                  jobs = github_get(f"actions/runs/{runid}/jobs?per_page=100", token, repo)
+                  by_id = {j["id"]: j for j in jobs.get("jobs", [])}
+                  artifacts = github_get(f"actions/runs/{runid}/artifacts?per_page=100", token, repo)
+                  encrypted_only = [a for a in artifacts.get("artifacts", [])
+                                    if a.get("name", "").startswith("encrypted-positive-index-")]
+                  check(len(encrypted_only) == len(info["records"]), "unexpected artifact inventory")
+                  by_id_artifact = {a["id"]: a for a in encrypted_only}
+                  for index, (job_id, artifact_id, size, outer_sha, inner_sha) in info["records"].items():
+                      j = by_id.get(job_id)
+                      check(j is not None and j.get("conclusion") == "success" and
+                            j.get("status") == "completed" and
+                            j.get("name") == f"Opaque positive index {index}",
+                            "individual native profile job not successful")
+                      a = by_id_artifact.get(artifact_id)
+                      check(a is not None and a.get("name") == f"encrypted-positive-index-{index}" and
+                            not a.get("expired") and a.get("size_in_bytes") == size and
+                            a.get("digest") == "sha256:" + outer_sha and
+                            a.get("workflow_run", {}).get("id") == runid and
+                            a.get("workflow_run", {}).get("head_sha") == info["controller"],
+                            "original artifact integrity/provenance mismatch")
+          
+          
+          def self_test() -> None:
+              for expected in ({34, 35, 40, 86, 111, 121, 182}, {132}):
+                  attest_inventory({x: object() for x in expected}, expected)
+                  for wrong in (set(), expected - {min(expected)}, expected | {999}):
+                      try:
+                          attest_inventory({x: object() for x in wrong}, expected)
+                      except ValueError:
+                          pass
+                      else:
+                          raise AssertionError("false-green cardinality control")
+              for tampered in ((b"abc", "0" * 64), (b"", sha256(b""))):
+                  check(tampered[0] == b"" or sha256(tampered[0]) != tampered[1], "hash self-test fault")
+              print("LAS_LONG8_RECOVERY_SYNTHETIC_NEGATIVES=PASS")
+          
+          
+          def main() -> int:
+              try:
+                  self_test()
+                  root = Path(os.environ.get("LAS_CIPHERTEXT_ROOT", "ciphertext"))
+                  result = verify_payloads(root)
+                  print("LAS_LONG8_CIPHERTEXT_SCOPED_INVENTORY=PASS")
+                  repo = os.environ.get("GITHUB_REPOSITORY", "")
+                  token = os.environ.get("GH_TOKEN", "")
+                  check(bool(token) and bool(repo), "GitHub identity/token unavailable")
+                  verify_github_metadata(token, repo)
+                  print("LAS_LONG8_AUTHENTICATED_GITHUB_METADATA=PASS")
+                  print("LAS_LONG8_RECOVERED_JOB_RECEIPTS=8")
+                  print("LAS_LONG8_SOURCE_NATIVE_RERUN=NO")
+                  print("LAS_LONG8_INDEPENDENT_PRIVATE_DECRYPTION=NOT_RUN")
+                  print("LAS_LONG8_FULL_ORIGINAL_FORMAL_ACCEPTANCE=NOT_ACCEPTED")
+              except (ValueError, OSError, json.JSONDecodeError, tarfile.TarError) as exc:
+                  # No paths/source/URL/token exposed in public failure output.
+                  print("LAS_LONG8_RECOVERY=INCOMPLETE")
+                  print("LAS_LONG8_RECOVERY_ERROR_CLASS=" + type(exc).__name__)
+                  return 1
+              return 0
+          
+          
+          if __name__ == "__main__":
+              sys.exit(main())
+          PY_RECOVERY
