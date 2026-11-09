@@ -312,12 +312,13 @@ jobs:
           from pathlib import Path
           import hashlib, json, os, re, sys, tarfile
           expected = [34, 35, 40, 86, 111, 121, 182]
-          assert len(expected) == 4 and len(set(expected)) == len(expected)
+          if not expected or len(set(expected)) != len(expected):
+              raise SystemExit('invalid expected profile set')
           root = Path('ciphertext')
           found = {}
           if root.is_dir():
               for folder in root.iterdir():
-                  if not folder.is_dir():
+                  if not folder.is_dir() or folder.is_symlink():
                       raise SystemExit('unexpected non-directory receipt')
                   match = re.fullmatch(r'encrypted-positive-index-([0-9]+)', folder.name)
                   if match is None:
@@ -326,7 +327,8 @@ jobs:
                   if index in found:
                       raise SystemExit('duplicate profile receipt')
                   children = list(folder.iterdir())
-                  if len(children) != 1 or children[0].name != 'native-evidence-ciphertext.tgz':
+                  if (len(children) != 1 or children[0].name != 'native-evidence-ciphertext.tgz'
+                          or children[0].is_symlink()):
                       raise SystemExit('unknown or missing ciphertext payload')
                   data = children[0].read_bytes()
                   if not data or len(data) > 128 * 1024 * 1024:
