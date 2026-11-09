@@ -153,54 +153,100 @@ jobs:
           import re
           import sys
 
+          # GNATprove 16.1 prints a fixed-width table; whitespace token counts
+          # cannot prove the last two debt columns still exist. Keep all six
+          # columns explicit, forbid missing cells and independently sum counts.
           def read_summary(raw):
               lines = raw.splitlines()
               headers = [i for i, line in enumerate(lines)
-                         if "SPARK Analysis results" in line and "Justified" in line and "Unproved" in line]
+                         if "SPARK Analysis results" in line]
               if len(headers) != 1:
                   raise ValueError("proof summary header missing or duplicated")
+              header = lines[headers[0]].rstrip()
+              labels = ("Total", "Flow", "Interval", "Provers", "Justified", "Unproved")
+              if not re.fullmatch(
+                  r"\s*SPARK Analysis results\s{2,}Total\s{2,}Flow\s{2,}"
+                  r"Interval\s{2,}Provers\s{2,}Justified\s{2,}Unproved", header
+              ):
+                  raise ValueError("proof summary columns changed")
+              ends = [header.index(label) + len(label) for label in labels]
+              starts = [header.index("Total")] + ends[:-1]
+              categories = (
+                  "Data Dependencies", "Flow Dependencies", "Initialization",
+                  "Non-Aliasing", "Run-time Checks", "Assertions", "Functional Contracts",
+                  "LSP Verification", "Termination", "Concurrency", "Total"
+              )
+              def numeric(cell):
+                  match = re.fullmatch(r"(\d+|\.)(?: \([^()]*\))?", cell)
+                  if match is None:
+                      raise ValueError("missing or invalid proof column")
+                  return 0 if match.group(1) == "." else int(match.group(1))
               rows = {}
               for line in lines[headers[0]+1:headers[0]+45]:
-                  cols = re.split(r"\s{2,}", line.strip())
-                  # Version 16.1 may elide one blank middle statistics column;
-                  # final Justified/Unproved fields still remain explicit.
-                  if len(cols) not in (6, 7):
+                  label = line[:starts[0]].strip()
+                  if label not in categories:
                       continue
-                  label = cols[0]
-                  if label in ("Total", "Run-time Checks", "Functional Contracts", "Assertions",
-                               "Data Dependencies", "Initialization", "Termination"):
-                      if label in rows:
-                          raise ValueError("duplicate proof category")
-                      if not re.fullmatch(r"(?:[0-9]+|\.)", cols[1]):
-                          raise ValueError("invalid proof total")
-                      rows[label] = cols
-              if "Total" not in rows or "Run-time Checks" not in rows:
+                  if label in rows:
+                      raise ValueError("duplicate proof category")
+                  # A visually omitted Unproved cell must never shift Justified
+                  # into its position and produce a false zero-debt outcome.
+                  if len(line.rstrip()) != ends[-1]:
+                      raise ValueError("truncated proof summary column")
+                  fields = [line[s:e].strip() for s, e in zip(starts, ends)]
+                  counts = [numeric(cell) for cell in fields]
+                  if counts[0] != sum(counts[1:]):
+                      raise ValueError("proof category does not reconcile")
+                  rows[label] = counts
+              if not all(name in rows for name in
+                         ("Total", "Run-time Checks", "Functional Contracts")):
                   raise ValueError("missing required proof categories")
-              total = int(rows["Total"][1])
-              def numeric(cell):
-                  m = re.fullmatch(r"([0-9]+|\.)\s*(?:\([0-9]+%\))?", cell)
-                  if not m:
-                      raise ValueError("unrecognized proof column")
-                  return 0 if m.group(1) == "." else int(m.group(1))
-              justified = numeric(rows["Total"][-2])
-              unproved = numeric(rows["Total"][-1])
-              runtime = numeric(rows["Run-time Checks"][1])
-              contracts = numeric(rows.get("Functional Contracts", ["Functional Contracts", "."])[1])
-              return total, runtime, contracts, justified, unproved
+              if rows["Total"][0] != sum(
+                      count[0] for name, count in rows.items() if name != "Total"):
+                  raise ValueError("proof grand total does not reconcile")
+              total, runtime, contracts = (
+                  rows["Total"][0],
+                  rows["Run-time Checks"][0],
+                  rows["Functional Contracts"][0],
+              )
+              return total, runtime, contracts, rows["Total"][4], rows["Total"][5]
 
-          # Synthetic format/negative controls; no private strings in public logs.
-          header = "SPARK Analysis results        Total          Flow   Interval        Provers   Justified   Unproved\n"
-          ok = header + "Run-time Checks    4    .    .    4    .    .\nTotal    4    .    .    4    .    .\n"
-          assert read_summary(ok) == (4,4,0,0,0)
-          assert read_summary(ok.replace("    .    .    4    .    .", "    .    4    .    .")) == (4,4,0,0,0)
-          for broken in (ok.replace("Total    4", "Total    0"), ok.replace("4    .    .\n", "4    .    1\n")):
-              # Parse may succeed but the acceptance predicate must reject it.
+          # Independent synthetic valid + malformed controls, all public-only.
+          # A missing final debt column, any numeric proof debt, omitted category,
+          # inconsistent sum, and duplicate category must cause a real failure.
+          fixture_header = (
+              "SPARK Analysis results        Total          Flow   Interval"
+              "                         Provers   Justified   Unproved"
+          )
+          def fixture(name, total, flow=".", interval=".", provers=".",
+                      justified=".", unproved="."):
+              widths = (5, 14, 11, 32, 12, 11)
+              fields = (total, flow, interval, provers, justified, unproved)
+              return f"{name:<30}" + "".join(
+                  str(value).rjust(width) for value, width in zip(fields, widths)
+              )
+          runtime_row = fixture("Run-time Checks", 4, provers=4)
+          contract_row = fixture("Functional Contracts", 2, provers=2)
+          total_row = fixture("Total", 6, provers=6)
+          ok = "\n".join((fixture_header, runtime_row, contract_row, total_row)) + "\n"
+          if read_summary(ok) != (6, 4, 2, 0, 0):
+              raise AssertionError("proof valid fixture rejected")
+          broken = (
+              ok.replace(total_row, total_row[:-1]),
+              ok.replace(total_row, fixture("Total", 6, provers=5, unproved=1)),
+              ok.replace(total_row, fixture("Total", 6, provers=5, justified=1)),
+              ok.replace(total_row, fixture("Total", 6, provers=5)),
+              ok.replace(contract_row, ""),
+              ok + total_row + "\n",
+          )
+          for case in broken:
               try:
-                  t, rte, ctr, justified, unproved = read_summary(broken)
+                  count, runtime, contract, justified, unproved = read_summary(case)
+                  accepted = count > 0 and runtime > 0 and contract > 0 and justified == 0 and unproved == 0
               except ValueError:
-                  continue
-              if t > 0 and rte > 0 and justified == 0 and unproved == 0:
+                  accepted = False
+              if accepted:
                   raise AssertionError("proof fixture false-green")
+          print("LAS_SPARK_CENSUS_SYNTHETIC_NEGATIVES=PASS")
           path = pathlib.Path(sys.argv[1])
           if not path.is_file() or path.is_symlink() or path.stat().st_size > 16_000_000:
               raise SystemExit("LAS_SPARK_CENSUS=INCOMPLETE_REPORT")
