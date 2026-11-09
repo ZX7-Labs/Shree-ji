@@ -186,8 +186,8 @@ jobs:
           if native_log.is_file():
               native_text = native_log.read_bytes().decode("utf-8", "replace")
               print("LAS_RUST_ADA_NATIVE_LOG_BYTES=" + str(len(native_text.encode("utf-8"))))
-              print("LAS_RUST_ADA_NATIVE_ERROR_COUNT=" + str(len(re.findall(r"(?i)\\berror\\b", native_text))))
-              print("LAS_RUST_ADA_NATIVE_WARNING_COUNT=" + str(len(re.findall(r"(?i)\\bwarning\\b", native_text))))
+              print("LAS_RUST_ADA_NATIVE_ERROR_COUNT=" + str(len(re.findall(r"(?i)\berror\b", native_text))))
+              print("LAS_RUST_ADA_NATIVE_WARNING_COUNT=" + str(len(re.findall(r"(?i)\bwarning\b", native_text))))
               shown_native = 0
               for line in native_text.splitlines():
                   tokens = re.findall(r"[a-z][a-z-]*", line.lower())
@@ -203,6 +203,31 @@ jobs:
                   if shown_native >= 15:
                       break
               print("LAS_RUST_ADA_REDACTED_LINE_COUNT=" + str(shown_native))
+              # Opaque on-host source-file index, not the private path/name.
+              # Compare indices only against the independently authenticated
+              # private Git tree in the owner's private control plane.
+              ada_files = sorted(
+                  p for p in pathlib.Path("src").rglob("*")
+                  if p.is_file() and p.suffix.lower() in (".adb", ".ads", ".gpr")
+              )
+              index = {p.name.lower(): i for i,p in enumerate(ada_files)}
+              print("LAS_RUST_ADA_SOURCE_INDEX_CENSUS=" + str(len(ada_files)))
+              emitted = set()
+              for line in native_text.splitlines():
+                  match = re.search(r"(?i)([a-z0-9_.-]+\.(?:adb|ads|gpr)):(\d+)(?::(\d+))?", line)
+                  if not match:
+                      continue
+                  file_index = index.get(match.group(1).lower())
+                  if file_index is None:
+                      continue
+                  entry = (file_index, int(match.group(2)), int(match.group(3) or 0))
+                  if entry in emitted:
+                      continue
+                  emitted.add(entry)
+                  if len(emitted) <= 16:
+                      print("LAS_RUST_ADA_SOURCE_LOCATION=" + ":".join(str(x) for x in entry))
+              print("LAS_RUST_ADA_SOURCE_LOCATION_COUNT=" + str(len(emitted)))
+
           else:
               print("LAS_RUST_ADA_NATIVE_LOG=MISSING")
 
