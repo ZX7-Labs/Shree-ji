@@ -133,6 +133,14 @@ jobs:
           print("LAS_RUST_ALLFEATURES_DIAGNOSTIC_ERROR_COUNT=" + str(total))
           print("LAS_RUST_ALLFEATURES_DIAGNOSTIC_IDS=" + ",".join(f"{k}:{v}" for k,v in sorted(codes.items())))
           print("LAS_RUST_ALLFEATURES_DIAGNOSTIC_STDERR_BYTES=" + str(len(err)))
+          # Only predefined generic vocabulary, compiler IDs, counts and hashes
+          # can cross the public log boundary. Never print original stderr.
+          allowed = ("unexpected","argument","option","clippy","feature","manifest","cargo","rustc","warning","error","failed","toolchain","component","install","file","path","source","package","compile","compilation","unrecognized","unknown","invalid","lockfile","config","target","flag","workspace","not","found","subcommand","override","unstable","profiles","environment","returned","exit","dependency","permission","parse","link","duplicate","session","run","no","such","requires","removed","operation","variable","multiple","supported","command","message-format","json","builder","working","directory")
+          wordset = set(re.findall(r"[a-z_][a-z0-9_-]*", err.decode("utf-8", "replace").lower()))
+          tokens = [w for w in allowed if w in wordset]
+          print("LAS_RUST_ALLFEATURES_STDERR_VOCAB=" + ",".join(tokens))
+          print("LAS_RUST_ALLFEATURES_STDERR_LINES=" + str(len(err.splitlines())))
+
           print("LAS_RUST_ALLFEATURES_DIAGNOSTIC_SHA256=" + hashlib.sha256(raw + b"\\0" + err).hexdigest())
           PY
             echo "LAS_RUST_ALLFEATURES_CLIPPY=FAIL_OR_INCOMPLETE"
