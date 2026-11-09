@@ -269,7 +269,11 @@ jobs:
             exit 1
           fi
           echo "LAS_EFFECT_FABRIC_FORMAT=PASS"
-          if ! rustc +1.98.1 --edition=2024 -D warnings -C opt-level=3 \
+          # The imported FakeActuator is an explicitly test-only model, not a physical provider.
+          # Its production-only dead_code expectations become unfulfilled when this benchmark
+          # intentionally exercises those model APIs. Compile in the model's test cfg while
+          # retaining strict -D warnings and every original runtime/measurement oracle.
+          if ! rustc +1.98.1 --edition=2024 --cfg test -D warnings -C opt-level=3 \
             -C overflow-checks=yes -C codegen-units=1 -C strip=symbols \
             --error-format=json bench/effect_fabric_benchmark.rs -o "$RUNNER_TEMP/effect-fabric-benchmark" \
             >"$RUNNER_TEMP/effect-bench-compile-private.jsonl" 2>&1; then
