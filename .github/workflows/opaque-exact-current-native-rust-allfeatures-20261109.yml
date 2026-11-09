@@ -116,6 +116,49 @@ jobs:
             exit 1
           fi
           echo "LAS_RUST_FMT=PASS"
+      - name: Canonical all-features compilation warning deny
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          set +e
+          timeout --signal=TERM --kill-after=10s 900s env RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --all-targets --all-features --message-format=json >"$RUNNER_TEMP/rust-check-private.jsonl" 2>"$RUNNER_TEMP/rust-check-private.stderr"
+          rc=$?
+          set -e
+          if [[ "$rc" -ne 0 ]]; then
+            python3 -I -B - "$RUNNER_TEMP/rust-check-private.jsonl" "$RUNNER_TEMP/rust-check-private.stderr" "$rc" <<'PY'
+          import collections, hashlib, json, pathlib, re, sys
+          raw = pathlib.Path(sys.argv[1]).read_bytes()
+          err = pathlib.Path(sys.argv[2]).read_bytes()
+          codes = collections.Counter()
+          errors = 0
+          for line in raw.splitlines():
+              try:
+                  item = json.loads(line)
+              except (UnicodeError, ValueError):
+                  continue
+              if item.get("reason") != "compiler-message":
+                  continue
+              diagnostic = item.get("message") or {}
+              if diagnostic.get("level") != "error":
+                  continue
+              errors += 1
+              value = diagnostic.get("code")
+              code = value.get("code") if isinstance(value, dict) else None
+              codes[code if isinstance(code,str) and re.fullmatch(r"(?:E[0-9]{4}|clippy::[a-z0-9_]{2,64}|[a-z0-9_]{2,64})",code) else "UNCLASSIFIED_ERROR"] += 1
+          safe_vocab = ("unexpected","argument","option","clippy","feature","manifest","cargo","rustc","warning","error","failed","toolchain","component","install","file","path","source","package","compile","compilation","unrecognized","unknown","invalid","lockfile","config","target","flag","workspace","not","found","subcommand","override","unstable","environment","returned","exit","dependency","permission","parse","link","duplicate","run","no","such","requires","variable","missing","build","script","gnat","gprbuild","ada")
+          words = set(re.findall(r"[a-z_][a-z0-9_-]*",err.decode("utf-8","replace").lower()))
+          print("LAS_RUST_ALLFEATURES_CHECK_RC="+sys.argv[3])
+          print("LAS_RUST_ALLFEATURES_CHECK_DIAGNOSTIC_ERROR_COUNT="+str(errors))
+          print("LAS_RUST_ALLFEATURES_CHECK_DIAGNOSTIC_IDS="+",".join(f"{k}:{v}" for k,v in sorted(codes.items())))
+          print("LAS_RUST_ALLFEATURES_CHECK_STDERR_VOCAB="+",".join(x for x in safe_vocab if x in words))
+          print("LAS_RUST_ALLFEATURES_CHECK_STDERR_BYTES="+str(len(err)))
+          print("LAS_RUST_ALLFEATURES_CHECK_DIAGNOSTIC_SHA256="+hashlib.sha256(raw+b"\\0"+err).hexdigest())
+          PY
+            echo "LAS_RUST_ALLFEATURES_CHECK=FAIL_OR_INCOMPLETE"
+            exit 1
+          fi
+          echo "LAS_RUST_ALLFEATURES_CHECK=PASS"
       - name: Canonical all-features Clippy warnings denied
         shell: bash
         run: |
@@ -167,16 +210,6 @@ jobs:
             exit 1
           fi
           echo "LAS_RUST_ALLFEATURES_CLIPPY=PASS"
-      - name: Canonical all-features compilation warning deny
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$GITHUB_WORKSPACE/target"
-          if ! timeout --signal=TERM --kill-after=10s 900s env RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --all-targets --all-features >"$RUNNER_TEMP/rust-check-private.log" 2>&1; then
-            echo "LAS_RUST_ALLFEATURES_CHECK=FAIL_OR_INCOMPLETE"
-            exit 1
-          fi
-          echo "LAS_RUST_ALLFEATURES_CHECK=PASS"
       - name: Canonical all-features native Rust tests and source-owned strict suite evidence
         shell: bash
         run: |
