@@ -1,0 +1,114 @@
+name: Pinned TLC174 public synthetic checkpoint recovery probe
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opaque-tlc174-synthetic-checkpoint-recovery-probe-20261109.yml"
+permissions:
+  contents: read
+concurrency:
+  group: pinned-tlc174-public-checkpoint-probe
+  cancel-in-progress: false
+jobs:
+  public-synthetic-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - name: Download checksum-pinned original TLC 1.7.4 Java binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          jar="$RUNNER_TEMP/tla2tools.jar"
+          if ! curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3 --retry-all-errors --connect-timeout 20 --max-time 120 --output "$jar" "https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar" >"$RUNNER_TEMP/jar-fetch.log" 2>&1; then
+            rm -f "$jar"
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3 --retry-all-errors --connect-timeout 20 --max-time 120 --output "$jar" "https://sourceforge.net/projects/tlaplus.mirror/files/v1.7.4/tla2tools.jar/download" >"$RUNNER_TEMP/jar-fallback.log" 2>&1
+          fi
+          echo "bee4a54f3ee3d4afc347c3240ec2d9e93b075104  $jar" | sha1sum --strict --check >/dev/null
+          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  $jar" | sha256sum --strict --check >/dev/null
+          echo "LAS_SYNTH_TLC174_JAR=PASS"
+
+      - name: Check a timed interruption produces checkpoint, and recovery agrees with independent baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/tlc-checkpoint-probe"
+          mkdir -p "$root/original" "$root/direct"
+          cd "$root/original"
+          cat > ResumeProbe.tla <<'TLA'
+          ---------------- MODULE ResumeProbe ----------------
+          EXTENDS Integers
+          VARIABLE x
+          Init == x = 0
+          Next == /\ x < 2000000
+                  /\ x' = x + 1
+          Spec == Init /\ [][Next]_x
+          TypeOK == x \in 0..2000000
+          ====================================================
+          TLA
+          cat > ResumeProbe.cfg <<'CFG'
+          SPECIFICATION Spec
+          INVARIANT TypeOK
+          CHECK_DEADLOCK FALSE
+          CFG
+          cp ResumeProbe.tla ResumeProbe.cfg "$root/direct/"
+          test "$(sha256sum ResumeProbe.tla | awk '{print $1}')" = "$(sha256sum "$root/direct/ResumeProbe.tla" | awk '{print $1}')"
+          mkdir -p "$root/state"
+          set +e
+          timeout --signal=TERM --kill-after=5s 10s java -XX:+UseParallelGC -Xmx1536m -jar "$RUNNER_TEMP/tla2tools.jar" -workers 1 -fp 0 -lncheck final -checkpoint 0 -metadir "$root/state" -config ResumeProbe.cfg ResumeProbe >"$root/interrupt.log" 2>&1
+          interrupted_rc=$?
+          set -e
+          echo "LAS_SYNTH_INTERRUPTED_RC=$interrupted_rc"
+          if [[ "$interrupted_rc" -eq 0 ]]; then
+            echo "LAS_SYNTH_RECOVERY=INCONCLUSIVE_FINISHED_BEFORE_CHECKPOINT"
+            exit 1
+          fi
+          if [[ "$interrupted_rc" -ne 124 && "$interrupted_rc" -ne 143 ]]; then
+            echo "LAS_SYNTH_RECOVERY=INCONCLUSIVE_TERMINATION_CLASS"
+            sed -n '1,22p' "$root/interrupt.log"
+            exit 1
+          fi
+          count="$(find "$root/state" -type f | wc -l)"
+          echo "LAS_SYNTH_CHECKPOINT_FILES=$count"
+          if [[ "$count" -eq 0 ]]; then
+            echo "LAS_SYNTH_RECOVERY=NO_CHECKPOINT_CREATED"
+            sed -n '1,35p' "$root/interrupt.log"
+            exit 1
+          fi
+          if ! grep -Eiq 'checkpoint' "$root/interrupt.log"; then
+            echo "LAS_SYNTH_RECOVERY=NO_CHECKPOINT_LOG_MARKER"
+            sed -n '1,35p' "$root/interrupt.log"
+            exit 1
+          fi
+          # A recover input must refer to the SAME exact metadata location.
+          set +e
+          timeout --signal=TERM --kill-after=5s 90s java -XX:+UseParallelGC -Xmx1536m -jar "$RUNNER_TEMP/tla2tools.jar" -workers 1 -fp 0 -lncheck final -checkpoint 0 -metadir "$root/state" -recover "$root/state" -config ResumeProbe.cfg ResumeProbe >"$root/recover.log" 2>&1
+          recovered_rc=$?
+          set -e
+          if [[ "$recovered_rc" -ne 0 ]]; then
+            echo "LAS_SYNTH_RECOVERY=FAIL_RESTART_RC_$recovered_rc"
+            sed -n '1,55p' "$root/recover.log"
+            exit 1
+          fi
+          cd "$root/direct"
+          timeout --signal=TERM --kill-after=5s 90s java -XX:+UseParallelGC -Xmx1536m -jar "$RUNNER_TEMP/tla2tools.jar" -workers 1 -fp 0 -lncheck final -config ResumeProbe.cfg ResumeProbe >"$root/direct.log" 2>&1
+          python3 - "$root/recover.log" "$root/direct.log" <<'PY'
+          from pathlib import Path
+          import re,sys
+          out=[]
+          for fname in sys.argv[1:]:
+              log=Path(fname).read_text(errors="replace")
+              if "Model checking completed. No error has been found." not in log or "Finished in " not in log:
+                  raise SystemExit("model-check did not report successful completion")
+              matches=re.findall(r"([0-9,]+) states generated,\s*([0-9,]+) distinct states found,\s*([0-9,]+) states left on queue",log)
+              if not matches:
+                  raise SystemExit("missing TLC terminal state-space counters")
+              generated,distinct,queue=(int(x.replace(",","")) for x in matches[-1])
+              if generated<2000001 or distinct!=2000001 or queue!=0:
+                  raise SystemExit("not a complete 2,000,001-state graph")
+              out.append((generated,distinct,queue))
+          if out[0]!=out[1]:
+              raise SystemExit("recovered and direct TLC terminal counters differ")
+          print("LAS_SYNTH_RECOVERY_COMPARISON=PASS")
+          print("LAS_SYNTH_COMPLETE_DISTINCT_STATES="+str(out[0][1]))
+          PY
+          echo "LAS_SYNTH_RECOVERY_TEST=PASS"
