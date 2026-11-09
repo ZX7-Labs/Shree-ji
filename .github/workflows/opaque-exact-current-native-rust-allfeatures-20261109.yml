@@ -86,6 +86,26 @@ jobs:
             exit 1
           fi
           echo "LAS_RUST_TOOLCHAIN=PINNED"
+      - name: Install native Ada Root FFI prerequisites for all-feature build
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The exact private build.rs requires gprbuild for root-ffi; never
+          # misclassify absent Ada compiler as a Clippy source warning.
+          if ! sudo apt-get update -qq >"$RUNNER_TEMP/ada-apt-private.log" 2>&1; then
+            echo "LAS_ADA_FFI_ENV=BLOCKED_PACKAGE_INDEX"
+            exit 1
+          fi
+          if ! sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gnat-13 gprbuild >>"$RUNNER_TEMP/ada-apt-private.log" 2>&1; then
+            echo "LAS_ADA_FFI_ENV=BLOCKED_INSTALL"
+            exit 1
+          fi
+          command -v gprbuild >/dev/null
+          command -v gnatmake >/dev/null
+          gnatmake -v >"$RUNNER_TEMP/gnat-version-private.log" 2>&1
+          gprbuild --version >"$RUNNER_TEMP/gprbuild-version-private.log" 2>&1
+          dpkg-query -W gnat-13 gprbuild >"$RUNNER_TEMP/ada-package-versions-private.log" 2>&1
+          echo "LAS_ADA_FFI_ENV=PINNED_OS_FAMILY_GNAT13_GPRBUILD"
       - name: Canonical Rust format validation
         shell: bash
         run: |
