@@ -141,6 +141,11 @@ jobs:
             fi
             find "$root/state" -maxdepth 3 -type f -printf '%f %s bytes\n' | head -n 20
             grep -Ei 'checkpoint|states generated|distinct states|finished in|model checking completed|error:' "$root/interrupt.log" | tail -n 20 || true
+            # Public synthetic model only: include the exact native exception,
+            # never this kind of stdout on private-source verification runners.
+            echo "LAS_SYNTH_NATIVE_FAILURE_STACK_BEGIN"
+            tail -n 75 "$root/interrupt.log" || true
+            echo "LAS_SYNTH_NATIVE_FAILURE_STACK_END"
             exit 1
           fi
           test "$(grep -F 'LAS_SYNTH_JMX_CHECKPOINT_REQUEST=PASS' "$root/jmx.log" | wc -l)" -eq 1
