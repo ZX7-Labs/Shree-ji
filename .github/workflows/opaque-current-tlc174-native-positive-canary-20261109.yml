@@ -1,4 +1,4 @@
-name: Opaque current canonical TLC174 fast positive tranche
+name: Opaque current canonical TLC174 moderate positive tranche
 on:
   push:
     branches: [main]
@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: opaque-current-tlc174-fast-positive-tranche
+  group: opaque-current-tlc174-moderate-positive-tranche
   cancel-in-progress: false
 env:
   EXPECTED_PRIVATE_REF_PROOF: 9e72c1a4537779a8dce3666299c00c3b625f2c234a16d60c151cea4c9d4a6525
@@ -18,11 +18,11 @@ jobs:
     name: Opaque positive index ${{ matrix.index }}
     strategy:
       fail-fast: false
-      max-parallel: 6
+      max-parallel: 3
       matrix:
-        index: [5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 25, 27, 31, 32, 33, 37, 38, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 62, 64, 66, 69, 71, 73, 74, 75, 76, 77, 78, 79, 80, 82, 83, 84, 87, 88, 89, 92, 93, 95, 96, 97, 98, 99, 100, 102, 103, 104, 105, 106, 107, 108, 110, 112, 113, 116, 117, 118, 119, 120, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 169, 170, 172, 174, 175, 176, 177, 180, 183, 184, 185, 186, 187, 188, 189, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206]
+        index: [30, 91, 101, 168, 173]
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       TARGET_INDEX: ${{ matrix.index }}
     steps:
@@ -234,7 +234,7 @@ jobs:
           test "$FAIL" -eq 0
           SH
           set +e
-          timeout --signal=TERM --kill-after=10s 240s bash "$RUNNER_TEMP/private-negative-driver.sh" "$ROOT" "$RUNNER_TEMP" "$cfg" "$tla" "$deadlock" "$expectation" >"$RUNNER_TEMP/private-negative-native.log" 2>&1
+          timeout --signal=TERM --kill-after=10s 540s bash "$RUNNER_TEMP/private-negative-driver.sh" "$ROOT" "$RUNNER_TEMP" "$cfg" "$tla" "$deadlock" "$expectation" >"$RUNNER_TEMP/private-negative-native.log" 2>&1
           rc=$?
           set -e
           if [[ "$rc" -ne 0 ]] || ! grep -Fq 'PASS: TLC: ' "$RUNNER_TEMP/private-negative-native.log"; then
@@ -311,8 +311,8 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import hashlib, json, os, re, sys, tarfile
-          expected = [5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 25, 27, 31, 32, 33, 37, 38, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 62, 64, 66, 69, 71, 73, 74, 75, 76, 77, 78, 79, 80, 82, 83, 84, 87, 88, 89, 92, 93, 95, 96, 97, 98, 99, 100, 102, 103, 104, 105, 106, 107, 108, 110, 112, 113, 116, 117, 118, 119, 120, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 169, 170, 172, 174, 175, 176, 177, 180, 183, 184, 185, 186, 187, 188, 189, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206]
-          assert len(expected) == 157 and len(set(expected)) == len(expected)
+          expected = [30, 91, 101, 168, 173]
+          assert len(expected) == 5 and len(set(expected)) == len(expected)
           root = Path('ciphertext')
           found = {}
           if root.is_dir():
@@ -343,7 +343,7 @@ jobs:
           unexpected = sorted(set(observed) - set(expected))
           complete = not missing and not unexpected and len(observed) == len(expected) and os.environ['MATRIX_VERDICT'] == 'success'
           metadata = {
-              'schema': 'LAS-encrypted-fast-positive-batch-v1',
+              'schema': 'LAS-encrypted-moderate-positive-batch-v1',
               'github_run_id': os.environ['GITHUB_RUN_ID'],
               'public_workflow_sha': os.environ['GITHUB_SHA'],
               'private_head_sha256_proof': '0ca2a0057461a7bb63c52603a2c83fd726c6b045ccf4ba699e90e47c9197c340',
@@ -363,19 +363,19 @@ jobs:
           print('LAS_ENCRYPTED_POSITIVE_UNEXPECTED='+str(len(unexpected)))
           print('LAS_ENCRYPTED_POSITIVE_MATRIX_CANDIDATE='+('PASS' if complete else 'INCOMPLETE'))
           PY
-          tar -czf "$RUNNER_TEMP/fast-positive-encrypted-custody.tgz" MANIFEST.json ciphertext
-          echo "LAS_FAST_POSITIVE_CIPHERTEXT_SHA256=$(sha256sum "$RUNNER_TEMP/fast-positive-encrypted-custody.tgz" | awk '{print $1}')"
+          tar -czf "$RUNNER_TEMP/moderate-positive-encrypted-custody.tgz" MANIFEST.json ciphertext
+          echo "LAS_MODERATE_POSITIVE_CIPHERTEXT_SHA256=$(sha256sum "$RUNNER_TEMP/moderate-positive-encrypted-custody.tgz" | awk '{print $1}')"
           if [[ "$MATRIX_VERDICT" != success ]] || ! grep -Fq '"completeness": "COMPLETE_SOURCE_RUNNER_ONLY"' MANIFEST.json; then
             exit 1
           fi
-          echo "LAS_FAST_POSITIVE_AGGREGATE=PASS"
+          echo "LAS_MODERATE_POSITIVE_AGGREGATE=PASS"
 
       - name: Upload encrypted-only aggregate regardless of completeness
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: exact-native-fast-positive-ciphertext-aggregate
-          path: ${{ runner.temp }}/fast-positive-encrypted-custody.tgz
+          name: exact-native-moderate-positive-ciphertext-aggregate
+          path: ${{ runner.temp }}/moderate-positive-encrypted-custody.tgz
           if-no-files-found: ignore
           retention-days: 1
           compression-level: 0
