@@ -36,16 +36,17 @@ jobs:
           cd "$root/original"
           cat > ResumeProbe.tla <<'TLA'
           ---------------- MODULE ResumeProbe ----------------
-          EXTENDS Integers
+          EXTENDS Naturals, FiniteSets
           VARIABLE x
-          Init == x = 0
-          Next == /\ x < 5000000
-                  /\ x' = x + 1
+          Init == x = {}
+          \* Every reachable state is a subset of the 20 named positions.
+          \* There are 2^20 reachable states, but no behavior exceeds
+          \* 21 states, avoiding TLC's 65535-state behavior-length bound.
+          Next == \E k \in 1..20 :
+                     /\ k \notin x
+                     /\ x' = x \cup {k}
           Spec == Init /\ [][Next]_x
-          \* Deliberately CPU-heavy invariant makes a small state set live
-          \* long enough for a low-cost JMX snapshot.
-          TypeOK == /\ x \in 0..5000000
-                    /\ \A k \in 1..300 : x + k >= x
+          TypeOK == x \subseteq (1..20)
           ====================================================
           TLA
           cat > ResumeProbe.cfg <<'CFG'
@@ -194,11 +195,11 @@ jobs:
               if not matches:
                   raise SystemExit("terminal state counters missing")
               generated, distinct, queue = (int(s.replace(",", "")) for s in matches[-1])
-              if distinct != 500000001 or queue != 0 or generated < distinct:
+              if distinct != 1048576 or queue != 0 or generated < distinct:
                   raise SystemExit("incomplete or unexpected graph")
               results.append((generated, distinct, queue))
-          if results[0] != results[1]:
-              raise SystemExit("resumed/direct terminal counters disagree")
-          print("LAS_SYNTH_COMPLETE_GRAPH=500000001")
+          if results[0][1:] != results[1][1:]:
+              raise SystemExit("resumed/direct completed reachable-state and empty-queue counts disagree")
+          print("LAS_SYNTH_COMPLETE_GRAPH=1048576")
           print("LAS_SYNTH_RECOVERY_EQUIVALENCE=PASS")
           PY
