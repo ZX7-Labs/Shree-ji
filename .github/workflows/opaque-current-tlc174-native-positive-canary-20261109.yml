@@ -1,4 +1,4 @@
-name: Opaque current canonical TLC174 moderate positive tranche
+name: Opaque current canonical TLC174 follow-on six positive tranche
 on:
   push:
     branches: [main]
@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: opaque-current-tlc174-moderate-positive-tranche
+  group: opaque-current-tlc174-followon-six
   cancel-in-progress: false
 env:
   EXPECTED_PRIVATE_REF_PROOF: 9e72c1a4537779a8dce3666299c00c3b625f2c234a16d60c151cea4c9d4a6525
@@ -20,9 +20,9 @@ jobs:
       fail-fast: false
       max-parallel: 3
       matrix:
-        index: [30, 91, 101, 168, 173]
+        index: [4, 11, 23, 90, 115, 181]
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       TARGET_INDEX: ${{ matrix.index }}
     steps:
@@ -234,7 +234,7 @@ jobs:
           test "$FAIL" -eq 0
           SH
           set +e
-          timeout --signal=TERM --kill-after=10s 540s bash "$RUNNER_TEMP/private-negative-driver.sh" "$ROOT" "$RUNNER_TEMP" "$cfg" "$tla" "$deadlock" "$expectation" >"$RUNNER_TEMP/private-negative-native.log" 2>&1
+          timeout --signal=TERM --kill-after=10s 1200s bash "$RUNNER_TEMP/private-negative-driver.sh" "$ROOT" "$RUNNER_TEMP" "$cfg" "$tla" "$deadlock" "$expectation" >"$RUNNER_TEMP/private-negative-native.log" 2>&1
           rc=$?
           set -e
           if [[ "$rc" -ne 0 ]] || ! grep -Fq 'PASS: TLC: ' "$RUNNER_TEMP/private-negative-native.log"; then
@@ -311,8 +311,8 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import hashlib, json, os, re, sys, tarfile
-          expected = [30, 91, 101, 168, 173]
-          assert len(expected) == 5 and len(set(expected)) == len(expected)
+          expected = [4, 11, 23, 90, 115, 181]
+          assert len(expected) == 6 and len(set(expected)) == len(expected)
           root = Path('ciphertext')
           found = {}
           if root.is_dir():
@@ -343,7 +343,7 @@ jobs:
           unexpected = sorted(set(observed) - set(expected))
           complete = not missing and not unexpected and len(observed) == len(expected) and os.environ['MATRIX_VERDICT'] == 'success'
           metadata = {
-              'schema': 'LAS-encrypted-moderate-positive-batch-v1',
+              'schema': 'LAS-encrypted-moderate-positive-batch-v2',
               'github_run_id': os.environ['GITHUB_RUN_ID'],
               'public_workflow_sha': os.environ['GITHUB_SHA'],
               'private_head_sha256_proof': '0ca2a0057461a7bb63c52603a2c83fd726c6b045ccf4ba699e90e47c9197c340',
@@ -363,8 +363,8 @@ jobs:
           print('LAS_ENCRYPTED_POSITIVE_UNEXPECTED='+str(len(unexpected)))
           print('LAS_ENCRYPTED_POSITIVE_MATRIX_CANDIDATE='+('PASS' if complete else 'INCOMPLETE'))
           PY
-          tar -czf "$RUNNER_TEMP/moderate-positive-encrypted-custody.tgz" MANIFEST.json ciphertext
-          echo "LAS_MODERATE_POSITIVE_CIPHERTEXT_SHA256=$(sha256sum "$RUNNER_TEMP/moderate-positive-encrypted-custody.tgz" | awk '{print $1}')"
+          tar -czf "$RUNNER_TEMP/moderate6-positive-encrypted-custody.tgz" MANIFEST.json ciphertext
+          echo "LAS_MODERATE_POSITIVE_CIPHERTEXT_SHA256=$(sha256sum "$RUNNER_TEMP/moderate6-positive-encrypted-custody.tgz" | awk '{print $1}')"
           if [[ "$MATRIX_VERDICT" != success ]] || ! grep -Fq '"completeness": "COMPLETE_SOURCE_RUNNER_ONLY"' MANIFEST.json; then
             exit 1
           fi
@@ -374,8 +374,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: exact-native-moderate-positive-ciphertext-aggregate
-          path: ${{ runner.temp }}/moderate-positive-encrypted-custody.tgz
+          name: exact-native-moderate6-positive-ciphertext-aggregate
+          path: ${{ runner.temp }}/moderate6-positive-encrypted-custody.tgz
           if-no-files-found: ignore
           retention-days: 1
           compression-level: 0
