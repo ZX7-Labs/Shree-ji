@@ -16,7 +16,7 @@ env:
 jobs:
   rust-allfeatures:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - name: Read exact private revision with masked identity
         shell: bash
@@ -173,3 +173,56 @@ jobs:
           echo "LAS_RUST_ALLFEATURES_TESTS=PASS"
           echo "LAS_RUST_TEST_NONVACUITY=PASS"
           echo "LAS_NATIVE_RUST_ALLFEATURES_SCOPE=PASS"
+
+      - name: Source-owned release default library tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          log="$RUNNER_TEMP/rust-release-default-private.log"
+          if ! timeout --signal=TERM --kill-after=10s 1200s env RUSTFLAGS=-Dwarnings cargo +1.98.1 test --locked --release --lib -- --test-threads=1 >"$log" 2>&1; then
+            echo "LAS_RUST_RELEASE_DEFAULT_LIB=FAIL_OR_INCOMPLETE"
+            exit 1
+          fi
+          if ! python3 -I -B tools/verification/canonical_rust_suite_policy.py --mode suite "$log" >"$RUNNER_TEMP/rust-release-default-evidence-private.log" 2>&1; then
+            echo "LAS_RUST_RELEASE_DEFAULT_LIB=NONVACUITY_FAIL"
+            exit 1
+          fi
+          echo "LAS_RUST_RELEASE_DEFAULT_LIB=PASS"
+
+      - name: Source-owned release all-feature library tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          log="$RUNNER_TEMP/rust-release-allfeatures-private.log"
+          if ! timeout --signal=TERM --kill-after=10s 1200s env RUSTFLAGS=-Dwarnings cargo +1.98.1 test --locked --release --all-features --lib -- --test-threads=1 >"$log" 2>&1; then
+            echo "LAS_RUST_RELEASE_ALLFEATURES_LIB=FAIL_OR_INCOMPLETE"
+            exit 1
+          fi
+          if ! python3 -I -B tools/verification/canonical_rust_suite_policy.py --mode suite "$log" >"$RUNNER_TEMP/rust-release-allfeatures-evidence-private.log" 2>&1; then
+            echo "LAS_RUST_RELEASE_ALLFEATURES_LIB=NONVACUITY_FAIL"
+            exit 1
+          fi
+          test -z "$(git status --porcelain --untracked-files=all)"
+          echo "LAS_RUST_RELEASE_ALLFEATURES_LIB=PASS"
+          echo "LAS_NATIVE_RUST_RELEASE_LIBRARIES_SCOPE=PASS"
+
+      - name: Independent release-mode declared measurement execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          target="$(python3 -I -B tools/verification/canonical_rust_suite_policy.py --mode target)"
+          test -n "$target"
+          log="$RUNNER_TEMP/rust-release-measurement-private.log"
+          if ! timeout --signal=TERM --kill-after=10s 1200s env RUSTFLAGS=-Dwarnings cargo +1.98.1 test --locked --release --all-features --lib "$target" -- --exact --ignored --test-threads=1 --nocapture >"$log" 2>&1; then
+            echo "LAS_RUST_RELEASE_MEASUREMENT=FAIL_OR_INCOMPLETE"
+            exit 1
+          fi
+          if ! python3 -I -B tools/verification/canonical_rust_suite_policy.py --mode release-measurement "$log" >"$RUNNER_TEMP/rust-release-measurement-evidence-private.log" 2>&1; then
+            echo "LAS_RUST_RELEASE_MEASUREMENT=NONVACUITY_FAIL"
+            exit 1
+          fi
+          test -z "$(git status --porcelain --untracked-files=all)"
+          echo "LAS_RUST_RELEASE_MEASUREMENT=PASS"
