@@ -163,12 +163,22 @@ jobs:
               if len(headers) != 1:
                   raise ValueError("proof summary header missing or duplicated")
               header = lines[headers[0]].rstrip()
-              labels = ("Total", "Flow", "Interval", "Provers", "Justified", "Unproved")
-              if not re.fullmatch(
-                  r"\s*SPARK Analysis results\s{2,}Total\s{2,}Flow\s{2,}"
-                  r"Interval\s{2,}Provers\s{2,}Justified\s{2,}Unproved", header
-              ):
+              header_tokens = [
+                  match.group(0)
+                  for match in re.finditer(r"\S.*?(?=\s{2,}|$)", header)
+              ]
+              # GNATprove versions show an optional intermediate statistics
+              # column. Require exactly a published named schema; no shifting
+              # of Justified/Unproved is ever accepted.
+              schemas = (
+                  ("Total", "Flow", "Interval", "Provers", "Justified", "Unproved"),
+                  ("Total", "Flow", "Provers", "Justified", "Unproved"),
+                  ("Total", "Flow", "CodePeer", "Provers", "Justified", "Unproved"),
+              )
+              if (not header_tokens or header_tokens[0] != "SPARK Analysis results"
+                      or tuple(header_tokens[1:]) not in schemas):
                   raise ValueError("proof summary columns changed")
+              labels = tuple(header_tokens[1:])
               ends = [header.index(label) + len(label) for label in labels]
               starts = [header.index("Total")] + ends[:-1]
               categories = (
@@ -208,7 +218,7 @@ jobs:
                   rows["Run-time Checks"][0],
                   rows["Functional Contracts"][0],
               )
-              return total, runtime, contracts, rows["Total"][4], rows["Total"][5]
+              return total, runtime, contracts, rows["Total"][-2], rows["Total"][-1]
 
           # Independent synthetic valid + malformed controls, all public-only.
           # A missing final debt column, any numeric proof debt, omitted category,
@@ -246,6 +256,44 @@ jobs:
                   accepted = False
               if accepted:
                   raise AssertionError("proof fixture false-green")
+          # Older valid five-measure schemas must also preserve the terminal
+          # debt columns. Verify their positive and adversarial cases separately.
+          fixture5_names = ("Total", "Flow", "Provers", "Justified", "Unproved")
+          fixture5_widths = (5, 14, 32, 12, 11)
+          fixture5_header = "SPARK Analysis results".ljust(30) + "".join(
+              name.rjust(width) for name, width
+              in zip(fixture5_names, fixture5_widths)
+          )
+          def fixture5(name, total, provers, justified=".", unproved="."):
+              values = (total, ".", provers, justified, unproved)
+              return name.ljust(30) + "".join(
+                  str(value).rjust(width) for value, width
+                  in zip(values, fixture5_widths)
+              )
+          r5 = fixture5("Run-time Checks", 4, 4)
+          c5 = fixture5("Functional Contracts", 2, 2)
+          t5 = fixture5("Total", 6, 6)
+          ok5 = "\n".join((fixture5_header, r5, c5, t5)) + "\n"
+          if read_summary(ok5) != (6, 4, 2, 0, 0):
+              raise AssertionError("older valid proof fixture rejected")
+          for malformed in (
+              ok5.replace(t5, t5[:-1]),
+              ok5.replace(t5, fixture5("Total", 6, 5, unproved=1)),
+              ok5.replace(t5, fixture5("Total", 6, 5, justified=1)),
+              ok5.replace(t5, fixture5("Total", 6, 5)),
+              ok5.replace(c5, ""),
+              ok5 + t5 + "\n",
+          ):
+              try:
+                  count, runtime, contracts, justified, unproved = read_summary(malformed)
+                  accepted = (
+                      count > 0 and runtime > 0 and contracts > 0
+                      and justified == 0 and unproved == 0
+                  )
+              except ValueError:
+                  accepted = False
+              if accepted:
+                  raise AssertionError("older proof fixture false-green")
           print("LAS_SPARK_CENSUS_SYNTHETIC_NEGATIVES=PASS")
           path = pathlib.Path(sys.argv[1])
           if not path.is_file() or path.is_symlink() or path.stat().st_size > 16_000_000:
