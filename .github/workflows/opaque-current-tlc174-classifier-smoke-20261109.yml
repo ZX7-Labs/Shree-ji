@@ -50,8 +50,16 @@ jobs:
           SPECIFICATION Spec
           INVARIANT TypeOK
           CFG
-          if ! timeout --signal=TERM --kill-after=10s 120s java -Xmx768m -cp tla2tools.jar tlc2.TLC -workers 1 -config RunnerProbe.cfg RunnerProbe >native-tlc.log 2>&1; then
+          set +e
+          timeout --signal=TERM --kill-after=10s 120s java -Xmx768m -cp tla2tools.jar tlc2.TLC -workers 1 -config RunnerProbe.cfg RunnerProbe >native-tlc.log 2>&1
+          native_rc=$?
+          set -e
+          if [[ "$native_rc" -ne 0 ]]; then
             echo "LAS_TLC174_NATIVE_MODEL=FAIL"
+            echo "LAS_TLC174_NATIVE_RC=$native_rc"
+            # This is a public, synthetic two-state model with no private
+            # source or secrets, so its native diagnostic is safe to display.
+            sed -n '1,80p' native-tlc.log
             exit 1
           fi
           grep -Fq 'Model checking completed. No error has been found.' native-tlc.log
