@@ -12,7 +12,7 @@ concurrency:
 jobs:
   public-synthetic-only:
     runs-on: ubuntu-24.04
-    timeout-minutes: 6
+    timeout-minutes: 15
     steps:
       - name: Download checksum-pinned original TLC 1.7.4 Java binary
         shell: bash
@@ -39,12 +39,12 @@ jobs:
           EXTENDS Integers
           VARIABLE x
           Init == x = 0
-          Next == /\ x < 50000
+          Next == /\ x < 5000000
                   /\ x' = x + 1
           Spec == Init /\ [][Next]_x
           \* Deliberately CPU-heavy invariant makes a small state set live
           \* long enough for a low-cost JMX snapshot.
-          TypeOK == /\ x \in 0..50000
+          TypeOK == /\ x \in 0..5000000
                     /\ \A k \in 1..300 : x + k >= x
           ====================================================
           TLA
@@ -162,7 +162,7 @@ jobs:
           echo "LAS_SYNTH_JMX_CHECKPOINT=CREATED"
           cd "$root/original"
           set +e
-          timeout --signal=TERM --kill-after=5s 100s \
+          timeout --signal=TERM --kill-after=5s 540s \
             java -XX:+UseParallelGC -Xmx1536m -jar "$RUNNER_TEMP/tla2tools.jar" \
             -workers 1 -fp 0 -lncheck final -checkpoint 1 \
             -recover "$checkpointdir" -config ResumeProbe.cfg ResumeProbe >"$root/recover.log" 2>&1
@@ -174,7 +174,7 @@ jobs:
             exit 1
           fi
           cd "$root/direct"
-          timeout --signal=TERM --kill-after=5s 100s \
+          timeout --signal=TERM --kill-after=5s 540s \
             java -XX:+UseParallelGC -Xmx1536m -jar "$RUNNER_TEMP/tla2tools.jar" \
             -workers 1 -fp 0 -lncheck final -config ResumeProbe.cfg ResumeProbe >"$root/direct.log" 2>&1
           python3 - "$root/recover.log" "$root/direct.log" <<'PY'
@@ -189,11 +189,11 @@ jobs:
               if not matches:
                   raise SystemExit("terminal state counters missing")
               generated, distinct, queue = (int(s.replace(",", "")) for s in matches[-1])
-              if distinct != 50001 or queue != 0 or generated < distinct:
+              if distinct != 500000001 or queue != 0 or generated < distinct:
                   raise SystemExit("incomplete or unexpected graph")
               results.append((generated, distinct, queue))
           if results[0] != results[1]:
               raise SystemExit("resumed/direct terminal counters disagree")
-          print("LAS_SYNTH_COMPLETE_GRAPH=50001")
+          print("LAS_SYNTH_COMPLETE_GRAPH=500000001")
           print("LAS_SYNTH_RECOVERY_EQUIVALENCE=PASS")
           PY
