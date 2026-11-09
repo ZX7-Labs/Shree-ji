@@ -1,4 +1,4 @@
-name: Opaque canonical TLC 1.7.4 positive canary
+name: Opaque current canonical TLC174 fast positive tranche
 on:
   push:
     branches: [main]
@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: opaque-current-tlc174-native-positive-canary
+  group: opaque-current-tlc174-fast-positive-tranche
   cancel-in-progress: false
 env:
   EXPECTED_PRIVATE_REF_PROOF: 9e72c1a4537779a8dce3666299c00c3b625f2c234a16d60c151cea4c9d4a6525
@@ -18,9 +18,9 @@ jobs:
     name: Opaque positive index ${{ matrix.index }}
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 6
       matrix:
-        index: [0, 1, 3]
+        index: [5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 25, 27, 31, 32, 33, 37, 38, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 62, 64, 66, 69, 71, 73, 74, 75, 76, 77, 78, 79, 80, 82, 83, 84, 87, 88, 89, 92, 93, 95, 96, 97, 98, 99, 100, 102, 103, 104, 105, 106, 107, 108, 110, 112, 113, 116, 117, 118, 119, 120, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 169, 170, 172, 174, 175, 176, 177, 180, 183, 184, 185, 186, 187, 188, 189, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -168,7 +168,7 @@ jobs:
           done
           echo "LAS_PUBLIC_OPAQUE_CLASSIFIER_RESULT=PASS"
 
-      - name: Run one exact private canonical expected-negative TLC model
+      - name: Run one exact private canonical expected-positive TLC model
         shell: bash
         run: |
           set -euo pipefail
@@ -283,6 +283,99 @@ jobs:
         with:
           name: encrypted-positive-index-${{ matrix.index }}
           path: ${{ runner.temp }}/native-evidence-ciphertext.tgz
+          if-no-files-found: ignore
+          retention-days: 1
+          compression-level: 0
+
+
+  aggregate-native-ciphertext:
+    name: Aggregate encrypted-only native positive receipts
+    if: always()
+    needs: [native-positive]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      MATRIX_VERDICT: ${{ needs.native-positive.result }}
+    steps:
+      - name: Download immutable encrypted-only receipt archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: encrypted-positive-index-*
+          path: ciphertext
+          merge-multiple: false
+
+      - name: Validate exact index set and prepare manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os, re, sys, tarfile
+          expected = [5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 25, 27, 31, 32, 33, 37, 38, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 62, 64, 66, 69, 71, 73, 74, 75, 76, 77, 78, 79, 80, 82, 83, 84, 87, 88, 89, 92, 93, 95, 96, 97, 98, 99, 100, 102, 103, 104, 105, 106, 107, 108, 110, 112, 113, 116, 117, 118, 119, 120, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 169, 170, 172, 174, 175, 176, 177, 180, 183, 184, 185, 186, 187, 188, 189, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206]
+          assert len(expected) == 157 and len(set(expected)) == len(expected)
+          root = Path('ciphertext')
+          found = {}
+          if root.is_dir():
+              for folder in root.iterdir():
+                  if not folder.is_dir():
+                      raise SystemExit('unexpected non-directory receipt')
+                  match = re.fullmatch(r'encrypted-positive-index-([0-9]+)', folder.name)
+                  if match is None:
+                      raise SystemExit('unexpected receipt folder')
+                  index = int(match.group(1))
+                  if index in found:
+                      raise SystemExit('duplicate profile receipt')
+                  children = list(folder.iterdir())
+                  if len(children) != 1 or children[0].name != 'native-evidence-ciphertext.tgz':
+                      raise SystemExit('unknown or missing ciphertext payload')
+                  data = children[0].read_bytes()
+                  if not data or len(data) > 128 * 1024 * 1024:
+                      raise SystemExit('empty or overlarge ciphertext payload')
+                  with tarfile.open(children[0], 'r:gz') as bundle:
+                      members = bundle.getmembers()
+                      if sorted(x.name for x in members) != ['native-envelope-keys.enc','native-evidence.enc','native-evidence.mac','native-iv.bin']:
+                          raise SystemExit('non-ciphertext evidence member')
+                      if any(not x.isfile() or x.issym() or x.islnk() for x in members):
+                          raise SystemExit('nonregular ciphertext member')
+                  found[index] = {'sha256': hashlib.sha256(data).hexdigest(), 'bytes': len(data)}
+          observed = sorted(found)
+          missing = sorted(set(expected) - set(observed))
+          unexpected = sorted(set(observed) - set(expected))
+          complete = not missing and not unexpected and len(observed) == len(expected) and os.environ['MATRIX_VERDICT'] == 'success'
+          metadata = {
+              'schema': 'LAS-encrypted-fast-positive-batch-v1',
+              'github_run_id': os.environ['GITHUB_RUN_ID'],
+              'public_workflow_sha': os.environ['GITHUB_SHA'],
+              'private_head_sha256_proof': '0ca2a0057461a7bb63c52603a2c83fd726c6b045ccf4ba699e90e47c9197c340',
+              'private_tree_sha256_proof': '9e2bbf22fc4e9f6d72fe71b06a8755186b7a953260d2e2c66ad3bfd3292de4ec',
+              'matrix_job_result': os.environ['MATRIX_VERDICT'],
+              'expected_count': len(expected),
+              'observed_count': len(observed),
+              'missing_indices': missing,
+              'unexpected_indices': unexpected,
+              'encrypted_payloads': {str(k): v for k,v in sorted(found.items())},
+              'completeness': 'COMPLETE_SOURCE_RUNNER_ONLY' if complete else 'INCOMPLETE',
+              'limitations': 'Ciphertext integrity only. No independent private decryption or full native model semantic proof.'
+          }
+          Path('MANIFEST.json').write_text(json.dumps(metadata,sort_keys=True,indent=2) + '\n')
+          print('LAS_ENCRYPTED_POSITIVE_OBSERVED='+str(len(observed)))
+          print('LAS_ENCRYPTED_POSITIVE_MISSING='+str(len(missing)))
+          print('LAS_ENCRYPTED_POSITIVE_UNEXPECTED='+str(len(unexpected)))
+          print('LAS_ENCRYPTED_POSITIVE_MATRIX_CANDIDATE='+('PASS' if complete else 'INCOMPLETE'))
+          PY
+          tar -czf "$RUNNER_TEMP/fast-positive-encrypted-custody.tgz" MANIFEST.json ciphertext
+          echo "LAS_FAST_POSITIVE_CIPHERTEXT_SHA256=$(sha256sum "$RUNNER_TEMP/fast-positive-encrypted-custody.tgz" | awk '{print $1}')"
+          if [[ "$MATRIX_VERDICT" != success ]] || ! grep -Fq '"completeness": "COMPLETE_SOURCE_RUNNER_ONLY"' MANIFEST.json; then
+            exit 1
+          fi
+          echo "LAS_FAST_POSITIVE_AGGREGATE=PASS"
+
+      - name: Upload encrypted-only aggregate regardless of completeness
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: exact-native-fast-positive-ciphertext-aggregate
+          path: ${{ runner.temp }}/fast-positive-encrypted-custody.tgz
           if-no-files-found: ignore
           retention-days: 1
           compression-level: 0
