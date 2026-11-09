@@ -1,0 +1,126 @@
+name: Frozen private exact source native Rust default validation
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opaque-exact-current-native-rust-default-20261109.yml"
+permissions:
+  contents: read
+concurrency:
+  group: opaque-native-rust-default-exact-source
+  cancel-in-progress: false
+env:
+  EXPECTED_PRIVATE_REF_PROOF: 9e72c1a4537779a8dce3666299c00c3b625f2c234a16d60c151cea4c9d4a6525
+  EXPECTED_PRIVATE_HEAD_PROOF: 0ca2a0057461a7bb63c52603a2c83fd726c6b045ccf4ba699e90e47c9197c340
+  EXPECTED_PRIVATE_TREE_PROOF: 9e2bbf22fc4e9f6d72fe71b06a8755186b7a953260d2e2c66ad3bfd3292de4ec
+jobs:
+  rust-default:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Read exact private revision with masked identity
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          if [[ -z "$PRIVATE_REPOSITORY" || -z "$PRIVATE_TOKEN" ]]; then
+            echo "LAS_PRIVATE_SOURCE_ACCESS=BLOCKED"
+            exit 1
+          fi
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+          root="$GITHUB_WORKSPACE/target"
+          mkdir "$root"
+          cd "$root"
+          git init -q
+          git remote add origin "https://github.com/${PRIVATE_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          if ! git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin >"$RUNNER_TEMP/opaque-heads" 2>"$RUNNER_TEMP/opaque-git-error"; then
+            echo "LAS_PRIVATE_SOURCE_ACCESS=BLOCKED"
+            exit 1
+          fi
+          matched_ref=""
+          matched_sha=""
+          while read -r sha ref; do
+            ref_proof="$(printf '%s' "$ref" | sha256sum | awk '{print $1}')"
+            if [[ "$ref_proof" == "$EXPECTED_PRIVATE_REF_PROOF" ]]; then
+              test -z "$matched_ref"
+              matched_ref="$ref"
+              matched_sha="$sha"
+            fi
+          done <"$RUNNER_TEMP/opaque-heads"
+          rm -f "$RUNNER_TEMP/opaque-heads"
+          test -n "$matched_ref"
+          test -n "$matched_sha"
+          echo "::add-mask::$matched_ref"
+          echo "::add-mask::$matched_sha"
+          test "$(printf '%s' "$matched_sha" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_HEAD_PROOF"
+          if ! git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$matched_ref" >/dev/null 2>"$RUNNER_TEMP/opaque-git-error"; then
+            echo "LAS_PRIVATE_FETCH=BLOCKED"
+            exit 1
+          fi
+          actual="$(git rev-parse FETCH_HEAD)"
+          echo "::add-mask::$actual"
+          test "$(printf '%s' "$actual" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_HEAD_PROOF"
+          git checkout -q --detach "$actual" 2>"$RUNNER_TEMP/opaque-git-error"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "::add-mask::$tree"
+          test "$(printf '%s' "$tree" | sha256sum | awk '{print $1}')" = "$EXPECTED_PRIVATE_TREE_PROOF"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          echo "LAS_PRIVATE_EXACT_REVIEW=PINNED"
+
+
+      - name: Install Rust exact canonical pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! rustup toolchain install 1.98.1 --profile minimal >"$RUNNER_TEMP/rustup-private.log" 2>&1; then
+            echo "LAS_RUST_TOOLCHAIN=BLOCKED"
+            exit 1
+          fi
+          if ! rustup component add --toolchain 1.98.1 rustfmt clippy >>"$RUNNER_TEMP/rustup-private.log" 2>&1; then
+            echo "LAS_RUST_COMPONENTS=BLOCKED"
+            exit 1
+          fi
+          echo "LAS_RUST_TOOLCHAIN=PINNED"
+      - name: Canonical Rust format validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          if ! timeout --signal=TERM --kill-after=5s 180s cargo +1.98.1 fmt --all -- --check >"$RUNNER_TEMP/rustfmt-private.log" 2>&1; then
+            echo "LAS_RUST_FMT=FAIL_OR_INCOMPLETE"
+            exit 1
+          fi
+          echo "LAS_RUST_FMT=PASS"
+      - name: Canonical default compilation warning deny
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          if ! timeout --signal=TERM --kill-after=10s 900s env RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --all-targets >"$RUNNER_TEMP/rust-check-private.log" 2>&1; then
+            echo "LAS_RUST_DEFAULT_CHECK=FAIL_OR_INCOMPLETE"
+            exit 1
+          fi
+          echo "LAS_RUST_DEFAULT_CHECK=PASS"
+      - name: Canonical default native Rust tests and source-owned libtest evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          log="$RUNNER_TEMP/rust-test-private.log"
+          if ! timeout --signal=TERM --kill-after=10s 900s env RUSTFLAGS=-Dwarnings cargo +1.98.1 test --locked --all-targets -- --test-threads=1 >"$log" 2>&1; then
+            echo "LAS_RUST_DEFAULT_TESTS=FAIL_OR_INCOMPLETE"
+            exit 1
+          fi
+          if ! python3 -I -B tools/verification/canonical_rust_test_evidence.py "$log" >"$RUNNER_TEMP/rust-evidence-private.log" 2>&1; then
+            echo "LAS_RUST_TEST_NONVACUITY=FAIL"
+            exit 1
+          fi
+          test -z "$(git status --porcelain --untracked-files=all)"
+          echo "LAS_RUST_DEFAULT_TESTS=PASS"
+          echo "LAS_RUST_TEST_NONVACUITY=PASS"
+          echo "LAS_NATIVE_RUST_DEFAULT_SCOPE=PASS"
