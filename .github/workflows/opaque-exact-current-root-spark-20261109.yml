@@ -162,7 +162,9 @@ jobs:
               rows = {}
               for line in lines[headers[0]+1:headers[0]+45]:
                   cols = re.split(r"\s{2,}", line.strip())
-                  if len(cols) != 7:
+                  # Version 16.1 may elide one blank middle statistics column;
+                  # final Justified/Unproved fields still remain explicit.
+                  if len(cols) not in (6, 7):
                       continue
                   label = cols[0]
                   if label in ("Total", "Run-time Checks", "Functional Contracts", "Assertions",
@@ -190,6 +192,7 @@ jobs:
           header = "SPARK Analysis results        Total          Flow   Interval        Provers   Justified   Unproved\n"
           ok = header + "Run-time Checks    4    .    .    4    .    .\nTotal    4    .    .    4    .    .\n"
           assert read_summary(ok) == (4,4,0,0,0)
+          assert read_summary(ok.replace("    .    .    4    .    .", "    .    4    .    .")) == (4,4,0,0,0)
           for broken in (ok.replace("Total    4", "Total    0"), ok.replace("4    .    .\n", "4    .    1\n")):
               # Parse may succeed but the acceptance predicate must reject it.
               try:

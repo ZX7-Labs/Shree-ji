@@ -262,13 +262,21 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/target"
-          rustfmt +1.98.1 --edition 2024 --check \
+          if ! rustfmt +1.98.1 --edition 2024 --check \
             src/effect_fabric/fake_actuator.rs bench/effect_fabric_benchmark.rs \
-            >"$RUNNER_TEMP/effect-bench-format-private.log" 2>&1
-          rustc +1.98.1 --edition=2024 -D warnings -C opt-level=3 \
+            >"$RUNNER_TEMP/effect-bench-format-private.log" 2>&1; then
+            echo "LAS_EFFECT_FABRIC_FORMAT=FAIL"
+            exit 1
+          fi
+          echo "LAS_EFFECT_FABRIC_FORMAT=PASS"
+          if ! rustc +1.98.1 --edition=2024 -D warnings -C opt-level=3 \
             -C overflow-checks=yes -C codegen-units=1 -C strip=symbols \
             bench/effect_fabric_benchmark.rs -o "$RUNNER_TEMP/effect-fabric-benchmark" \
-            >"$RUNNER_TEMP/effect-bench-compile-private.log" 2>&1
+            >"$RUNNER_TEMP/effect-bench-compile-private.log" 2>&1; then
+            echo "LAS_EFFECT_FABRIC_COMPILE=FAIL"
+            exit 1
+          fi
+          echo "LAS_EFFECT_FABRIC_COMPILE=PASS"
           if ! timeout --signal=TERM --kill-after=10s 180s env \
                LAS_BENCH_RECORDS=4096 LAS_BENCH_SAMPLES=9 LAS_BENCH_WARMUP=2 \
                /usr/bin/time -v "$RUNNER_TEMP/effect-fabric-benchmark" \
