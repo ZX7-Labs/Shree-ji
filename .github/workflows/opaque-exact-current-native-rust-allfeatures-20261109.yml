@@ -226,3 +226,77 @@ jobs:
           fi
           test -z "$(git status --porcelain --untracked-files=all)"
           echo "LAS_RUST_RELEASE_MEASUREMENT=PASS"
+
+
+      - name: Original Root FFI memory and p95 native performance acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          for kind in layout p95; do
+            if [[ "$kind" == layout ]]; then
+              target="effect_fabric::root_ffi_benchmark::root_adapter_memory_layout_baseline_is_reported"
+              extra=()
+            else
+              target="effect_fabric::root_ffi_benchmark::full_root_adapter_p95_is_within_twenty_milliseconds"
+              extra=(--release)
+            fi
+            log="$RUNNER_TEMP/root-native-${kind}-private.log"
+            if ! timeout --signal=TERM --kill-after=10s 1200s env RUSTFLAGS=-Dwarnings \
+                 cargo +1.98.1 test --locked "${extra[@]}" --features root-ffi "$target" \
+                 -- --exact --test-threads=1 --nocapture >"$log" 2>&1; then
+              echo "LAS_ROOT_PERF_${kind}=FAIL_OR_INCOMPLETE"
+              exit 1
+            fi
+            python3 -I -B - "$log" "$target" <<'PY'
+          import pathlib, re, sys
+          raw = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8",errors="replace")
+          target = sys.argv[2]
+          if not re.search(r"(?m)^running 1 test\s*$",raw):
+              raise SystemExit("LAS_ROOT_NATIVE_TEST=VACUOUS_OR_AMBIGUOUS")
+          if not re.search(r"(?m)^test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured;",raw):
+              raise SystemExit("LAS_ROOT_NATIVE_TEST=FAILED_OR_SKIPPED")
+          if not re.search(r"(?m)^test "+re.escape(target)+r" \.\.\. ok$",raw):
+              raise SystemExit("LAS_ROOT_NATIVE_TEST=WRONG_TARGET")
+          if "p95_" in target and not re.search(r"LAS_ROOT_ADAPTER_BENCH[\t ]",raw):
+              raise SystemExit("LAS_ROOT_NATIVE_TEST=MEASUREMENT_MISSING")
+          PY
+            echo "LAS_ROOT_NATIVE_${kind^^}=PASS"
+          done
+          test -z "$(git status --porcelain --untracked-files=all)"
+          echo "LAS_ROOT_P95_NATIVE_CHECK=PASS"
+
+      - name: Original optimized Effect Fabric benchmark with strict sample census
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/target"
+          rustfmt +1.98.1 --edition 2024 --check \
+            src/effect_fabric/fake_actuator.rs bench/effect_fabric_benchmark.rs \
+            >"$RUNNER_TEMP/effect-bench-format-private.log" 2>&1
+          rustc +1.98.1 --edition=2024 -D warnings -C opt-level=3 \
+            -C overflow-checks=yes -C codegen-units=1 -C strip=symbols \
+            bench/effect_fabric_benchmark.rs -o "$RUNNER_TEMP/effect-fabric-benchmark" \
+            >"$RUNNER_TEMP/effect-bench-compile-private.log" 2>&1
+          if ! timeout --signal=TERM --kill-after=10s 180s env \
+               LAS_BENCH_RECORDS=4096 LAS_BENCH_SAMPLES=9 LAS_BENCH_WARMUP=2 \
+               /usr/bin/time -v "$RUNNER_TEMP/effect-fabric-benchmark" \
+               >"$RUNNER_TEMP/effect-bench-native-private.log" 2>&1; then
+            echo "LAS_EFFECT_FABRIC_BENCH=FAIL_OR_INCOMPLETE"
+            exit 1
+          fi
+          python3 -I -B - "$RUNNER_TEMP/effect-bench-native-private.log" <<'PY'
+          import pathlib,re,sys
+          raw=pathlib.Path(sys.argv[1]).read_text(encoding="utf-8",errors="replace")
+          if len(re.findall(r"(?m)^LAS_BENCH_CONFIG\trecords=4096\tsamples=9\twarmup=2$",raw))!=1:
+              raise SystemExit("LAS_EFFECT_FABRIC_BENCH=CONFIG_MISMATCH")
+          rows=re.findall(r"(?m)^LAS_BENCH\t([a-z_]+)\trecords=4096\tsamples=9\twarmup=2\tmin_ns_per_record=(\d+)\tmedian_ns_per_record=(\d+)\tp95_ns_per_record=(\d+)\tmax_ns_per_record=(\d+)$",raw)
+          if len(rows)!=3 or {row[0] for row in rows}!={"clean_single_shot","lost_ack_replay_safe","crash_recovery"}:
+              raise SystemExit("LAS_EFFECT_FABRIC_BENCH=VACUOUS_OR_INCOMPLETE")
+          for _,minimum,median,p95,maximum in rows:
+              a,b,c,d=map(int,(minimum,median,p95,maximum))
+              if not (0<=a<=b<=c<=d):
+                  raise SystemExit("LAS_EFFECT_FABRIC_BENCH=BAD_ORDER")
+          PY
+          test -z "$(git status --porcelain --untracked-files=all)"
+          echo "LAS_EFFECT_FABRIC_NATIVE_BENCH=EXECUTED_WITH_CENSUS"
