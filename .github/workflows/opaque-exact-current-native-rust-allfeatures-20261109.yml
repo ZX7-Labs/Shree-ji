@@ -154,6 +154,27 @@ jobs:
           print("LAS_RUST_ALLFEATURES_CHECK_STDERR_VOCAB="+",".join(x for x in safe_vocab if x in words))
           print("LAS_RUST_ALLFEATURES_CHECK_STDERR_BYTES="+str(len(err)))
           print("LAS_RUST_ALLFEATURES_CHECK_DIAGNOSTIC_SHA256="+hashlib.sha256(raw+b"\\0"+err).hexdigest())
+          # Redact every private symbol, filename, path and quoted string.
+          # Public output may contain ONLY these fixed generic diagnostics.
+          public_words = set(("error failed warning compilation compile build compiler compiler-error command exit status not found no such file directory project archive missing source unit declaration package function procedure operator type mode unused never referenced imported name primitive library static gprbuild gnat ada gcc cargo environment run returned panic panicked during aborted cannot could may should require requires with from was is in at on for before after declared dependency ignored line syntax invalid unexpected expected conflicting duplicate specified unsupported no matching target missing object dependency invocation using access denied detected fatal errors warnings as treated"))
+          public_words.update(("uninitialized","initialized","elaboration","elaborate","visibility","unresolved","mismatch","discriminant","conversion","constraint","invalid","unknown","unbound","multiple","duplicate","expression","lvalue","nonstatic","type","interface","body","spec","predefined","standard","actual","formal","parameters","precondition","accessibility","cannot","use","kind","referenced","bind","binding","unrecognized","success","warning","error","out","of","range","read","write","expected","found"))
+          interesting = ("error", "warning", "failed", "panicked", "gprbuild", "gnat", "compilation")
+          shown = 0
+          for original_line in err.decode("utf-8","replace").splitlines():
+              words = re.findall(r"[a-z][a-z-]*", original_line.lower())
+              if not words or not any(w in words for w in interesting):
+                  continue
+              sanitized = [w if w in public_words else "REDACTED" for w in words]
+              collapsed = []
+              for term in sanitized:
+                  if not collapsed or term != "REDACTED" or collapsed[-1] != "REDACTED":
+                      collapsed.append(term)
+              print("LAS_RUST_ALLFEATURES_REDACTED_CLASS_" + str(shown) + "=" + " ".join(collapsed[:55]))
+              shown += 1
+              if shown >= 12:
+                  break
+          print("LAS_RUST_ALLFEATURES_REDACTED_LINE_COUNT=" + str(shown))
+
           PY
             echo "LAS_RUST_ALLFEATURES_CHECK=FAIL_OR_INCOMPLETE"
             exit 1
