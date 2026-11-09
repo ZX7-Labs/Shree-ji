@@ -1,0 +1,49 @@
+name: Public verifier new write authority change audit
+on:
+  push:
+    branches:
+      - main
+      - review/public-write-regression-gate-20261109
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+jobs:
+  source-change-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted pre-change public revision, without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || (github.ref == 'refs/heads/review/public-write-regression-gate-20261109' && '354914fa0ac1fd13895f1e3973b2c4b1a8e0fca0' || github.event.before) }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: baseline
+      - name: Checkout candidate as untrusted data only, without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: candidate
+      - name: Source-only compare (never execute code from untrusted PR checkout)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == "refs/heads/review/public-write-regression-gate-20261109" ]]; then
+            checker="candidate/.github/security/public_controller_change_gate.py"
+            echo "LAS_CHANGE_GUARD_REVIEW_ONLY=YES"
+          else
+            checker="baseline/.github/security/public_controller_change_gate.py"
+            echo "LAS_CHANGE_GUARD_TRUSTED_BASE_CHECKER=YES"
+          fi
+          test -f "$checker"
+          python3 -I -B "$checker" --self-test
+          python3 -O -I -B "$checker" --self-test
+          python3 -I -B "$checker" --baseline baseline --candidate candidate
+          python3 -O -I -B "$checker" --baseline baseline --candidate candidate
+          echo "LAS_CHANGE_GUARD_SOURCE_CHECK=PASS_SCOPED_ONLY"
+          echo "LAS_CHANGE_GUARD_PRIVATE_SOURCE_FETCH=NO"
+          echo "LAS_CHANGE_GUARD_SECRETS_READ=NO"
+          echo "LAS_CHANGE_GUARD_BRANCH_PROTECTION_REQUIRED=YES"
