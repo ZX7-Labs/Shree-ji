@@ -46,92 +46,92 @@ jobs:
           for mode in normal optimized; do
             if [[ "$mode" == normal ]]; then extra=(); else extra=(-O); fi
             python3 "${extra[@]}" -I -B - <<'PY_CANARY'
-            from pathlib import Path
-            import json, os, re, shutil, subprocess, sys, tempfile
-            def require(ok,msg):
-                if not ok: raise RuntimeError(msg)
-            spec={
-             "seven":(".github/workflows/opaque-current-tlc174-long7-positive-20261109.yml",[34,35,40,86,111,121,182]),
-             "one":(".github/workflows/opaque-current-tlc174-verylong132-positive-20261109.yml",[132]),
-            }
-            def source(path,indices):
-                t=(Path("controller")/path).read_text()
-                h="      - name: Validate exact index set and prepare manifest\n"
-                d="          python3 - <<'PY'\n"
-                e="\n          PY\n"
-                require(t.count(h)==1,"step not unique")
-                t=t.split(h,1)[1]
-                require(t.count(d)==1 and e in t,"script missing or duplicated")
-                l=t.split(d,1)[1].split(e,1)[0].splitlines()
-                require(all(x.startswith("          ") or not x.strip() for x in l),"indentation drift")
-                s="\n".join(x[10:] if x.strip() else "" for x in l)+"\n"
-                require("expected = "+repr(indices) in s and "assert len(expected) == 4" not in s,"cardinality source drift")
-                compile(s,path,"exec")
-                return s
-            def original(batch,indices):
-                d={}
-                for i in indices:
-                    if batch=="seven": f=Path("ciphertext/seven")/("encrypted-positive-index-"+str(i))/"native-evidence-ciphertext.tgz"
-                    else: f=Path("ciphertext/one/native-evidence-ciphertext.tgz")
-                    require(f.is_file() and not f.is_symlink(),"original receipt missing")
-                    d[i]=f.read_bytes()
-                    require(100<len(d[i])<100000000,"original receipt size invalid")
-                return d
-            def trial(script,records,expected,change="",verdict="success"):
-                with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"]) as d:
-                    w=Path(d)
-                    r=w/"ciphertext"
-                    r.mkdir()
-                    for i,v in records.items():
-                        f=r/("encrypted-positive-index-"+str(i))
-                        f.mkdir()
-                        (f/"native-evidence-ciphertext.tgz").write_bytes(v)
-                    if change=="missing":
-                        f=r/("encrypted-positive-index-"+str(expected[-1]))
-                        (f/"native-evidence-ciphertext.tgz").unlink()
-                        f.rmdir()
-                    elif change=="extra":
-                        f=r/"encrypted-positive-index-999"
-                        f.mkdir()
-                        (f/"native-evidence-ciphertext.tgz").write_bytes(next(iter(records.values())))
-                    elif change=="corrupt":
-                        f=r/("encrypted-positive-index-"+str(expected[0]))/"native-evidence-ciphertext.tgz"
-                        f.write_bytes(b"not an encrypted evidence archive")
-                    elif change=="plaintext":
-                        f=r/("encrypted-positive-index-"+str(expected[0]))/"private.log"
-                        f.write_text("inert test marker")
-                    elif change=="symlink":
-                        f=r/("encrypted-positive-index-"+str(expected[0]))/"native-evidence-ciphertext.tgz"
-                        shadow=w/"shadow.bin"
-                        shutil.move(f,shadow)
-                        f.symlink_to(shadow)
-                    env=dict(os.environ)
-                    env["MATRIX_VERDICT"]=verdict
-                    env["GITHUB_RUN_ID"]="0"
-                    p=subprocess.run([sys.executable,"-I","-B","-c",script],cwd=w,
-                                     env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=20)
-                    m=w/"MANIFEST.json"
-                    data=json.loads(m.read_text()) if m.exists() else {}
-                    return (p.returncode==0 and data.get("completeness")=="COMPLETE_SOURCE_RUNNER_ONLY"
-                            and data.get("expected_count")==len(expected)
-                            and data.get("observed_count")==len(expected)
-                            and data.get("missing_indices")==[] and data.get("unexpected_indices")==[]
-                            and verdict=="success")
-            count=0
-            for label,(path,indices) in spec.items():
-                script=source(path,indices)
-                records=original(label,indices)
-                require(trial(script,records,indices),"original positive rejected")
-                count+=1
-                for change in ("missing","extra","corrupt","plaintext","symlink"):
-                    require(not trial(script,records,indices,change),"mutation false green")
-                    count+=1
-                require(not trial(script,records,indices,verdict="failure"),"matrix false green")
-                count+=1
-            print("LAS_REVIEW_EXACT_AGGREGATE_SCRIPT=PASS")
-            print("LAS_REVIEW_EXACT_AGGREGATE_CASES="+str(count))
-            print("LAS_REVIEW_NATIVE_TLC_RERUN=NO")
-            print("LAS_REVIEW_OWNER_KEY_DECRYPTION=NOT_RUN")
-            print("LAS_REVIEW_ORIGINAL_FORMAL_AGGREGATE=NOT_ACCEPTED")
-            PY_CANARY
+          from pathlib import Path
+          import json, os, re, shutil, subprocess, sys, tempfile
+          def require(ok,msg):
+              if not ok: raise RuntimeError(msg)
+          spec={
+           "seven":(".github/workflows/opaque-current-tlc174-long7-positive-20261109.yml",[34,35,40,86,111,121,182]),
+           "one":(".github/workflows/opaque-current-tlc174-verylong132-positive-20261109.yml",[132]),
+          }
+          def source(path,indices):
+              t=(Path("controller")/path).read_text()
+              h="      - name: Validate exact index set and prepare manifest\n"
+              d="          python3 - <<'PY'\n"
+              e="\n          PY\n"
+              require(t.count(h)==1,"step not unique")
+              t=t.split(h,1)[1]
+              require(t.count(d)==1 and e in t,"script missing or duplicated")
+              l=t.split(d,1)[1].split(e,1)[0].splitlines()
+              require(all(x.startswith("          ") or not x.strip() for x in l),"indentation drift")
+              s="\n".join(x[10:] if x.strip() else "" for x in l)+"\n"
+              require("expected = "+repr(indices) in s and "assert len(expected) == 4" not in s,"cardinality source drift")
+              compile(s,path,"exec")
+              return s
+          def original(batch,indices):
+              d={}
+              for i in indices:
+                  if batch=="seven": f=Path("ciphertext/seven")/("encrypted-positive-index-"+str(i))/"native-evidence-ciphertext.tgz"
+                  else: f=Path("ciphertext/one/native-evidence-ciphertext.tgz")
+                  require(f.is_file() and not f.is_symlink(),"original receipt missing")
+                  d[i]=f.read_bytes()
+                  require(100<len(d[i])<100000000,"original receipt size invalid")
+              return d
+          def trial(script,records,expected,change="",verdict="success"):
+              with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"]) as d:
+                  w=Path(d)
+                  r=w/"ciphertext"
+                  r.mkdir()
+                  for i,v in records.items():
+                      f=r/("encrypted-positive-index-"+str(i))
+                      f.mkdir()
+                      (f/"native-evidence-ciphertext.tgz").write_bytes(v)
+                  if change=="missing":
+                      f=r/("encrypted-positive-index-"+str(expected[-1]))
+                      (f/"native-evidence-ciphertext.tgz").unlink()
+                      f.rmdir()
+                  elif change=="extra":
+                      f=r/"encrypted-positive-index-999"
+                      f.mkdir()
+                      (f/"native-evidence-ciphertext.tgz").write_bytes(next(iter(records.values())))
+                  elif change=="corrupt":
+                      f=r/("encrypted-positive-index-"+str(expected[0]))/"native-evidence-ciphertext.tgz"
+                      f.write_bytes(b"not an encrypted evidence archive")
+                  elif change=="plaintext":
+                      f=r/("encrypted-positive-index-"+str(expected[0]))/"private.log"
+                      f.write_text("inert test marker")
+                  elif change=="symlink":
+                      f=r/("encrypted-positive-index-"+str(expected[0]))/"native-evidence-ciphertext.tgz"
+                      shadow=w/"shadow.bin"
+                      shutil.move(f,shadow)
+                      f.symlink_to(shadow)
+                  env=dict(os.environ)
+                  env["MATRIX_VERDICT"]=verdict
+                  env["GITHUB_RUN_ID"]="0"
+                  p=subprocess.run([sys.executable,"-I","-B","-c",script],cwd=w,
+                                   env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=20)
+                  m=w/"MANIFEST.json"
+                  data=json.loads(m.read_text()) if m.exists() else {}
+                  return (p.returncode==0 and data.get("completeness")=="COMPLETE_SOURCE_RUNNER_ONLY"
+                          and data.get("expected_count")==len(expected)
+                          and data.get("observed_count")==len(expected)
+                          and data.get("missing_indices")==[] and data.get("unexpected_indices")==[]
+                          and verdict=="success")
+          count=0
+          for label,(path,indices) in spec.items():
+              script=source(path,indices)
+              records=original(label,indices)
+              require(trial(script,records,indices),"original positive rejected")
+              count+=1
+              for change in ("missing","extra","corrupt","plaintext","symlink"):
+                  require(not trial(script,records,indices,change),"mutation false green")
+                  count+=1
+              require(not trial(script,records,indices,verdict="failure"),"matrix false green")
+              count+=1
+          print("LAS_REVIEW_EXACT_AGGREGATE_SCRIPT=PASS")
+          print("LAS_REVIEW_EXACT_AGGREGATE_CASES="+str(count))
+          print("LAS_REVIEW_NATIVE_TLC_RERUN=NO")
+          print("LAS_REVIEW_OWNER_KEY_DECRYPTION=NOT_RUN")
+          print("LAS_REVIEW_ORIGINAL_FORMAL_AGGREGATE=NOT_ACCEPTED")
+          PY_CANARY
           done
