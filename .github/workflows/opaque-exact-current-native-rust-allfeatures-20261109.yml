@@ -121,8 +121,16 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/target"
+          # Temporary diagnostic instrument: forwards GPRBUILD arguments and exit
+          # unchanged, but retains source-owned GNAT build output only in runner
+          # ephemeral temp; not an acceptance-mode command.
+          cat >"$RUNNER_TEMP/opaque-gprbuild-logger.sh" <<'SH'
+          #!/usr/bin/env bash
+          exec /usr/bin/gprbuild "$@" >"$RUNNER_TEMP/private-gprbuild-native.log" 2>&1
+          SH
+          chmod 700 "$RUNNER_TEMP/opaque-gprbuild-logger.sh"
           set +e
-          timeout --signal=TERM --kill-after=10s 900s env RUSTFLAGS=-Dwarnings cargo +1.98.1 check --locked --all-targets --all-features --message-format=json >"$RUNNER_TEMP/rust-check-private.jsonl" 2>"$RUNNER_TEMP/rust-check-private.stderr"
+          timeout --signal=TERM --kill-after=10s 900s env RUSTFLAGS=-Dwarnings GPRBUILD="$RUNNER_TEMP/opaque-gprbuild-logger.sh" cargo +1.98.1 check --locked --all-targets --all-features --message-format=json >"$RUNNER_TEMP/rust-check-private.jsonl" 2>"$RUNNER_TEMP/rust-check-private.stderr"
           rc=$?
           set -e
           if [[ "$rc" -ne 0 ]]; then
@@ -174,6 +182,30 @@ jobs:
               if shown >= 12:
                   break
           print("LAS_RUST_ALLFEATURES_REDACTED_LINE_COUNT=" + str(shown))
+          native_log = pathlib.Path(sys.argv[2]).with_name("private-gprbuild-native.log")
+          if native_log.is_file():
+              native_text = native_log.read_bytes().decode("utf-8", "replace")
+              print("LAS_RUST_ADA_NATIVE_LOG_BYTES=" + str(len(native_text.encode("utf-8"))))
+              print("LAS_RUST_ADA_NATIVE_ERROR_COUNT=" + str(len(re.findall(r"(?i)\\berror\\b", native_text))))
+              print("LAS_RUST_ADA_NATIVE_WARNING_COUNT=" + str(len(re.findall(r"(?i)\\bwarning\\b", native_text))))
+              shown_native = 0
+              for line in native_text.splitlines():
+                  tokens = re.findall(r"[a-z][a-z-]*", line.lower())
+                  if not any(t in tokens for t in ("error","warning","failed","fatal","cannot","expected")):
+                      continue
+                  safe = [w if w in public_words else "REDACTED" for w in tokens]
+                  compact = []
+                  for word in safe:
+                      if word != "REDACTED" or not compact or compact[-1] != "REDACTED":
+                          compact.append(word)
+                  print("LAS_RUST_ADA_REDACTED_CLASS_" + str(shown_native) + "=" + " ".join(compact[:60]))
+                  shown_native += 1
+                  if shown_native >= 15:
+                      break
+              print("LAS_RUST_ADA_REDACTED_LINE_COUNT=" + str(shown_native))
+          else:
+              print("LAS_RUST_ADA_NATIVE_LOG=MISSING")
+
 
           PY
             echo "LAS_RUST_ALLFEATURES_CHECK=FAIL_OR_INCOMPLETE"
