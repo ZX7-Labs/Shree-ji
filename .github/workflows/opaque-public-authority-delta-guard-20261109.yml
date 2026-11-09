@@ -1,0 +1,66 @@
+name: Public verification workflow authority delta check
+on:
+  push:
+    branches: [review/public-verifier-authority-20261109]
+    paths:
+      - '.github/workflows/opaque-public-authority-delta-guard-20261109.yml'
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  public-verifier-delta-review-smoke:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout public review candidate without persisting credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Exercise new-authority guard on exact public review revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 -I -B .github/security/public_workflow_delta_guard.py --self-test
+          python3 -O -I -B .github/security/public_workflow_delta_guard.py --self-test
+          python3 -I -B .github/security/public_workflow_delta_guard.py --scan .github/workflows --manifest .github/security/public_workflow_baseline_20261109.tsv
+          python3 -O -I -B .github/security/public_workflow_delta_guard.py --scan .github/workflows --manifest .github/security/public_workflow_baseline_20261109.tsv
+          echo "LAS_PR_DELTA_GUARD_REVIEW_NATIVE=PASS"
+          echo "LAS_PR_DELTA_GUARD_PRIVILEGED_CONTEXT=NO"
+  public-verifier-delta-readonly:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout trusted base control source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+      - name: Checkout untrusted public candidate as data only
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: candidate
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+      - name: Validate immutable policy source and scan candidate workflows without executing them
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C trusted rev-parse HEAD)" = "${{ github.event.pull_request.base.sha }}"
+          test "$(git -C candidate rev-parse HEAD)" = "$GITHUB_SHA"
+          for p in .github/security/public_workflow_delta_guard.py .github/security/public_workflow_baseline_20261109.tsv .github/workflows/opaque-public-authority-delta-guard-20261109.yml; do
+            cmp -s "trusted/$p" "candidate/$p" || { echo "LAS_PR_DELTA_TRUSTED_POLICY_DRIFT=DENIED"; exit 1; }
+          done
+          python3 -I -B trusted/.github/security/public_workflow_delta_guard.py --self-test
+          python3 -I -B trusted/.github/security/public_workflow_delta_guard.py --scan candidate/.github/workflows --manifest trusted/.github/security/public_workflow_baseline_20261109.tsv
+          echo "LAS_PR_DELTA_ADVISORY_CHECK=PASS_SCOPED"
+          echo "LAS_PR_DELTA_REQUIRED_BRANCH_CHECK=NOT_CONFIGURED"
