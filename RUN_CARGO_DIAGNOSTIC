@@ -1,4 +1,4 @@
 TARGET_REF_HASH=5f60c6913aeaa102e9c2a7cedc6ef1c89daa3f93ce2cd2d370cca2bafaf1decf
-EXPECTED_PRIVATE_SNAPSHOT_PROOF=578fe776f45bdd48653be496cce7c52c9962e00b2f74b8a712204df7a0343cbc
-NONCE=20261110-root-signature-effect-binding-exact-final-check
+EXPECTED_PRIVATE_SNAPSHOT_PROOF=b0ea76190c89442e5e91994a45f81193e1f27d1c1c1ebfc5e6758e547b8cd4b7
+NONCE=20261110-p0-resource-root-pin-red-green-exact-f64c-default
 FEATURE_MODE=default
