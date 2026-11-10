@@ -1,4 +1,4 @@
 TARGET_REF_HASH=5f60c6913aeaa102e9c2a7cedc6ef1c89daa3f93ce2cd2d370cca2bafaf1decf
 EXPECTED_PRIVATE_SNAPSHOT_PROOF=3054550be4fe3fb0c4ebd6a3813b6149ca12561c455680b96ba386c24142141e
-NONCE=20261110-p0-installation-bound-signed-commands-final-default
-FEATURE_MODE=default
+NONCE=20261110-p0-installation-bound-signed-commands-allfeatures-exact-recheck
+FEATURE_MODE=all
