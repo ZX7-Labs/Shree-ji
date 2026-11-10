@@ -1,4 +1,4 @@
 TARGET_REF_HASH=5f60c6913aeaa102e9c2a7cedc6ef1c89daa3f93ce2cd2d370cca2bafaf1decf
-EXPECTED_PRIVATE_SNAPSHOT_PROOF=f2909d5ac833876eeb0bec635e5b344a36bcee2006736928f6740d74fc8bf0e4
-NONCE=20261110-p0-fence-ref-final-head-default-compile
+EXPECTED_PRIVATE_SNAPSHOT_PROOF=b46d505a630d3ea4a2e4b539dcb225fa1933d726d1aaf586b7d1e5ae76ae91c2
+NONCE=20261110-resource-owned-sqlite-fixture-exact-head-default-compile
 FEATURE_MODE=default
