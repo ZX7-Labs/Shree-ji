@@ -1,0 +1,143 @@
+name: Source-locked private native Linux Rust tests (read-only)
+on:
+  push:
+    branches: [main]
+    paths:
+      - RUN_NATIVE_LINUX_TESTS
+
+permissions:
+  contents: read
+
+concurrency:
+  group: las-readonly-exact-native-linux
+  cancel-in-progress: false
+
+jobs:
+  exact-native-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - name: Checkout public controller without retained credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Bind exact private source without publication
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          test -n "$PRIVATE_REPOSITORY"
+          test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+          test -s RUN_NATIVE_LINUX_TESTS
+          refproof="$(awk -F= '$1=="TARGET_REF_HASH"{print $2}' RUN_NATIVE_LINUX_TESTS)"
+          snapshotproof="$(awk -F= '$1=="EXPECTED_PRIVATE_SNAPSHOT_PROOF"{print $2}' RUN_NATIVE_LINUX_TESTS)"
+          [[ "$refproof" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$snapshotproof" =~ ^[a-f0-9]{64}$ ]]
+          root="$RUNNER_TEMP/source"
+          mkdir -p "$root"
+          cd "$root"
+          git init -q
+          git remote add origin "https://github.com/$PRIVATE_REPOSITORY.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" ls-remote --heads origin > "$RUNNER_TEMP/heads" 2>"$RUNNER_TEMP/git.err"
+          found_ref=""
+          found_sha=""
+          while read -r candidate_sha candidate_ref; do
+            candidate_hash="$(printf '%s' "$candidate_ref" | sha256sum | awk '{print $1}')"
+            if [[ "$candidate_hash" == "$refproof" ]]; then
+              test -z "$found_ref"
+              found_ref="$candidate_ref"
+              found_sha="$candidate_sha"
+            fi
+          done < "$RUNNER_TEMP/heads"
+          rm -f "$RUNNER_TEMP/heads" "$RUNNER_TEMP/git.err"
+          test -n "$found_ref"
+          test -n "$found_sha"
+          echo "::add-mask::$found_ref"
+          echo "::add-mask::$found_sha"
+          test "$(printf '%s' "$found_sha" | sha256sum | awk '{print $1}')" = "$snapshotproof"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth" fetch -q --depth=1 origin "$found_ref" > /dev/null 2>"$RUNNER_TEMP/git.err"
+          test "$(git rev-parse FETCH_HEAD)" = "$found_sha"
+          git checkout -q --detach FETCH_HEAD 2>"$RUNNER_TEMP/git.err"
+          test "$(printf '%s' "$(git rev-parse HEAD)" | sha256sum | awk '{print $1}')" = "$snapshotproof"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          echo "LAS_NATIVE_EXACT_SOURCE=PINNED"
+          echo "LAS_NATIVE_WRITE_AUTHORITY=NONE"
+          rm -f "$RUNNER_TEMP/git.err"
+
+      - name: Execute full native Linux Rust suite against exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/source"
+          export GIT_TERMINAL_PROMPT=0
+          export RUSTFLAGS=-Dwarnings
+          if ! rustup toolchain install 1.98.1 --profile minimal >"$RUNNER_TEMP/toolchain.log" 2>&1; then
+            echo "LAS_NATIVE_TOOLCHAIN=BLOCKED"
+            exit 1
+          fi
+          if ! rustup component add --toolchain 1.98.1 rustfmt clippy >>"$RUNNER_TEMP/toolchain.log" 2>&1; then
+            echo "LAS_NATIVE_COMPONENTS=BLOCKED"
+            exit 1
+          fi
+          echo "LAS_NATIVE_TOOLCHAIN=PINNED_1_98_1"
+          failed=0
+          run_gate() {
+            name="$1"
+            shift
+            log="$RUNNER_TEMP/las-native-$name.log"
+            set +e
+            timeout --signal=TERM --kill-after=5s 2400s "$@" >"$log" 2>&1
+            rc=$?
+            set -e
+            echo "LAS_NATIVE_$name"_RC="$rc"
+            if (( rc != 0 )); then failed=1; fi
+            python3 - "$log" "$name" <<'PY'
+          import re, sys
+          from pathlib import Path
+          raw = Path(sys.argv[1]).read_text(errors="replace")
+          name = sys.argv[2]
+          markers = {
+              "RUST_ERROR_CODES": len(re.findall(r"\berror\[E[0-9]{4}\]", raw)),
+              "RUST_ERROR_LINES": len(re.findall(r"(?m)^error:", raw)),
+              "TEST_FAILED_LINES": len(re.findall(r"(?m)^test result: FAILED", raw)),
+              "TEST_SUCCESS_LINES": len(re.findall(r"(?m)^test result: ok", raw)),
+              "WARNINGS": len(re.findall(r"(?m)^warning:", raw)),
+          }
+          for key, value in markers.items():
+              print(f"LAS_NATIVE_{name}_{key}={value}")
+          PY
+          }
+          run_gate FMT cargo +1.98.1 fmt --all -- --check
+          run_gate CHECK cargo +1.98.1 check --locked --all-targets --features linux-peer-credentials
+          run_gate CLIPPY cargo +1.98.1 clippy --locked --all-targets --features linux-peer-credentials -- -D warnings
+          run_gate TESTS cargo +1.98.1 test --locked --all-targets --features linux-peer-credentials -- --test-threads=1
+          if (( failed == 0 )); then
+            if ! python3 -I -B tools/verification/canonical_rust_test_evidence.py "$RUNNER_TEMP/las-native-TESTS.log" >"$RUNNER_TEMP/evidence.log" 2>&1; then
+              echo "LAS_NATIVE_TEST_NONVACUITY=FAIL"
+              failed=1
+            else
+              echo "LAS_NATIVE_TEST_NONVACUITY=PASS"
+            fi
+          else
+            echo "LAS_NATIVE_TEST_NONVACUITY=NOT_ACCEPTED"
+          fi
+          if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
+            echo "LAS_NATIVE_TRACKED_TREE_CLEAN=FAIL"
+            failed=1
+          else
+            echo "LAS_NATIVE_TRACKED_TREE_CLEAN=PASS"
+          fi
+          rm -f "$RUNNER_TEMP"/las-native-*.log "$RUNNER_TEMP/evidence.log" "$RUNNER_TEMP/toolchain.log"
+          if (( failed != 0 )); then
+            echo "LAS_NATIVE_LINUX_FULL_SUITE=FAIL_OR_INCOMPLETE"
+            exit 1
+          fi
+          echo "LAS_NATIVE_LINUX_FULL_SUITE=PASS_SOURCE_SCOPED_ONLY"
