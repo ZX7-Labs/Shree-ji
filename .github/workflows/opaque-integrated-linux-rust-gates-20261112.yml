@@ -112,6 +112,7 @@ jobs:
             echo "LAS_NATIVE_${name}_RC=$rc"
             echo "LAS_NATIVE_${name}_LOG_SHA256=$(sha256sum "$log" | cut -d' ' -f1)"
             if [[ "$name" == "FOCUSED_COVERAGE" || "$name" == "FOCUSED_GUARDIAN" || "$name" == "GUARDED_SERVICE" || "$name" == "FULL_LIBRARY" || "$name" == "OPTIMIZED_FOCUSED" ]]; then
+              set +e
               python3 - "$log" "$name" <<'PY'
           import hashlib, re, sys
           p, name = sys.argv[1:3]
@@ -129,6 +130,7 @@ jobs:
               print("LAS_NATIVE_FAILED_TEST_HASH=" + hashlib.sha256(test_name.encode()).hexdigest())
           PY
               status=$?
+              set -e
               if [[ "$status" -ne 0 ]]; then rc=1; fi
             fi
             if [[ "$name" == "CHECK_LINUX" || "$name" == "BUILD_LIBRARY_TESTS" || "$name" == "CLIPPY_LINUX" ]]; then
