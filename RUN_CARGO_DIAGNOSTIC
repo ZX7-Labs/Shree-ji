@@ -1,4 +1,4 @@
 TARGET_REF_HASH=4e8e29bb28eb84615c56c0e8559496eabb6a5e0e50849c9c9aa87a23c3287772
-EXPECTED_PRIVATE_SNAPSHOT_PROOF=988d9eef3ab91b586325a2fb1aa7d5f91a1a4ec658e36a92969f07cf9bb2ee83
-NONCE=20261113-private-model-worker-kernel-confinement-scoped-source-rust-check-v1
+EXPECTED_PRIVATE_SNAPSHOT_PROOF=a50a76bbf4bf079fc5f1ca5c6c70f4b9eb17e76ead5f007d03e497b2553f3d39
+NONCE=20261113-private-durable-rootless-prototype-source-locked-rust-check
 FEATURE_MODE=default
