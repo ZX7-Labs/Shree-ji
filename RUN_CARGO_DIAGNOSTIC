@@ -1,4 +1,4 @@
 TARGET_REF_HASH=4e8e29bb28eb84615c56c0e8559496eabb6a5e0e50849c9c9aa87a23c3287772
-EXPECTED_PRIVATE_SNAPSHOT_PROOF=9ca58a70f0b3b69e4d0856ddf59fc0db33fa0c61644407d4f9f2a19ba510e319
-NONCE=20261113-native-proposal-with-real-Linux-integration-tests-compile-v4
+EXPECTED_PRIVATE_SNAPSHOT_PROOF=7da5c88cfa1f78ddccef12f078d39ff8708ddf884852278ce46fcfb06d16b790
+NONCE=20261113-native-prototype-exact-format-source-strict-cargo-final-v5
 FEATURE_MODE=default
