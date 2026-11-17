@@ -1,0 +1,146 @@
+name: Signed private profile
+on:
+  push:
+    branches: [main]
+    paths: [RUN_PRIVATE_PROFILE.txt]
+permissions:
+  contents: read
+jobs:
+  profile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Admit signed request
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          root="$(mktemp -d "$RUNNER_TEMP/profile.XXXXXXXX")"
+          printf 'PROFILE_ROOT=%s\n' "$root" >> "$GITHUB_ENV"
+          exec 2>"$root/admission.log"
+          mapfile -t req < RUN_PRIVATE_PROFILE.txt
+          [[ "${#req[@]}" = 4 && "${req[0]}" =~ ^[0-9a-f]{64}$ && "${req[1]}" =~ ^[0-9a-f]{64}$ ]]
+          [[ "${req[2]}" =~ ^[0-9a-f]{64}$ ]]
+          [[ "${req[3]}" =~ ^[A-Za-z0-9+/]{512}$ ]]
+          cat > "$root/public.pem" <<'KEY'
+          -----BEGIN PUBLIC KEY-----
+          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA2e8OkvMB/1yQjb3P7ZqT
+          E1OBwPwIGrIAJwHfa3iwUrGj4T/QY3pMoMXEKbH1cg3J5XKfZFPnRsbXp+2son1/
+          4QH5WfDpb0eZU3AddS95UsG3Yi8QKF+ZEfmSmzCj8/8/z5TnOdr1cFOnXXZEdYJt
+          ASrk2PGBVkRysA9+5J1mzfDWZ8v6FE4LC7tSjoc6wBJU7W+dNsWILSFIUGqogd4g
+          Dt3077+vuIxrWnUlnDLpCHiSQubrVv8+RxS/WV4014k15CaZiHAt7HkaO1ulibAC
+          MDsxRJdBh/ERO965KnkjI+zI69iwVLUONNrXT8IlGqZzUbQ/736wGbaaO2lPhwcb
+          TM2uv4fz9Rw9t1v2onrveXbDXh1LqWSgxrWb9X1wBQa9zhK77HckbaPxNP91HlTF
+          5XKsW4AHDJ/atLU+L/edzzEC7BfroxYVJnL0UnzT9CghfdrUxMJahb8cShd8vdvV
+          aGHs1cMaE0j7InZd/2QpqZzA3uyQt8o7sEn6wYS2y+OXAgMBAAE=
+          -----END PUBLIC KEY-----
+          KEY
+          printf '%s' "${req[3]}" | base64 -d > "$root/signature"
+          printf '%s\n' LAS_SINGLE_PROFILE_V2 "${req[@]:0:3}" | openssl dgst -sha256 -verify "$root/public.pem" -signature "$root/signature" >/dev/null
+          [[ "$PRIVATE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && -n "$PRIVATE_TOKEN" ]]
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          remote="https://github.com/$PRIVATE_REPOSITORY.git"
+          export GIT_TERMINAL_PROMPT=0
+          git -c "http.extraHeader=AUTHORIZATION: basic $auth" ls-remote --heads "$remote" > "$root/refs"
+          resolve() {
+            local sha ref hash
+            while read -r sha ref; do
+              hash="$(printf '%s' "$sha" | sha256sum)"
+              if [[ "${hash%% *}" = "$1" ]]; then printf '%s' "$sha"; return 0; fi
+            done < "$root/refs"
+            return 1
+          }
+          source_sha="$(resolve "${req[0]}")"
+          executor_sha="$(resolve "${req[1]}")"
+          git init --quiet "$root/work"
+          cd "$root/work"
+          git -c "http.extraHeader=AUTHORIZATION: basic $auth" fetch -q --depth=2 "$remote" "$executor_sha"
+          unset PRIVATE_TOKEN auth remote
+          [[ "$(git rev-list --parents -1 "$executor_sha")" = "$executor_sha $source_sha" ]]
+          git checkout -q --detach "$executor_sha"
+          git diff-tree --no-commit-id --name-status -rz "$source_sha" "$executor_sha" > "$root/diff"
+          mapfile -d '' -t delta < "$root/diff"
+          [[ "${#delta[@]}" = 2 && "${delta[0]}" = A && "${delta[1]}" =~ ^[a-zA-Z0-9_/.-]+\.py$ ]]
+          printf '%s\n' "${delta[1]}" > "$root/entry"
+          for ((i=0; i<1000; i++)); do
+            selector="$(printf '%s\n' LAS_PROFILE_SELECTOR_V1 "$source_sha" "$executor_sha" "$i" | sha256sum)"
+            if [[ "${selector%% *}" = "${req[2]}" ]]; then
+              printf '%s\n' "$i" > "$root/index"
+              break
+            fi
+          done
+          test -s "$root/index"
+      - name: Execute one profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          root="$PROFILE_ROOT"
+          exec >"$root/driver.log" 2>&1
+          cd "$root/work"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 -sS -o "$root/tool.jar" https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          printf '936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  %s\n' "$root/tool.jar" | sha256sum --check --strict --status
+          timeout --signal=TERM --kill-after=30s 330m python3 -E -s -B "$(cat "$root/entry")" --source-root "$PWD" --private-output "$root/result" --java "$(readlink -f "$(command -v java)")" --jar "$root/tool.jar" --index "$(cat "$root/index")"
+          test -s "$root/result/receipt.json"
+      - name: Seal available evidence
+        if: always() && env.PROFILE_ROOT != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          cd "$PROFILE_ROOT"
+          cat > "$PROFILE_ROOT/recipient.pem" <<'CERT'
+          -----BEGIN CERTIFICATE-----
+          MIIEPTCCAqWgAwIBAgIUBXMGXR4r0E6CbMWniw5CpDbxWvMwDQYJKoZIhvcNAQEL
+          BQAwLjEsMCoGA1UEAwwjTEFTIHRlbXBvcmFyeSBkaWFnbm9zdGljcyByZWNpcGll
+          bnQwHhcNMjYxMTE3MDMwNzI1WhcNMjYxMTI3MDMwNzI1WjAuMSwwKgYDVQQDDCNM
+          QVMgdGVtcG9yYXJ5IGRpYWdub3N0aWNzIHJlY2lwaWVudDCCAaIwDQYJKoZIhvcN
+          AQEBBQADggGPADCCAYoCggGBAJ/62QOsjwYV3Z18d7NiaKqqhBLhdB55G+LHWbxL
+          xYHQNfTx+2vDl1ZfAaMhSoQ7JVXWrNTgH9zBOeOATiqtF/Y8+69QRsRb79SBsvg4
+          JK2yLRZu/VjeH1pGP8dQvLfyq6o1gM6An2SSFmezn3UofMcfJ8UynEVWlZ6RA3rz
+          Cg8RfZl+TvMysDrhazIpnzUKQ+3v2iKJiYFqaQAv8bZZ0EOlOf3Z41fHSL3GJ+yx
+          vQIE+YG3GNywoA8ogGU7G1tjcTJd+q91GnSxA3LmfY0CnD1yQ21E/MdLbczx5ui6
+          q0LPfMghEMC7xqUW/9IMHie05Pem9PH7eNYlMzsELiIDnmD2k2/4/EjiDWQvUZfG
+          oxo/k85fGL2EKMBtbbbvDJhnoS02dgh+iK5bKv3iHLN8wOG7L0oT7FzSIJgK1MS6
+          gUPbzHUqSWy+M9m8trF09LgJK/u6C8MAe62d9y/qP2gLrkmr+0DJ2TxgaH+DB8Xw
+          csJfhb0v2M2ehWG4pZpItL+ZvwIDAQABo1MwUTAdBgNVHQ4EFgQUB7Cxs6Kc38pD
+          rNBJRosJVh55GicwHwYDVR0jBBgwFoAUB7Cxs6Kc38pDrNBJRosJVh55GicwDwYD
+          VR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAYEANCloHFvc4EK032xz1vpv
+          TKzNZTCJ+xJPR1VllI7WMwlLdnSN8sJubu/IFTXWKnxiBs7GyeqYHzjq80Afe9OV
+          Yh3btMy4FbDnXh94xHqEXt1J446MFSi/oTa8BmyzLIhRsCudQBhMPq4JGk3q2g6/
+          sb3XzYduoiZ/0gXmxvW0eUnhUl9JeMz5uv/7y32ZHjSR8XmhAYPNDAmD0T8qzUpZ
+          jH5ERo5/jMmipaYPfUmAYvZdwmfx/stYXYUgIfJyM+5TKSI9zlRlgJy+XHJ5ar+H
+          6aRmuJqPPOa4TlRBS/TUXt1lmCKdslMWF8SN3KMnRXNmI0fG/Z/yUYWwcAjI2x+B
+          CD+PDT2vSy4KLW0o1PsJ7CGOD9aAQaQMX/FAsmdB6ambGNkC47xAMf4wlo0CQ2ln
+          T92mBOV8wMvg6fKSox+TPLSQmIQIFBIXc7QN0ZrrOXW3J4+PegLTsjZfYBL8ZNQo
+          pKyR6J5/kzm2G0KX3+GkdfZPzQiZKem5Q0LSrVI7BDaq
+          -----END CERTIFICATE-----
+          CERT
+          files=()
+          for f in admission.log driver.log index result/receipt.json result/tlc.private.log result/canonical-map.tsv result/java-version.private.log; do
+            if [[ -f "$f" && ! -L "$f" ]]; then files+=("$f"); fi
+          done
+          (( ${#files[@]} > 0 ))
+          tar -czf - -- "${files[@]}" 2>/dev/null | openssl cms -encrypt -binary -aes-256-cbc -outform DER -out "$RUNNER_TEMP/profile.cms" recipient.pem
+      - name: Save encrypted diagnostics
+        if: always() && env.PROFILE_ROOT != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: encrypted-profile
+          path: ${{ runner.temp }}/profile.cms
+          if-no-files-found: error
+          retention-days: 1
+      - name: Clean private files
+        if: always() && env.PROFILE_ROOT != ''
+        shell: bash
+        run: |
+          set -eu
+          [[ "$PROFILE_ROOT" == "$RUNNER_TEMP"/profile.* ]]
+          rm -rf -- "$PROFILE_ROOT"
