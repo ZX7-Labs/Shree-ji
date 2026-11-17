@@ -65,7 +65,7 @@ jobs:
           unset PRIVATE_TOKEN auth remote
           [[ "$(git rev-list --parents -1 "$executor_sha")" = "$executor_sha $source_sha" ]]
           git checkout -q --detach "$executor_sha"
-          git diff-tree --no-commit-id --name-status -rz "$source_sha" "$executor_sha" > "$root/diff"
+          git diff-tree --no-commit-id --name-status -r -z "$source_sha" "$executor_sha" > "$root/diff"
           mapfile -d '' -t delta < "$root/diff"
           [[ "${#delta[@]}" = 2 && "${delta[0]}" = A && "${delta[1]}" =~ ^[a-zA-Z0-9_/.-]+\.py$ ]]
           printf '%s\n' "${delta[1]}" > "$root/entry"
