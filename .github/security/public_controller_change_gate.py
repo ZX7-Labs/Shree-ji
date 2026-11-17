@@ -71,16 +71,15 @@ def trusted_guard_bootstrap(path, old, new, markers):
 
 # Independently reviewed first installation only. Subsequent edits remain
 # subject to the ordinary workflow authority-change denial.
-EXACT_NATIVE_WORKFLOW_PATH = ".github/workflows/exact-candidate-verification.yml"
-EXACT_NATIVE_WORKFLOW_SHA256 = "f6001132784b59a87f782a1daa84a29e9d0ccf97830695f3d7dc1bd8f3f684c1"
+REVIEWED_FIRST_INSTALL_SHA256 = {
+    ".github/workflows/exact-candidate-verification.yml": "f6001132784b59a87f782a1daa84a29e9d0ccf97830695f3d7dc1bd8f3f684c1",
+    ".github/workflows/exact-candidate-canonical.yml": "c62dc19615e3b00634b14bf22d3e2664b6f4dce46d72b95d4c4dbc43f17bb885",
+}
 
 
-def reviewed_native_install(path, old, new):
-    return (
-        old is None
-        and path == EXACT_NATIVE_WORKFLOW_PATH
-        and hashlib.sha256(new).hexdigest() == EXACT_NATIVE_WORKFLOW_SHA256
-    )
+def reviewed_verifier_install(path, old, new):
+    expected = REVIEWED_FIRST_INSTALL_SHA256.get(path)
+    return old is None and expected is not None and hashlib.sha256(new).hexdigest() == expected
 
 
 def analyze(before,after):
@@ -116,7 +115,7 @@ def analyze(before,after):
             old_rules=flags(prior)
             if current_rules and not (
                 trusted_guard_bootstrap(path,old,new,current_rules)
-                or reviewed_native_install(path, old, now)
+                or reviewed_verifier_install(path, old, now)
             ):
                 # Legacy workflows may only be edited if all detected risky
                 # markers are removed. The initial trusted-base guard is a
