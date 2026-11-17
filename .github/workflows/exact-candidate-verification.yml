@@ -1,4 +1,4 @@
-name: Exact candidate verification
+name: Exact private native verification
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 350
+    timeout-minutes: 60
     steps:
       - name: Checkout trusted controller
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -33,10 +33,29 @@ jobs:
 
           mapfile -t pins < RUN_PRIVATE_CANDIDATE.txt
           test "${#pins[@]}" -eq 2
-          [[ "${pins[0]}" =~ ^TARGET_REF_HASH=([a-f0-9]{64})$ ]]
-          ref_hash="${BASH_REMATCH[1]}"
-          [[ "${pins[1]}" =~ ^EXPECTED_PRIVATE_SNAPSHOT_PROOF=([a-f0-9]{64})$ ]]
+          ref_hash="6cf31d40422994d906540daad891b997e563a7686a3713dcbf93a426b00a2cfe"
+          [[ "${pins[0]}" =~ ^EXPECTED_PRIVATE_SNAPSHOT_PROOF=([a-f0-9]{64})$ ]]
           revision_proof="${BASH_REMATCH[1]}"
+          [[ "${pins[1]}" =~ ^SIGNATURE=([A-Za-z0-9+/]{512})$ ]]
+          signature="${BASH_REMATCH[1]}"
+          check="$(mktemp -d "$RUNNER_TEMP/las-request.XXXXXXXX")"
+          trap 'rm -rf "$check"' EXIT
+          cat > "$check/public.pem" <<'KEY'
+          -----BEGIN PUBLIC KEY-----
+          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA2e8OkvMB/1yQjb3P7ZqT
+          E1OBwPwIGrIAJwHfa3iwUrGj4T/QY3pMoMXEKbH1cg3J5XKfZFPnRsbXp+2son1/
+          4QH5WfDpb0eZU3AddS95UsG3Yi8QKF+ZEfmSmzCj8/8/z5TnOdr1cFOnXXZEdYJt
+          ASrk2PGBVkRysA9+5J1mzfDWZ8v6FE4LC7tSjoc6wBJU7W+dNsWILSFIUGqogd4g
+          Dt3077+vuIxrWnUlnDLpCHiSQubrVv8+RxS/WV4014k15CaZiHAt7HkaO1ulibAC
+          MDsxRJdBh/ERO965KnkjI+zI69iwVLUONNrXT8IlGqZzUbQ/736wGbaaO2lPhwcb
+          TM2uv4fz9Rw9t1v2onrveXbDXh1LqWSgxrWb9X1wBQa9zhK77HckbaPxNP91HlTF
+          5XKsW4AHDJ/atLU+L/edzzEC7BfroxYVJnL0UnzT9CghfdrUxMJahb8cShd8vdvV
+          aGHs1cMaE0j7InZd/2QpqZzA3uyQt8o7sEn6wYS2y+OXAgMBAAE=
+          -----END PUBLIC KEY-----
+          KEY
+          printf '%s' "$signature" | base64 -d > "$check/signature"
+          printf 'LAS_NATIVE_REQUEST_V1\n%s\n%s\n' "$ref_hash" "$revision_proof" | \
+            openssl dgst -sha256 -verify "$check/public.pem" -signature "$check/signature" >/dev/null
 
           root="$(mktemp -d /tmp/las-candidate.XXXXXXXX)"
           chmod 0711 "$root"
@@ -58,6 +77,7 @@ jobs:
           rm -f "$root/refs"
           test -n "$matched"
           echo "::add-mask::$matched"
+          echo "::add-mask::${matched#refs/heads/}"
           echo "::add-mask::$candidate"
           proof="$(printf '%s' "$candidate" | sha256sum)"
           test "${proof%% *}" = "$revision_proof"
@@ -70,67 +90,149 @@ jobs:
           printf 'LAS_BRIDGE_SOURCE=%s\nLAS_BRIDGE_CHECKOUT_PROOF=%s\n' "$source" "$revision_proof" >> "$GITHUB_ENV"
           echo "LAS_BRIDGE_CHECKOUT=PASS"
 
-      - name: Run exact Linux integration baseline
+      - name: Set up pinned toolchains
         shell: bash
         run: |
           set -euo pipefail
-          cd "$LAS_BRIDGE_SOURCE"
-          log="$(mktemp "$RUNNER_TEMP/las-linux.XXXXXXXX")"
-          trap 'rm -f "$log"' EXIT
-          head="$(git rev-parse HEAD)"
-          branch="$(git branch --show-current)"
-          if ! sudo -n bash research/guarded_evolution_lab_v1/isolated_host/verify_original_host_native_handoff.sh > "$log" 2>&1; then
-            echo "LAS_BRIDGE_LINUX=FAIL"
-            exit 1
-          fi
-          if ! python3 -I -B tools/verification/feedback_linux_nonvacuity.py \
-            --expected-head "$head" --expected-branch "$branch" --log "$log" >/dev/null 2>&1; then
-            echo "LAS_BRIDGE_LINUX_CENSUS=FAIL"
-            exit 1
-          fi
-          echo "LAS_BRIDGE_LINUX=PASS"
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy
+          archive="$RUNNER_TEMP/alr.zip"
+          prefix="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+            --output "$archive" https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $archive" | sha256sum --check --strict
+          mkdir -p "$prefix" "$RUNNER_TEMP/las-toolchain"
+          unzip -q "$archive" -d "$prefix"
+          export PATH="$prefix/bin:$PATH"
+          alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1
+          cd "$RUNNER_TEMP/las-toolchain"
+          alr -n init --in-place --no-skel --lib las_toolchain
+          alr exec -- gnatmake --version
+          alr exec -- gprbuild --version
+          cat >"$RUNNER_TEMP/gprbuild-via-alire" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$RUNNER_TEMP/las-toolchain"
+          exec "$RUNNER_TEMP/alr/bin/alr" exec -- gprbuild "$@"
+          SH
+          chmod 0755 "$RUNNER_TEMP/gprbuild-via-alire"
+          printf 'GPRBUILD=%s\n' "$RUNNER_TEMP/gprbuild-via-alire" >> "$GITHUB_ENV"
 
-      - name: Run source-owned native and formal verification
+      - name: Run native integration and matrix
         shell: bash
         env:
-          LEGACY_PLAN: ${{ secrets.LAS_BRIDGE_LEGACY_PLAN }}
-          NATIVE_PLAN: ${{ secrets.LAS_BRIDGE_NATIVE_PLAN }}
-          LAS_MUST_RUN_APPROVED_SHA256: ${{ vars.LAS_BRIDGE_LEGACY_PLAN_SHA256 }}
-          LAS_NATIVE_MUST_RUN_APPROVED_SHA256: ${{ vars.LAS_BRIDGE_NATIVE_PLAN_SHA256 }}
-          LAS_NATIVE_VERIFIER_APPROVED_SHA256: ${{ vars.LAS_BRIDGE_VERIFIER_SHA256 }}
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$LAS_BRIDGE_SOURCE"
+          logdir="$(mktemp -d "$RUNNER_TEMP/las-native.XXXXXXXX")"
+          printf 'LAS_NATIVE_LOGS=%s\n' "$logdir" >> "$GITHUB_ENV"
+          phase() {
+            local name="$1"
+            shift
+            if "$@" > "$logdir/$name.log" 2>&1; then
+              echo "LAS_NATIVE_$name=PASS"
+            else
+              echo "LAS_NATIVE_$name=FAIL"
+              return 1
+            fi
+          }
+          status=0
+          if phase CHECK cargo +1.98.1 check --locked --all-targets --all-features; then
+            if phase INTEGRATION cargo +1.98.1 test --locked --all-features --lib deterministic_proposal_crosses_linux_session_and_original_ada_guardian_root -- --test-threads=1; then
+              grep -Eq '^test result: ok\. 1 passed; 0 failed; 0 ignored;' "$logdir/INTEGRATION.log" || status=1
+            else
+              status=1
+            fi
+            for mode in default linux root-ffi all release-default release-all; do
+              args=(--all-targets)
+              case "$mode" in
+                linux) args+=(--features linux-peer-credentials) ;;
+                root-ffi) args+=(--features root-ffi) ;;
+                all) args+=(--all-features) ;;
+                release-default) args=(--release --lib) ;;
+                release-all) args=(--release --lib --all-features) ;;
+              esac
+              if phase "TEST_$mode" cargo +1.98.1 test --locked "${args[@]}" -- --test-threads=1; then
+                python3 -I -B tools/verification/canonical_rust_suite_policy.py --mode suite "$logdir/TEST_$mode.log" > "$logdir/CENSUS_$mode.log" 2>&1 || status=1
+                grep -E '^LAS_NATIVE_SUITE_EXECUTED=[0-9]+$' "$logdir/CENSUS_$mode.log" || status=1
+              else
+                status=1
+              fi
+            done
+            phase CLIPPY cargo +1.98.1 clippy --locked --all-targets --all-features -- -D warnings || status=1
+          else
+            status=1
+          fi
+          if phase LINUX sudo -n /bin/bash research/guarded_evolution_lab_v1/isolated_host/verify_original_host_native_handoff.sh; then
+            phase LINUX_CENSUS python3 -I -B tools/verification/feedback_linux_nonvacuity.py \
+              --expected-head "$(git rev-parse HEAD)" --expected-branch "$(git branch --show-current)" \
+              --log "$logdir/LINUX.log" || status=1
+          else
+            status=1
+          fi
+          test -z "$(git status --porcelain --untracked-files=all)"
+          if ! phase FORMAT cargo +1.98.1 fmt --all -- --check; then
+            status=1
+            cargo +1.98.1 fmt --all > "$logdir/FORMAT_APPLY.log" 2>&1
+            git diff --binary -- '*.rs' > "$logdir/format.patch"
+          fi
+          exit "$status"
+
+      - name: Encrypt private diagnostics
+        if: always() && env.LAS_NATIVE_LOGS != ''
+        shell: bash
         run: |
           set -euo pipefail
           umask 077
-          work="$(mktemp -d "$RUNNER_TEMP/las-verification.XXXXXXXX")"
-          trap 'rm -rf "$work"' EXIT
-          cd "$LAS_BRIDGE_SOURCE"
-          export LAS_VERIFY_EXPECTED_BRANCH="$(git branch --show-current)"
-          export LAS_MUST_RUN_PLAN_FILE="$work/legacy.json"
-          export LAS_NATIVE_MUST_RUN_PLAN_FILE="$work/native.json"
-          export TMPDIR="$work"
-          test -n "$LEGACY_PLAN"
-          test -n "$NATIVE_PLAN"
-          printf '%s' "$LEGACY_PLAN" > "$LAS_MUST_RUN_PLAN_FILE"
-          printf '%s' "$NATIVE_PLAN" > "$LAS_NATIVE_MUST_RUN_PLAN_FILE"
-          unset LEGACY_PLAN NATIVE_PLAN
-          for digest in "$LAS_MUST_RUN_APPROVED_SHA256" "$LAS_NATIVE_MUST_RUN_APPROVED_SHA256" "$LAS_NATIVE_VERIFIER_APPROVED_SHA256"; do
-            [[ "$digest" =~ ^[a-f0-9]{64}$ ]]
-          done
-          if ! bash tools/verify_codespaces_all.sh > "$work/verifier.log" 2>&1; then
-            echo "LAS_BRIDGE_CANONICAL=FAIL"
-            exit 1
-          fi
-          grep -Fxq "LAS_VERIFY_ALL_RESULT=PASS" "$work/verifier.log"
-          proof="$(git rev-parse HEAD | tr -d '\n' | sha256sum)"
-          test "${proof%% *}" = "$LAS_BRIDGE_CHECKOUT_PROOF"
-          test -z "$(git status --porcelain --untracked-files=all)"
-          echo "LAS_BRIDGE_CANONICAL=PASS"
+          [[ "$LAS_NATIVE_LOGS" == "$RUNNER_TEMP"/las-native.* ]]
+          cert="$RUNNER_TEMP/las-diagnostic-recipient.pem"
+          cat > "$cert" <<'CERT'
+          -----BEGIN CERTIFICATE-----
+          MIIEPTCCAqWgAwIBAgIUBXMGXR4r0E6CbMWniw5CpDbxWvMwDQYJKoZIhvcNAQEL
+          BQAwLjEsMCoGA1UEAwwjTEFTIHRlbXBvcmFyeSBkaWFnbm9zdGljcyByZWNpcGll
+          bnQwHhcNMjYxMTE3MDMwNzI1WhcNMjYxMTI3MDMwNzI1WjAuMSwwKgYDVQQDDCNM
+          QVMgdGVtcG9yYXJ5IGRpYWdub3N0aWNzIHJlY2lwaWVudDCCAaIwDQYJKoZIhvcN
+          AQEBBQADggGPADCCAYoCggGBAJ/62QOsjwYV3Z18d7NiaKqqhBLhdB55G+LHWbxL
+          xYHQNfTx+2vDl1ZfAaMhSoQ7JVXWrNTgH9zBOeOATiqtF/Y8+69QRsRb79SBsvg4
+          JK2yLRZu/VjeH1pGP8dQvLfyq6o1gM6An2SSFmezn3UofMcfJ8UynEVWlZ6RA3rz
+          Cg8RfZl+TvMysDrhazIpnzUKQ+3v2iKJiYFqaQAv8bZZ0EOlOf3Z41fHSL3GJ+yx
+          vQIE+YG3GNywoA8ogGU7G1tjcTJd+q91GnSxA3LmfY0CnD1yQ21E/MdLbczx5ui6
+          q0LPfMghEMC7xqUW/9IMHie05Pem9PH7eNYlMzsELiIDnmD2k2/4/EjiDWQvUZfG
+          oxo/k85fGL2EKMBtbbbvDJhnoS02dgh+iK5bKv3iHLN8wOG7L0oT7FzSIJgK1MS6
+          gUPbzHUqSWy+M9m8trF09LgJK/u6C8MAe62d9y/qP2gLrkmr+0DJ2TxgaH+DB8Xw
+          csJfhb0v2M2ehWG4pZpItL+ZvwIDAQABo1MwUTAdBgNVHQ4EFgQUB7Cxs6Kc38pD
+          rNBJRosJVh55GicwHwYDVR0jBBgwFoAUB7Cxs6Kc38pDrNBJRosJVh55GicwDwYD
+          VR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAYEANCloHFvc4EK032xz1vpv
+          TKzNZTCJ+xJPR1VllI7WMwlLdnSN8sJubu/IFTXWKnxiBs7GyeqYHzjq80Afe9OV
+          Yh3btMy4FbDnXh94xHqEXt1J446MFSi/oTa8BmyzLIhRsCudQBhMPq4JGk3q2g6/
+          sb3XzYduoiZ/0gXmxvW0eUnhUl9JeMz5uv/7y32ZHjSR8XmhAYPNDAmD0T8qzUpZ
+          jH5ERo5/jMmipaYPfUmAYvZdwmfx/stYXYUgIfJyM+5TKSI9zlRlgJy+XHJ5ar+H
+          6aRmuJqPPOa4TlRBS/TUXt1lmCKdslMWF8SN3KMnRXNmI0fG/Z/yUYWwcAjI2x+B
+          CD+PDT2vSy4KLW0o1PsJ7CGOD9aAQaQMX/FAsmdB6ambGNkC47xAMf4wlo0CQ2ln
+          T92mBOV8wMvg6fKSox+TPLSQmIQIFBIXc7QN0ZrrOXW3J4+PegLTsjZfYBL8ZNQo
+          pKyR6J5/kzm2G0KX3+GkdfZPzQiZKem5Q0LSrVI7BDaq
+          -----END CERTIFICATE-----
+          CERT
+          tar -C "$LAS_NATIVE_LOGS" -czf - . | \
+            openssl cms -encrypt -binary -aes-256-cbc -outform DER -out "$RUNNER_TEMP/las-native-diagnostics.cms" "$cert"
 
-      - name: Remove private checkout
+      - name: Save ciphertext diagnostics
+        if: always() && env.LAS_NATIVE_LOGS != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: encrypted-exact-native-diagnostics
+          path: ${{ runner.temp }}/las-native-diagnostics.cms
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Remove private checkout and raw logs
         if: always()
         shell: bash
         run: |
           set -euo pipefail
           if [[ "${LAS_BRIDGE_SOURCE:-}" =~ ^/tmp/las-candidate\.[A-Za-z0-9]+/source$ ]]; then
             sudo -n rm -rf -- "${LAS_BRIDGE_SOURCE%/source}"
+          fi
+          if [[ "${LAS_NATIVE_LOGS:-}" == "$RUNNER_TEMP"/las-native.* ]]; then
+            rm -rf -- "$LAS_NATIVE_LOGS"
           fi

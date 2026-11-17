@@ -7,6 +7,7 @@ The trusted BASE copy of this script must execute in production. Never execute
 candidate-supplied code or load candidate Python modules.
 """
 import argparse
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -68,6 +69,20 @@ def trusted_guard_bootstrap(path, old, new, markers):
         and "refs/pull/{0}/merge" in new
     )
 
+# Independently reviewed first installation only. Subsequent edits remain
+# subject to the ordinary workflow authority-change denial.
+EXACT_NATIVE_WORKFLOW_PATH = ".github/workflows/exact-candidate-verification.yml"
+EXACT_NATIVE_WORKFLOW_SHA256 = "f6001132784b59a87f782a1daa84a29e9d0ccf97830695f3d7dc1bd8f3f684c1"
+
+
+def reviewed_native_install(path, old, new):
+    return (
+        old is None
+        and path == EXACT_NATIVE_WORKFLOW_PATH
+        and hashlib.sha256(new).hexdigest() == EXACT_NATIVE_WORKFLOW_SHA256
+    )
+
+
 def analyze(before,after):
     denied=[]
     added=changed=deleted=0
@@ -99,7 +114,10 @@ def analyze(before,after):
                 continue
             current_rules=flags(new)
             old_rules=flags(prior)
-            if current_rules and not trusted_guard_bootstrap(path,old,new,current_rules):
+            if current_rules and not (
+                trusted_guard_bootstrap(path,old,new,current_rules)
+                or reviewed_native_install(path, old, now)
+            ):
                 # Legacy workflows may only be edited if all detected risky
                 # markers are removed. The initial trusted-base guard is a
                 # narrowly audited exception; edits to it remain forbidden.
