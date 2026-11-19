@@ -24,33 +24,33 @@ jobs:
           set -euo pipefail
           cat > "$RUNNER_TEMP/recipient-cert.pem" <<'EOF_CERT'
           -----BEGIN CERTIFICATE-----
-          MIIERzCCAq+gAwIBAgIUJY/9up0W2kVdwEtSRU+yQeU/HPwwDQYJKoZIhvcNAQEL
-          BQAwMzExMC8GA1UEAwwoTEFTIGVwaGVtZXJhbCBjdXJyZW50IGRpYWdub3N0aWMg
-          c2Vzc2lvbjAeFw0yNjA5MjAxNzQxMDlaFw0yNjA5MjIxNzQxMDlaMDMxMTAvBgNV
-          BAMMKExBUyBlcGhlbWVyYWwgY3VycmVudCBkaWFnbm9zdGljIHNlc3Npb24wggGi
-          MA0GCSqGSIb3DQEBAQUAA4IBjwAwggGKAoIBgQCqWLpkwgxrbnhCdBtvdSvaHoEJ
-          PBGJqFRgWUl8aCbpCrc1A+xyByenKAQez43DeUdheQAFPwobHC/LWSPMjKEgvA/I
-          +l7CaT1McQmBLa5bxzGngWVTbFo8+h6I/Dsq3E6fa9EK0gIgwT7F2y9xW/skWES4
-          89h2DtRknUhzw352LoMvNPD93/PMx1xBNM/+DYjqbmEmHHORPm7GMtPV2bopf/ss
-          yrRNWf+1XKMjWLO9SdY1DfqeKWdbgCzSTP3RilGtunMxV0f6xMT7hMvwkHrGVJxA
-          r+pTcne2EBvsqW8PyoMY5gxCNUSPhidyET7ptmJEHcMuX0641KnjkxWE/x819izh
-          YIia46tgJ/p0EGHipbRkcHcE4Q1Kd9hDTLpJFZDQu6zAqiQd+coTtvUxFgNxVRhU
-          0En6olsyAckYkdi6MiUl8zwq5wQwJZa0YQK39DoKEIw9SsIRmaaJKnYkf3AQIqaj
-          jVpGbOtsj4y7OhO/l9wcZZHu/aJVSXulmEW2WZ0CAwEAAaNTMFEwHQYDVR0OBBYE
-          FMd9O7ZvdfQUTYZro6s1xSCXbFfEMB8GA1UdIwQYMBaAFMd9O7ZvdfQUTYZro6s1
-          xSCXbFfEMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggGBAEDzIvkb
-          zh59InjaWSdJXAq6nAi5rePZHEbqQQK8MX5nq7NPX1kLEgz6UO8khbblBu4FnwIP
-          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
+          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
+          xPhIpmaiElOajEDsfFfEKF4zzFbb
           -----END CERTIFICATE-----
           EOF_CERT
           cert_fp="$(openssl x509 -in "$RUNNER_TEMP/recipient-cert.pem" -noout -fingerprint -sha256 | cut -d= -f2)"
-          test "$cert_fp" = "F6:EC:87:29:4F:7D:D9:6A:B2:B0:7F:A2:9F:4F:76:82:48:B6:68:7C:94:82:42:51:3F:80:84:85:5B:F9:74:36"
+          test "$cert_fp" = "DC:BA:A9:FD:CA:B8:72:AF:A8:4B:A9:14:FB:6F:6E:FD:01:11:97:5A:08:75:CD:90:46:D1:CE:82:D1:A7:CB:50"
           openssl verify -trusted "$RUNNER_TEMP/recipient-cert.pem" "$RUNNER_TEMP/recipient-cert.pem" >/dev/null
           echo "LAS_DIAG_RECIPIENT_VALID=YES"
 
@@ -313,7 +313,7 @@ jobs:
 
           tar -C "$bundle" -czf "$RUNNER_TEMP/private-diagnostic.tgz" .
           cert_fp="$(openssl x509 -in "$RUNNER_TEMP/recipient-cert.pem" -noout -fingerprint -sha256 | cut -d= -f2)"
-          test "$cert_fp" = "F6:EC:87:29:4F:7D:D9:6A:B2:B0:7F:A2:9F:4F:76:82:48:B6:68:7C:94:82:42:51:3F:80:84:85:5B:F9:74:36"
+          test "$cert_fp" = "DC:BA:A9:FD:CA:B8:72:AF:A8:4B:A9:14:FB:6F:6E:FD:01:11:97:5A:08:75:CD:90:46:D1:CE:82:D1:A7:CB:50"
           openssl verify -trusted "$RUNNER_TEMP/recipient-cert.pem" "$RUNNER_TEMP/recipient-cert.pem" >/dev/null
           openssl cms -encrypt -binary -aes-256-cbc \
             -outform DER \
