@@ -1,4 +1,4 @@
 TARGET_REF_HASH=f6a80805b93617521c5c34f1481091a0d0e9150efeffc45b808719af3a1e8542
 EXPECTED_PRIVATE_SNAPSHOT_PROOF=1aa86e5a680b33ee779a47ebec4cd69e42244b69c8771f99b06ab813d4e3151e
-NONCE=20261119-commissioned-linux-process-final-source-compile
-FEATURE_MODE=default
+NONCE=20261119-pr69-guardian-commissioned-root-all-features-preflight
+FEATURE_MODE=all
