@@ -18,6 +18,42 @@ jobs:
   diagnose:
     runs-on: ubuntu-24.04
     steps:
+      - name: Validate pinned diagnostic recipient
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/recipient-cert.pem" <<'EOF_CERT'
+          -----BEGIN CERTIFICATE-----
+          MIIERzCCAq+gAwIBAgIUJY/9up0W2kVdwEtSRU+yQeU/HPwwDQYJKoZIhvcNAQEL
+          BQAwMzExMC8GA1UEAwwoTEFTIGVwaGVtZXJhbCBjdXJyZW50IGRpYWdub3N0aWMg
+          c2Vzc2lvbjAeFw0yNjA5MjAxNzQxMDlaFw0yNjA5MjIxNzQxMDlaMDMxMTAvBgNV
+          BAMMKExBUyBlcGhlbWVyYWwgY3VycmVudCBkaWFnbm9zdGljIHNlc3Npb24wggGi
+          MA0GCSqGSIb3DQEBAQUAA4IBjwAwggGKAoIBgQCqWLpkwgxrbnhCdBtvdSvaHoEJ
+          PBGJqFRgWUl8aCbpCrc1A+xyByenKAQez43DeUdheQAFPwobHC/LWSPMjKEgvA/I
+          +l7CaT1McQmBLa5bxzGngWVTbFo8+h6I/Dsq3E6fa9EK0gIgwT7F2y9xW/skWES4
+          89h2DtRknUhzw352LoMvNPD93/PMx1xBNM/+DYjqbmEmHHORPm7GMtPV2bopf/ss
+          yrRNWf+1XKMjWLO9SdY1DfqeKWdbgCzSTP3RilGtunMxV0f6xMT7hMvwkHrGVJxA
+          r+pTcne2EBvsqW8PyoMY5gxCNUSPhidyET7ptmJEHcMuX0641KnjkxWE/x819izh
+          YIia46tgJ/p0EGHipbRkcHcE4Q1Kd9hDTLpJFZDQu6zAqiQd+coTtvUxFgNxVRhU
+          0En6olsyAckYkdi6MiUl8zwq5wQwJZa0YQK39DoKEIw9SsIRmaaJKnYkf3AQIqaj
+          jVpGbOtsj4y7OhO/l9wcZZHu/aJVSXulmEW2WZ0CAwEAAaNTMFEwHQYDVR0OBBYE
+          FMd9O7ZvdfQUTYZro6s1xSCXbFfEMB8GA1UdIwQYMBaAFMd9O7ZvdfQUTYZro6s1
+          xSCXbFfEMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggGBAEDzIvkb
+          zh59InjaWSdJXAq6nAi5rePZHEbqQQK8MX5nq7NPX1kLEgz6UO8khbblBu4FnwIP
+          77Ktj1I48JnBl3vKjKj9Kphc8YZpiXG8jvMxEJgIWyXIJ8S1BbOYEy8CFtqNH7NA
+          1WRYuSOwG9TpDOBSsUg8W+lG8Wwm3W8GDUE3/AjrNDec725/li9SDQxBaGBWbFWp
+          sk2KOpgExIbjY+X+Rm5O+NEEBhqM+hZmIyjsJmHDzIjChs0lttPcrO/rrkOE5xoT
+          drxseYBSYX3pE1Lxw922rRB9s9rLyIcNpNBHi/U6mbb4WZeurqgTXZTvE/INMgYN
+          17MFwUzXVmLEso3kL+ZOercwzyFQywCy05h4GNebDGfieEmjOQXv9app4oMtS7ut
+          rv+uK8YdNKvUNn55HzdZoaQb5LbU4gohDMTvBdrONKuk3AKM5a1ANbtOCH+3lzeR
+          i7KpvBSyGhPTXTm+Ha4S2JNVX5oBTONUyp8Jx4JqQT7K5K8a8nqJSIxR2Q==
+          -----END CERTIFICATE-----
+          EOF_CERT
+          cert_fp="$(openssl x509 -in "$RUNNER_TEMP/recipient-cert.pem" -noout -fingerprint -sha256 | cut -d= -f2)"
+          test "$cert_fp" = "F6:EC:87:29:4F:7D:D9:6A:B2:B0:7F:A2:9F:4F:76:82:48:B6:68:7C:94:82:42:51:3F:80:84:85:5B:F9:74:36"
+          openssl verify -trusted "$RUNNER_TEMP/recipient-cert.pem" "$RUNNER_TEMP/recipient-cert.pem" >/dev/null
+          echo "LAS_DIAG_RECIPIENT_VALID=YES"
+
       - name: Checkout current private work snapshot
         shell: bash
         env:
@@ -276,36 +312,9 @@ jobs:
           done
 
           tar -C "$bundle" -czf "$RUNNER_TEMP/private-diagnostic.tgz" .
-          cat > "$RUNNER_TEMP/recipient-cert.pem" <<'EOF_CERT'
-          -----BEGIN CERTIFICATE-----
-          MIIERzCCAq+gAwIBAgIUJY/9up0W2kVdwEtSRU+yQeU/HPwwDQYJKoZIhvcNAQEL
-          BQAwMzExMC8GA1UEAwwoTEFTIGVwaGVtZXJhbCBjdXJyZW50IGRpYWdub3N0aWMg
-          c2Vzc2lvbjAeFw0yNjA5MjAxNzQxMDlaFw0yNjA5MjIxNzQxMDlaMDMxMTAvBgNV
-          BAMMKExBUyBlcGhlbWVyYWwgY3VycmVudCBkaWFnbm9zdGljIHNlc3Npb24wggGi
-          MA0GCSqGSIb3DQEBAQUAA4IBjwAwggGKAoIBgQCqWLpkwgxrbnhCdBtvdSvaHoEJ
-          PBGJqFRgWUl8aCbpCrc1A+xyByenKAQez43DeUdheQAFPwobHC/LWSPMjKEgvA/I
-          +l7CaT1McQmBLa5bxzGngWVTbFo8+h6I/Dsq3E6fa9EK0gIgwT7F2y9xW/skWES4
-          89h2DtRknUhzw352LoMvNPD93/PMx1xBNM/+DYjqbmEmHHORPm7GMtPV2bopf/ss
-          yrRNWf+1XKMjWLO9SdY1DfqeKWdbgCzSTP3RilGtunMxV0f6xMT7hMvwkHrGVJxA
-          r+pTcne2EBvsqW8PyoMY5gxCNUSPhidyET7ptmJEHcMuX0641KnjkxWE/x819izh
-          YIia46tgJ/p0EGHipbRkcHcE4Q1Kd9hDTLpJFZDQu6zAqiQd+coTtvUxFgNxVRhU
-          0En6olsyAckYkdi6MiUl8zwq5wQwJZa0YQK39DoKEIw9SsIRmaaJKnYkf3AQIqaj
-          jVpGbOtsj4y7OhO/l9wcZZHu/aJVSXulmEW2WZ0CAwEAAaNTMFEwHQYDVR0OBBYE
-          FMd9O7ZvdfQUTYZro6s1xSCXbFfEMB8GA1UdIwQYMBaAFMd9O7ZvdfQUTYZro6s1
-          xSCXbFfEMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggGBAEDzIvkb
-          zh59InjaWSdJXAq6nAi5rePZHEbqQQK8MX5nq7NPX1kLEgz6UO8khbblBu4FnwIP
-          77Ktj1I48JnBl3vKjKj9Kphc8YZpiXG8jvMxEJgIWyXIJ8S1BbOYEy8CFtqNH7NA
-          1WRYuSOwG9TpDOBSsUg8W+lG8Wwm3W8GDUE3/AjrNDec725/li9SDQxBaGBWbFWp
-          sk2KOpgExIbjY+X+Rm5O+NEEBhqM+hZmIyjsJmHDzIjChs0lttPcrO/rrkOE5xoT
-          drxseYBSYX3pE1Lxw922rRB9s9rLyIcNpNBHi/U6mbb4WZeurqgTXZTvE/INMgYN
-          17MFwUzXVmLEso3kL+ZOercwzyFQywCy05h4GNebDGfieEmjOQXv9app4oMtS7ut
-          rv+uK8YdNKvUNn55HzdZoaQb5LbU4gohDMTvBdrONKuk3AKM5a1ANbtOCH+3lzeR
-          i7KpvBSyGhPTXTm+Ha4S2JNVX5oBTONUyp8Jx4JqQT7K5K8a8nqJSIxR2Q==
-          -----END CERTIFICATE-----
-          EOF_CERT
           cert_fp="$(openssl x509 -in "$RUNNER_TEMP/recipient-cert.pem" -noout -fingerprint -sha256 | cut -d= -f2)"
           test "$cert_fp" = "F6:EC:87:29:4F:7D:D9:6A:B2:B0:7F:A2:9F:4F:76:82:48:B6:68:7C:94:82:42:51:3F:80:84:85:5B:F9:74:36"
-          echo "LAS_DIAG_CERT_FINGERPRINT_OK=YES"
+          openssl verify -trusted "$RUNNER_TEMP/recipient-cert.pem" "$RUNNER_TEMP/recipient-cert.pem" >/dev/null
           openssl cms -encrypt -binary -aes-256-cbc \
             -outform DER \
             -in "$RUNNER_TEMP/private-diagnostic.tgz" \
