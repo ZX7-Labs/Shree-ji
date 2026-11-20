@@ -42,15 +42,15 @@ jobs:
           trap 'rm -rf "$check"' EXIT
           cat > "$check/public.pem" <<'KEY'
           -----BEGIN PUBLIC KEY-----
-          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA2e8OkvMB/1yQjb3P7ZqT
-          E1OBwPwIGrIAJwHfa3iwUrGj4T/QY3pMoMXEKbH1cg3J5XKfZFPnRsbXp+2son1/
-          4QH5WfDpb0eZU3AddS95UsG3Yi8QKF+ZEfmSmzCj8/8/z5TnOdr1cFOnXXZEdYJt
-          ASrk2PGBVkRysA9+5J1mzfDWZ8v6FE4LC7tSjoc6wBJU7W+dNsWILSFIUGqogd4g
-          Dt3077+vuIxrWnUlnDLpCHiSQubrVv8+RxS/WV4014k15CaZiHAt7HkaO1ulibAC
-          MDsxRJdBh/ERO965KnkjI+zI69iwVLUONNrXT8IlGqZzUbQ/736wGbaaO2lPhwcb
-          TM2uv4fz9Rw9t1v2onrveXbDXh1LqWSgxrWb9X1wBQa9zhK77HckbaPxNP91HlTF
-          5XKsW4AHDJ/atLU+L/edzzEC7BfroxYVJnL0UnzT9CghfdrUxMJahb8cShd8vdvV
-          aGHs1cMaE0j7InZd/2QpqZzA3uyQt8o7sEn6wYS2y+OXAgMBAAE=
+          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA33msPFNQC0BqoiocsFU0
+          NPbJCnMZVr4j/XacnK0XSA9hrGV5cuJIQsr1nFiBB/8/RVjzq4pJxOoKRER12KbV
+          WuXADjJQQY5R89qU4VCDXdGdIDI4LVx9cQn07Eeajq+F16JgsfbPbkchjq3eFh8j
+          Q/SeROZ/3yxAiWmrfEnoAOoAOgUjOPT2h//TkklGJc0+wWnz0u84iVsAyL8Pp4f/
+          WX1SgvRnvKdJbaCguKxY/sMvmJOXkmV++PvB1UPhUYH/Q88LrUhJGd/mTTvnToQ4
+          Fax25YMdPyxVrxcdTHCN+LuoZXC8WHKvV/HH9eFTusuEdnfDAHtHR/WeXesiaqfl
+          aKqGXYfxveVqtq2DhZc9e5/wjtVWU1AmNrC34ssjUcPOGWbiZu0WWPnGg2gvDIY5
+          9IDqN3vygvnY8shdNXg4dwgrZ6h27UbNL15+pQO4/oXmeaRRxTONZxv6pmaq8UBi
+          rhVeOjRzSV84xY5vQuvJTYOYObzBsHDWO5JeheJdvkYzAgMBAAE=
           -----END PUBLIC KEY-----
           KEY
           printf '%s' "$signature" | base64 -d > "$check/signature"
