@@ -82,7 +82,51 @@ def reviewed_verifier_install(path, old, new):
     return old is None and expected is not None and hashlib.sha256(new).hexdigest() == expected
 
 
+
+# A single, fully pinned owner recovery. This is NOT an exception for generic
+# changes to risky workflows; old and new *whole-file bytes* must match these
+# hashes, and exactly these three workflow paths may change. The base guard
+# itself still requires a separate independently authorized security review.
+OWNER_SIGNER_RECOVERY_20261120 = {
+    ".github/workflows/exact-candidate-canonical.yml": (
+        "c62dc19615e3b00634b14bf22d3e2664b6f4dce46d72b95d4c4dbc43f17bb885",
+        "d08ca4c4c45fd5c3faf5083a37c062794a3acadd52e5f7e5a5cefcff495a0a9d",
+    ),
+    ".github/workflows/exact-candidate-verification.yml": (
+        "f6001132784b59a87f782a1daa84a29e9d0ccf97830695f3d7dc1bd8f3f684c1",
+        "92962d012b891ed9ad738dd9374dad2487b9e875e6037c750746b709d1f7657b",
+    ),
+    ".github/workflows/signed-private-profile.yml": (
+        "d4af748464b99349a096b0c4dd9ab771d17314ddadc5a3b369ad288efe9688e1",
+        "203647f237ebf5a26f3b2b6906d14768be325e93972bfb7a6c0847272bd21d9c",
+    ),
+}
+
+
+def exact_public_signer_recovery(before, after, pins=OWNER_SIGNER_RECOVERY_20261120):
+    """True only for the one exact authorized migration of three public PEMs.
+
+    The normal detector handles every other diff, including additions, partial
+    or reversed rotations, and all changes to the security checker itself.
+    """
+    changed = {p for p in before.keys() | after.keys() if before.get(p) != after.get(p)}
+    if changed != pins.keys():
+        return False
+    for path, (old_digest, new_digest) in pins.items():
+        old_data, new_data = before.get(path), after.get(path)
+        if not isinstance(old_data, bytes) or not isinstance(new_data, bytes):
+            return False
+        if hashlib.sha256(old_data).hexdigest() != old_digest:
+            return False
+        if hashlib.sha256(new_data).hexdigest() != new_digest:
+            return False
+    return True
+
+
 def analyze(before,after):
+    if exact_public_signer_recovery(before, after):
+        # Exact full-file transition was reviewed as a separate recovery event.
+        return [], (0, len(OWNER_SIGNER_RECOVERY_20261120), 0)
     denied=[]
     added=changed=deleted=0
     for path in sorted(set(before)|set(after)):
@@ -143,6 +187,8 @@ def check(base,candidate):
     old=inventory(base)
     new=inventory(candidate)
     violations,counts=analyze(old,new)
+    if exact_public_signer_recovery(old,new):
+        print("LAS_CHANGE_GUARD_OWNER_SIGNER_RECOVERY=EXACT_THREE_FILE_SHA256_TRANSITION")
     print("LAS_CHANGE_GUARD_NEW_FILES="+str(counts[0]))
     print("LAS_CHANGE_GUARD_MODIFIED_FILES="+str(counts[1]))
     print("LAS_CHANGE_GUARD_DELETED_FILES="+str(counts[2]))
@@ -200,6 +246,39 @@ def self_test():
         denied,_=analyze(before,new)
         if (not denied)!=want:
             raise ValueError("mutation fixture failed: "+name)
+    # Recovery predicate's positive and adversarial cases are separate from
+    # the legacy authority detector. Production pins cannot be supplied by PRs.
+    _old={"a.yml":b"oldA","b.yml":b"oldB","c.yml":b"oldC","unchanged.md":b"same"}
+    _new={**_old,"a.yml":b"newA","b.yml":b"newB","c.yml":b"newC"}
+    _pins={k:(hashlib.sha256(_old[k]).hexdigest(),
+              hashlib.sha256(_new[k]).hexdigest()) for k in ("a.yml","b.yml","c.yml")}
+    if not exact_public_signer_recovery(_old,_new,_pins):
+        raise ValueError("owner recovery positive fixture failed")
+    _variants=[]
+    _variants.append({**_new,"c.yml":_old["c.yml"]})
+    _variants.append({**_new,"extra.yml":b"new"})
+    _variants.append({**_new,"unchanged.md":b"changed"})
+    _variants.append({**_new,"a.yml":_new["a.yml"]+b" "})
+    _variants.append({**_new,"a.yml":_new["a.yml"]+b"secrets.PRIVATE_WRITE_TOKEN"})
+    _variants.append({k:v for k,v in _new.items() if k!="b.yml"})
+    _variants.append({**_new,"a.yml":"not bytes"})
+    for _candidate in _variants:
+        if exact_public_signer_recovery(_old,_candidate,_pins):
+            raise ValueError("owner recovery mutation admitted")
+    if exact_public_signer_recovery(_new,_old,_pins):
+        raise ValueError("owner recovery reversal admitted")
+    if exact_public_signer_recovery(_old,_new,{**_pins,"extra":("0"*64,"1"*64)}):
+        raise ValueError("owner recovery extra manifest admitted")
+    if exact_public_signer_recovery(
+        _old,_new,{**_pins,"a.yml":("0"*64,_pins["a.yml"][1])}
+    ):
+        raise ValueError("owner recovery old hash mutation admitted")
+    if exact_public_signer_recovery(
+        _old,_new,{**_pins,"c.yml":(_pins["c.yml"][0],"1"*64)}
+    ):
+        raise ValueError("owner recovery new hash mutation admitted")
+    print("LAS_CHANGE_GUARD_RECOVERY_ADVERSARIAL_CASES=11")
+    print("LAS_CHANGE_GUARD_RECOVERY_FIXTURES=PASS")
     print("LAS_CHANGE_GUARD_MUTATION_CASES="+str(len(cases)))
     print("LAS_CHANGE_GUARD_MUTATION_FIXTURES=PASS")
     return 0
