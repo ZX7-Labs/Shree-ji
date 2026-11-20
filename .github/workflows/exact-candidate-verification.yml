@@ -51,7 +51,7 @@ jobs:
           aKqGXYfxveVqtq2DhZc9e5/wjtVWU1AmNrC34ssjUcPOGWbiZu0WWPnGg2gvDIY5
           9IDqN3vygvnY8shdNXg4dwgrZ6h27UbNL15+pQO4/oXmeaRRxTONZxv6pmaq8UBi
           rhVeOjRzSV84xY5vQuvJTYOYObzBsHDWO5JeheJdvkYzAgMBAAE=
------END PUBLIC KEY-----
+          -----END PUBLIC KEY-----
           KEY
           printf '%s' "$signature" | base64 -d > "$check/signature"
           printf 'LAS_NATIVE_REQUEST_V1\n%s\n%s\n' "$ref_hash" "$revision_proof" | \
