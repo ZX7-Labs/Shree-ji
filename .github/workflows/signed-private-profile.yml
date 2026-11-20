@@ -39,7 +39,7 @@ jobs:
           aKqGXYfxveVqtq2DhZc9e5/wjtVWU1AmNrC34ssjUcPOGWbiZu0WWPnGg2gvDIY5
           9IDqN3vygvnY8shdNXg4dwgrZ6h27UbNL15+pQO4/oXmeaRRxTONZxv6pmaq8UBi
           rhVeOjRzSV84xY5vQuvJTYOYObzBsHDWO5JeheJdvkYzAgMBAAE=
------END PUBLIC KEY-----
+          -----END PUBLIC KEY-----
           KEY
           printf '%s' "${req[3]}" | base64 -d > "$root/signature"
           printf '%s\n' LAS_SINGLE_PROFILE_V2 "${req[@]:0:3}" | openssl dgst -sha256 -verify "$root/public.pem" -signature "$root/signature" >/dev/null
