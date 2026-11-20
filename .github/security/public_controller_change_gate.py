@@ -103,7 +103,7 @@ OWNER_SIGNER_RECOVERY_20261120 = {
 }
 
 
-def exact_public_signer_recovery(before, after, pins=OWNER_SIGNER_RECOVERY_20261120):
+def _matches_exact_recovery(before, after, pins):
     """True only for the one exact authorized migration of three public PEMs.
 
     The normal detector handles every other diff, including additions, partial
@@ -121,6 +121,12 @@ def exact_public_signer_recovery(before, after, pins=OWNER_SIGNER_RECOVERY_20261
         if hashlib.sha256(new_data).hexdigest() != new_digest:
             return False
     return True
+
+
+
+def exact_public_signer_recovery(before, after):
+    """Production checker uses only the trusted, immutable one-time pins."""
+    return _matches_exact_recovery(before, after, OWNER_SIGNER_RECOVERY_20261120)
 
 
 def analyze(before,after):
@@ -252,7 +258,7 @@ def self_test():
     _new={**_old,"a.yml":b"newA","b.yml":b"newB","c.yml":b"newC"}
     _pins={k:(hashlib.sha256(_old[k]).hexdigest(),
               hashlib.sha256(_new[k]).hexdigest()) for k in ("a.yml","b.yml","c.yml")}
-    if not exact_public_signer_recovery(_old,_new,_pins):
+    if not _matches_exact_recovery(_old,_new,_pins):
         raise ValueError("owner recovery positive fixture failed")
     _variants=[]
     _variants.append({**_new,"c.yml":_old["c.yml"]})
@@ -263,17 +269,17 @@ def self_test():
     _variants.append({k:v for k,v in _new.items() if k!="b.yml"})
     _variants.append({**_new,"a.yml":"not bytes"})
     for _candidate in _variants:
-        if exact_public_signer_recovery(_old,_candidate,_pins):
+        if _matches_exact_recovery(_old,_candidate,_pins):
             raise ValueError("owner recovery mutation admitted")
-    if exact_public_signer_recovery(_new,_old,_pins):
+    if _matches_exact_recovery(_new,_old,_pins):
         raise ValueError("owner recovery reversal admitted")
-    if exact_public_signer_recovery(_old,_new,{**_pins,"extra":("0"*64,"1"*64)}):
+    if _matches_exact_recovery(_old,_new,{**_pins,"extra":("0"*64,"1"*64)}):
         raise ValueError("owner recovery extra manifest admitted")
-    if exact_public_signer_recovery(
+    if _matches_exact_recovery(
         _old,_new,{**_pins,"a.yml":("0"*64,_pins["a.yml"][1])}
     ):
         raise ValueError("owner recovery old hash mutation admitted")
-    if exact_public_signer_recovery(
+    if _matches_exact_recovery(
         _old,_new,{**_pins,"c.yml":(_pins["c.yml"][0],"1"*64)}
     ):
         raise ValueError("owner recovery new hash mutation admitted")
