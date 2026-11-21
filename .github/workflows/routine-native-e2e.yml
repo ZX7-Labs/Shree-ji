@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: routine-private-native-e2e
+  cancel-in-progress: false
+
 jobs:
   verify:
     # This lane cannot admit release candidates or run untrusted contributions.
@@ -51,6 +55,7 @@ jobs:
           esac
           [[ "${pins[1]}" =~ ^EXPECTED_PRIVATE_SNAPSHOT_PROOF=([a-f0-9]{64})$ ]]
           revision_proof="${BASH_REMATCH[1]}"
+          cmp -s RUN_ROUTINE_NATIVE_E2E.txt <(printf 'TARGET_REF_HASH=%s\nEXPECTED_PRIVATE_SNAPSHOT_PROOF=%s\n' "$ref_hash" "$revision_proof")
           echo "LAS_ROUTINE_SCOPE=DEVELOPMENT_ONLY_NOT_RELEASE_ACCEPTANCE"
 
           root="$(mktemp -d /tmp/las-candidate.XXXXXXXX)"
@@ -137,7 +142,10 @@ jobs:
           status=0
           if phase CHECK cargo +1.98.1 check --locked --all-targets --all-features; then
             if phase INTEGRATION cargo +1.98.1 test --locked --all-features --lib deterministic_proposal_crosses_linux_session_and_original_ada_guardian_root -- --test-threads=1; then
-              grep -Eq '^test result: ok\. 1 passed; 0 failed; 0 ignored;' "$logdir/INTEGRATION.log" || status=1
+              if [[ "$(grep -Ec '^test result: ok\. 1 passed; 0 failed; 0 ignored;' "$logdir/INTEGRATION.log")" != 1 ]]; then
+                echo "LAS_ROUTINE_NATIVE_INTEGRATION_CENSUS=FAIL"
+                status=1
+              fi
             else
               status=1
             fi
@@ -152,7 +160,43 @@ jobs:
               esac
               if phase "TEST_$mode" cargo +1.98.1 test --locked "${args[@]}" -- --test-threads=1; then
                 python3 -I -B tools/verification/canonical_rust_suite_policy.py --mode suite "$logdir/TEST_$mode.log" > "$logdir/CENSUS_$mode.log" 2>&1 || status=1
-                grep -E '^LAS_NATIVE_SUITE_EXECUTED=[0-9]+$' "$logdir/CENSUS_$mode.log" || status=1
+                grep -E '^LAS_NATIVE_SUITE_EXECUTED=[1-9][0-9]* "$logdir/CENSUS_$mode.log" || status=1
+              else
+                status=1
+              fi
+            done
+            phase CLIPPY cargo +1.98.1 clippy --locked --all-targets --all-features -- -D warnings || status=1
+          else
+            status=1
+          fi
+          if phase LINUX sudo -n /bin/bash research/guarded_evolution_lab_v1/isolated_host/verify_original_host_native_handoff.sh; then
+            phase LINUX_CENSUS python3 -I -B tools/verification/feedback_linux_nonvacuity.py \
+              --expected-head "$(git rev-parse HEAD)" --expected-branch "$(git branch --show-current)" \
+              --log "$logdir/LINUX.log" || status=1
+          else
+            status=1
+          fi
+          test -z "$(git status --porcelain --untracked-files=all)"
+          phase FORMAT cargo +1.98.1 fmt --all -- --check || status=1
+          if [[ "$status" -eq 0 ]]; then
+            echo "LAS_ROUTINE_NATIVE_GATE=PASS_NOT_RELEASE_ACCEPTANCE"
+          else
+            echo "LAS_ROUTINE_NATIVE_GATE=FAIL"
+          fi
+          exit "$status"
+
+      - name: Remove private checkout and raw logs
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${LAS_ROUTINE_ROOT:-}" =~ ^/tmp/las-candidate\.[A-Za-z0-9]+$ ]]; then
+            sudo -n rm -rf -- "$LAS_ROUTINE_ROOT"
+          fi
+          if [[ "${LAS_ROUTINE_NATIVE_LOGS:-}" == "$RUNNER_TEMP"/las-native.* ]]; then
+            rm -rf -- "$LAS_ROUTINE_NATIVE_LOGS"
+          fi
+ "$logdir/CENSUS_$mode.log" || status=1
               else
                 status=1
               fi
