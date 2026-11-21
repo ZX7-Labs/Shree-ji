@@ -1,0 +1,198 @@
+name: Routine private native E2E (non-release)
+
+on:
+  push:
+    branches: [main]
+    paths: [RUN_ROUTINE_NATIVE_E2E.txt]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: routine-private-native-e2e
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    # This lane cannot admit release candidates or run untrusted contributions.
+    # Protected main plus the exact owner actor are required; independent audit
+    # of effective GitHub rules and private-source write custody is mandatory.
+    if: ${{ github.repository == 'ZX7-Labs/Shree-ji' && github.ref == 'refs/heads/main' && github.ref_protected && github.actor_id == '222302960' && github.triggering_actor == 'ZX7-Labs' }}
+    environment: routine-native-verification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout trusted controller
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Bind exact owner-controlled development revision
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          [[ "$PRIVATE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          test -n "$PRIVATE_TOKEN"
+          echo "::add-mask::$PRIVATE_REPOSITORY"
+          echo "::add-mask::$PRIVATE_TOKEN"
+
+          # Opaque data only. This is deliberately NOT a signed release request.
+          # Strictly limited to the current frozen baseline and integration lanes.
+          test -f RUN_ROUTINE_NATIVE_E2E.txt
+          test ! -L RUN_ROUTINE_NATIVE_E2E.txt
+          test "$(wc -c < RUN_ROUTINE_NATIVE_E2E.txt)" -le 256
+          mapfile -t pins < RUN_ROUTINE_NATIVE_E2E.txt
+          test "${#pins[@]}" -eq 2
+          [[ "${pins[0]}" =~ ^TARGET_REF_HASH=([a-f0-9]{64})$ ]]
+          ref_hash="${BASH_REMATCH[1]}"
+          case "$ref_hash" in
+            6cf31d40422994d906540daad891b997e563a7686a3713dcbf93a426b00a2cfe|aa77dc01a8e9da49036564bbb861f32238923502258ad93d7b404b953697bff9|39fffef659723ba377eafd5a196a38a2daf1540ddd2d1e499fea9b87b2d63d93) ;;
+            *) echo "LAS_ROUTINE_REQUEST=DENIED_REF"; exit 1 ;;
+          esac
+          [[ "${pins[1]}" =~ ^EXPECTED_PRIVATE_SNAPSHOT_PROOF=([a-f0-9]{64})$ ]]
+          revision_proof="${BASH_REMATCH[1]}"
+          cmp -s RUN_ROUTINE_NATIVE_E2E.txt <(printf 'TARGET_REF_HASH=%s\nEXPECTED_PRIVATE_SNAPSHOT_PROOF=%s\n' "$ref_hash" "$revision_proof")
+          echo "LAS_ROUTINE_SCOPE=DEVELOPMENT_ONLY_NOT_RELEASE_ACCEPTANCE"
+
+          root="$(mktemp -d /tmp/las-candidate.XXXXXXXX)"
+          chmod 0711 "$root"
+          printf 'LAS_ROUTINE_ROOT=%s\n' "$root" >> "$GITHUB_ENV"
+          source="$root/source"
+          git init --quiet "$source"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          remote="https://github.com/$PRIVATE_REPOSITORY.git"
+          git -c "http.extraHeader=AUTHORIZATION: basic $auth" ls-remote --heads "$remote" > "$root/refs" 2>/dev/null
+          matched=""
+          while read -r sha ref; do
+            proof="$(printf '%s' "$ref" | sha256sum)"
+            if [[ "${proof%% *}" == "$ref_hash" ]]; then
+              test -z "$matched"
+              matched="$ref"
+              candidate="$sha"
+            fi
+          done < "$root/refs"
+          rm -f "$root/refs"
+          test -n "$matched"
+          echo "::add-mask::$matched"
+          echo "::add-mask::${matched#refs/heads/}"
+          echo "::add-mask::$candidate"
+          proof="$(printf '%s' "$candidate" | sha256sum)"
+          test "${proof%% *}" = "$revision_proof"
+          git -C "$source" -c "http.extraHeader=AUTHORIZATION: basic $auth" \
+            fetch --quiet --depth=1 "$remote" "$candidate" > /dev/null 2>&1
+          unset auth PRIVATE_TOKEN PRIVATE_REPOSITORY remote
+          git -C "$source" switch --quiet --create "${matched#refs/heads/}" FETCH_HEAD >/dev/null 2>&1
+          test "$(git -C "$source" rev-parse HEAD)" = "$candidate"
+          test -z "$(git -C "$source" status --porcelain --untracked-files=all)"
+          printf 'LAS_BRIDGE_SOURCE=%s\nLAS_BRIDGE_CHECKOUT_PROOF=%s\n' "$source" "$revision_proof" >> "$GITHUB_ENV"
+          echo "LAS_ROUTINE_CHECKOUT=PASS"
+          echo "LAS_ROUTINE_SOURCE_PROOF=$revision_proof"
+
+      - name: Set up pinned toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy
+          archive="$RUNNER_TEMP/alr.zip"
+          prefix="$RUNNER_TEMP/alr"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+            --output "$archive" https://github.com/alire-project/alire/releases/download/v2.1.1/alr-2.1.1-bin-x86_64-linux.zip
+          echo "09c66bcd8c35dd4b97b72c3d9b76e44caa6964a2db35aba069f396f00f1f64c7  $archive" | sha256sum --check --strict
+          mkdir -p "$prefix" "$RUNNER_TEMP/las-toolchain"
+          unzip -q "$archive" -d "$prefix"
+          export PATH="$prefix/bin:$PATH"
+          alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1
+          cd "$RUNNER_TEMP/las-toolchain"
+          alr -n init --in-place --no-skel --lib las_toolchain
+          alr exec -- gnatmake --version
+          alr exec -- gprbuild --version
+          cat >"$RUNNER_TEMP/gprbuild-via-alire" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$RUNNER_TEMP/las-toolchain"
+          exec "$RUNNER_TEMP/alr/bin/alr" exec -- gprbuild "$@"
+          SH
+          chmod 0755 "$RUNNER_TEMP/gprbuild-via-alire"
+          printf 'GPRBUILD=%s\n' "$RUNNER_TEMP/gprbuild-via-alire" >> "$GITHUB_ENV"
+
+      - name: Run native integration and matrix
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          cd "$LAS_BRIDGE_SOURCE"
+          logdir="$(mktemp -d "$RUNNER_TEMP/las-native.XXXXXXXX")"
+          printf 'LAS_ROUTINE_NATIVE_LOGS=%s\n' "$logdir" >> "$GITHUB_ENV"
+          phase() {
+            local name="$1"
+            shift
+            if "$@" > "$logdir/$name.log" 2>&1; then
+              echo "LAS_ROUTINE_NATIVE_$name=PASS"
+            else
+              echo "LAS_ROUTINE_NATIVE_$name=FAIL"
+              return 1
+            fi
+          }
+          status=0
+          if phase CHECK cargo +1.98.1 check --locked --all-targets --all-features; then
+            if phase INTEGRATION cargo +1.98.1 test --locked --all-features --lib deterministic_proposal_crosses_linux_session_and_original_ada_guardian_root -- --test-threads=1; then
+              if [[ "$(grep -Ec '^test result: ok\. 1 passed; 0 failed; 0 ignored;' "$logdir/INTEGRATION.log")" != 1 ]]; then
+                echo "LAS_ROUTINE_NATIVE_INTEGRATION_CENSUS=FAIL"
+                status=1
+              fi
+            else
+              status=1
+            fi
+            for mode in default linux root-ffi all release-default release-all; do
+              args=(--all-targets)
+              case "$mode" in
+                linux) args+=(--features linux-peer-credentials) ;;
+                root-ffi) args+=(--features root-ffi) ;;
+                all) args+=(--all-features) ;;
+                release-default) args=(--release --lib) ;;
+                release-all) args=(--release --lib --all-features) ;;
+              esac
+              if phase "TEST_$mode" cargo +1.98.1 test --locked "${args[@]}" -- --test-threads=1; then
+                python3 -I -B tools/verification/canonical_rust_suite_policy.py --mode suite "$logdir/TEST_$mode.log" > "$logdir/CENSUS_$mode.log" 2>&1 || status=1
+                grep -E '^LAS_NATIVE_SUITE_EXECUTED=[1-9][0-9]*$' "$logdir/CENSUS_$mode.log" || status=1
+              else
+                status=1
+              fi
+            done
+            phase CLIPPY cargo +1.98.1 clippy --locked --all-targets --all-features -- -D warnings || status=1
+          else
+            status=1
+          fi
+          if phase LINUX sudo -n /bin/bash research/guarded_evolution_lab_v1/isolated_host/verify_original_host_native_handoff.sh; then
+            phase LINUX_CENSUS python3 -I -B tools/verification/feedback_linux_nonvacuity.py \
+              --expected-head "$(git rev-parse HEAD)" --expected-branch "$(git branch --show-current)" \
+              --log "$logdir/LINUX.log" || status=1
+          else
+            status=1
+          fi
+          test -z "$(git status --porcelain --untracked-files=all)"
+          phase FORMAT cargo +1.98.1 fmt --all -- --check || status=1
+          if [[ "$status" -eq 0 ]]; then
+            echo "LAS_ROUTINE_NATIVE_GATE=PASS_NOT_RELEASE_ACCEPTANCE"
+          else
+            echo "LAS_ROUTINE_NATIVE_GATE=FAIL"
+          fi
+          exit "$status"
+
+      - name: Remove private checkout and raw logs
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${LAS_ROUTINE_ROOT:-}" =~ ^/tmp/las-candidate\.[A-Za-z0-9]+$ ]]; then
+            sudo -n rm -rf -- "$LAS_ROUTINE_ROOT"
+          fi
+          if [[ "${LAS_ROUTINE_NATIVE_LOGS:-}" == "$RUNNER_TEMP"/las-native.* ]]; then
+            rm -rf -- "$LAS_ROUTINE_NATIVE_LOGS"
+          fi
