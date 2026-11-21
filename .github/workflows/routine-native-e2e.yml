@@ -160,43 +160,7 @@ jobs:
               esac
               if phase "TEST_$mode" cargo +1.98.1 test --locked "${args[@]}" -- --test-threads=1; then
                 python3 -I -B tools/verification/canonical_rust_suite_policy.py --mode suite "$logdir/TEST_$mode.log" > "$logdir/CENSUS_$mode.log" 2>&1 || status=1
-                grep -E '^LAS_NATIVE_SUITE_EXECUTED=[1-9][0-9]* "$logdir/CENSUS_$mode.log" || status=1
-              else
-                status=1
-              fi
-            done
-            phase CLIPPY cargo +1.98.1 clippy --locked --all-targets --all-features -- -D warnings || status=1
-          else
-            status=1
-          fi
-          if phase LINUX sudo -n /bin/bash research/guarded_evolution_lab_v1/isolated_host/verify_original_host_native_handoff.sh; then
-            phase LINUX_CENSUS python3 -I -B tools/verification/feedback_linux_nonvacuity.py \
-              --expected-head "$(git rev-parse HEAD)" --expected-branch "$(git branch --show-current)" \
-              --log "$logdir/LINUX.log" || status=1
-          else
-            status=1
-          fi
-          test -z "$(git status --porcelain --untracked-files=all)"
-          phase FORMAT cargo +1.98.1 fmt --all -- --check || status=1
-          if [[ "$status" -eq 0 ]]; then
-            echo "LAS_ROUTINE_NATIVE_GATE=PASS_NOT_RELEASE_ACCEPTANCE"
-          else
-            echo "LAS_ROUTINE_NATIVE_GATE=FAIL"
-          fi
-          exit "$status"
-
-      - name: Remove private checkout and raw logs
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${LAS_ROUTINE_ROOT:-}" =~ ^/tmp/las-candidate\.[A-Za-z0-9]+$ ]]; then
-            sudo -n rm -rf -- "$LAS_ROUTINE_ROOT"
-          fi
-          if [[ "${LAS_ROUTINE_NATIVE_LOGS:-}" == "$RUNNER_TEMP"/las-native.* ]]; then
-            rm -rf -- "$LAS_ROUTINE_NATIVE_LOGS"
-          fi
- "$logdir/CENSUS_$mode.log" || status=1
+                grep -E '^LAS_NATIVE_SUITE_EXECUTED=[1-9][0-9]*$' "$logdir/CENSUS_$mode.log" || status=1
               else
                 status=1
               fi
