@@ -2,8 +2,8 @@ name: Routine private native E2E (non-release)
 
 on:
   push:
-    branches: [main]
-    paths: [RUN_ROUTINE_NATIVE_E2E.txt]
+    branches: [review/routine-native-e2e-20261121]
+    paths: [.github/workflows/routine-native-e2e.yml]
 
 permissions:
   contents: read
@@ -17,7 +17,7 @@ jobs:
     # This lane cannot admit release candidates or run untrusted contributions.
     # Protected main plus the exact owner actor are required; independent audit
     # of effective GitHub rules and private-source write custody is mandatory.
-    if: ${{ github.repository == 'ZX7-Labs/Shree-ji' && github.ref == 'refs/heads/main' && github.ref_protected && github.actor_id == '222302960' && github.triggering_actor == 'ZX7-Labs' }}
+    if: ${{ github.repository == 'ZX7-Labs/Shree-ji' && github.ref == 'refs/heads/review/routine-native-e2e-20261121' && github.actor_id == '222302960' && github.triggering_actor == 'ZX7-Labs' }}
     environment: routine-native-verification
     runs-on: ubuntu-24.04
     timeout-minutes: 60
