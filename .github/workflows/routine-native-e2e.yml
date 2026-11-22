@@ -2,8 +2,8 @@ name: Routine private native E2E (non-release)
 
 on:
   push:
-    branches: [review/routine-native-e2e-20261121]
-    paths: [.github/workflows/routine-native-e2e.yml]
+    branches: [main]
+    paths: [RUN_ROUTINE_NATIVE_E2E.txt]
 
 permissions:
   contents: read
@@ -17,7 +17,7 @@ jobs:
     # This lane cannot admit release candidates or run untrusted contributions.
     # Protected main plus the exact owner actor are required; independent audit
     # of effective GitHub rules and private-source write custody is mandatory.
-    if: ${{ github.repository == 'ZX7-Labs/Shree-ji' && github.ref == 'refs/heads/review/routine-native-e2e-20261121' && github.actor_id == '222302960' && github.triggering_actor == 'ZX7-Labs' }}
+    if: ${{ github.repository == 'ZX7-Labs/Shree-ji' && github.ref == 'refs/heads/main' && github.ref_protected && github.actor_id == '222302960' && github.triggering_actor == 'ZX7-Labs' }}
     environment: routine-native-verification
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -136,9 +136,6 @@ jobs:
               echo "LAS_ROUTINE_NATIVE_$name=PASS"
             else
               echo "LAS_ROUTINE_NATIVE_$name=FAIL"
-              if [[ "$name" == "CHECK" ]]; then
-                python3 -c 'import sys,re,hashlib; s=open(sys.argv[1],encoding="utf-8",errors="replace").read(); print("LAS_DIAG_LOG_SHA256="+hashlib.sha256(s.encode()).hexdigest()); print("LAS_DIAG_RUST_CODES="+",".join(sorted(set(re.findall(r"error\[([A-Z0-9]+)\]",s))))); print("LAS_DIAG_CATEGORIES="+",".join(x for x,p in (("UNUSED_IMPORT",r"unused import"),("MISMATCHED_TYPES",r"mismatched types"),("TRAIT_BOUND",r"trait bound"),("MISSING_METHOD",r"no method named"),("NOT_FOUND",r"cannot find"),("MOVE",r"use of moved"),("BORROW",r"cannot borrow"),("OTHER_ERROR",r"error:")) if re.search(p,s,re.I)))' "$logdir/$name.log"
-              fi
               return 1
             fi
           }
