@@ -1,5 +1,9 @@
 name: Gemini synthetic API check
 on:
+  push:
+    branches: [main]
+    paths:
+      - RUN_GEMINI_SYNTHETIC
   workflow_dispatch:
     inputs:
       confirm_free_quota:
@@ -13,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   check:
-    if: github.ref == 'refs/heads/main' && inputs.confirm_free_quota == true
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.confirm_free_quota == true))
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
