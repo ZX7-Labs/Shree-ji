@@ -1,0 +1,149 @@
+name: Routine private formal remainder (non-release)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: routine-private-formal-remainder
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: ${{ github.repository == 'ZX7-Labs/Shree-ji' && github.ref == 'refs/heads/main' && github.ref_protected && github.actor_id == '222302960' && github.triggering_actor == 'ZX7-Labs' }}
+    environment: routine-native-verification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        profile: [28, 29, 36, 39, 109, 114, 155, 156, 167, 171]
+    env:
+      PROFILE_INDEX: ${{ matrix.profile }}
+
+    steps:
+      - name: Prepare private workspace and validate evidence recipient
+        shell: bash
+        env:
+          RECIPIENT_PEM: ${{ secrets.LAS_ROUTINE_EVIDENCE_RECIPIENT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          work="$(mktemp -d "$RUNNER_TEMP/las-formal.XXXXXXXX")"
+          printf 'LAS_FORMAL_WORK=%s\n' "$work" >> "$GITHUB_ENV"
+          printf '%s\n' "$RECIPIENT_PEM" > "$work/recipient.pem"
+          openssl x509 -in "$work/recipient.pem" -noout -checkend 21600 >/dev/null
+          openssl x509 -in "$work/recipient.pem" -pubkey -noout > "$work/public.pem"
+          openssl pkey -pubin -in "$work/public.pem" -pubcheck -noout >/dev/null
+          printf '%s' las-formal-recipient-check |
+            openssl cms -encrypt -binary -aes-256-cbc -outform DER "$work/recipient.pem" >/dev/null
+
+      - name: Fetch pinned verifier dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          jar="$LAS_FORMAL_WORK/tla2tools.jar"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+            --max-time 180 --output "$jar" \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          printf '936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  %s\n' "$jar" |
+            sha256sum --check --strict --status
+
+      - name: Close credential scope after fetching the reviewed private executor
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_ROUTINE_PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          exec >"$LAS_FORMAL_WORK/admission.log" 2>&1
+          export GIT_TERMINAL_PROMPT=0 GIT_NO_REPLACE_OBJECTS=1
+          [[ "$PRIVATE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          test -n "$PRIVATE_TOKEN"
+          executor_ref_proof=e3e930b5b8b8aa0cc41c637602126cd772683ac87f236af292ace33ceb6fd512
+          executor_proof=45bdcbc6d8c4be8154cfc8e64514f4a34c2b498703ba2a369173e050702d9902
+          source_proof=5d4ae6e366783b97fef7fa4270d694a469f502279721f4d6be8fd668f5acf6a2
+          hash() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
+
+          remote="https://github.com/$PRIVATE_REPOSITORY.git"
+          auth="$(printf 'x-access-token:%s' "$PRIVATE_TOKEN" | base64 -w0)"
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
+          git ls-remote --heads "$remote" > "$LAS_FORMAL_WORK/refs"
+          candidate=''
+          while IFS=$'\t' read -r sha ref; do
+            if [[ "$(hash "$ref")" == "$executor_ref_proof" ]]; then
+              test -z "$candidate"
+              [[ "$sha" =~ ^[a-f0-9]{40}$ && "$(hash "$sha")" == "$executor_proof" ]]
+              candidate="$sha"
+            fi
+          done < "$LAS_FORMAL_WORK/refs"
+          rm -- "$LAS_FORMAL_WORK/refs"
+          test -n "$candidate"
+          source="$LAS_FORMAL_WORK/source"
+          git init --quiet "$source"
+          git -C "$source" fetch --quiet --depth=2 "$remote" "$candidate"
+          unset PRIVATE_TOKEN PRIVATE_REPOSITORY auth remote GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+
+          read -r actual parent extra < <(git -C "$source" rev-list --parents -1 FETCH_HEAD)
+          test "$actual" = "$candidate"
+          test -z "$extra"
+          [[ "$parent" =~ ^[a-f0-9]{40}$ && "$(hash "$parent")" == "$source_proof" ]]
+          git -C "$source" checkout --quiet --detach "$candidate"
+          git -C "$source" diff-tree --no-commit-id --name-status -r -z "$parent" "$candidate" > "$LAS_FORMAL_WORK/source-delta"
+          mapfile -d '' -t delta < "$LAS_FORMAL_WORK/source-delta"
+          [[ "${#delta[@]}" == 2 && "${delta[0]}" == A && "${delta[1]}" =~ ^tools/verification/[A-Za-z0-9_]+[.]py$ ]]
+          printf '%s\n' "${delta[1]}" > "$LAS_FORMAL_WORK/entry"
+
+      - name: Execute one frozen native TLC profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          work="$LAS_FORMAL_WORK"
+          exec >"$work/driver.log" 2>&1
+          entry="$(cat "$work/entry")"
+          cd "$work/source"
+          timeout --signal=TERM --kill-after=30s 330m python3 -I -S -B "$entry" \
+            --source-root "$PWD" --private-output "$work/result" \
+            --java "$(readlink -f "$(command -v java)")" --jar "$work/tla2tools.jar" \
+            --index "$PROFILE_INDEX"
+          test -s "$work/result/receipt.json"
+
+      - name: Encrypt evidence before upload
+        if: always() && env.LAS_FORMAL_WORK != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          cd "$LAS_FORMAL_WORK"
+          files=()
+          for name in admission.log driver.log result/receipt.json result/tlc.private.log \
+                      result/canonical-map.tsv result/java-version.private.log result/classifier.private.stdout; do
+            if [[ -f "$name" && ! -L "$name" ]]; then files+=("$name"); fi
+          done
+          if (( ${#files[@]} == 0 )); then exit 0; fi
+          tar -czf - -- "${files[@]}" |
+            openssl cms -encrypt -binary -aes-256-cbc -outform DER \
+              -out "$RUNNER_TEMP/las-formal.cms" recipient.pem
+
+      - name: Store ciphertext only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: encrypted-formal-profile-${{ matrix.profile }}
+          path: ${{ runner.temp }}/las-formal.cms
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove private runner files
+        if: always() && env.LAS_FORMAL_WORK != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$LAS_FORMAL_WORK" == "$RUNNER_TEMP"/las-formal.* ]]
+          rm -rf -- "$LAS_FORMAL_WORK"

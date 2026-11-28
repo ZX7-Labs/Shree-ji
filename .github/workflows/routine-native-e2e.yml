@@ -1,9 +1,16 @@
 name: Routine private native E2E (non-release)
 
 on:
-  push:
-    branches: [main]
-    paths: [RUN_ROUTINE_NATIVE_E2E.txt]
+  workflow_dispatch:
+    inputs:
+      target_ref_proof:
+        description: Opaque SHA-256 proof for the approved private branch
+        required: true
+        type: string
+      revision_proof:
+        description: Opaque SHA-256 proof for its exact current commit
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -31,7 +38,9 @@ jobs:
         shell: bash
         env:
           PRIVATE_REPOSITORY: ${{ secrets.LAS_PRIVATE_REPOSITORY }}
-          PRIVATE_TOKEN: ${{ secrets.LAS_PRIVATE_READ_TOKEN }}
+          PRIVATE_TOKEN: ${{ secrets.LAS_ROUTINE_PRIVATE_READ_TOKEN }}
+          REQUEST_REF_PROOF: ${{ inputs.target_ref_proof }}
+          REQUEST_REVISION_PROOF: ${{ inputs.revision_proof }}
         run: |
           set -euo pipefail
           export GIT_TERMINAL_PROMPT=0
@@ -40,22 +49,15 @@ jobs:
           echo "::add-mask::$PRIVATE_REPOSITORY"
           echo "::add-mask::$PRIVATE_TOKEN"
 
-          # Opaque data only. This is deliberately NOT a signed release request.
-          # Strictly limited to the current frozen baseline and integration lanes.
-          test -f RUN_ROUTINE_NATIVE_E2E.txt
-          test ! -L RUN_ROUTINE_NATIVE_E2E.txt
-          test "$(wc -c < RUN_ROUTINE_NATIVE_E2E.txt)" -le 256
-          mapfile -t pins < RUN_ROUTINE_NATIVE_E2E.txt
-          test "${#pins[@]}" -eq 2
-          [[ "${pins[0]}" =~ ^TARGET_REF_HASH=([a-f0-9]{64})$ ]]
-          ref_hash="${BASH_REMATCH[1]}"
+          # GitHub supplies opaque values through environment variables.
+          [[ "$REQUEST_REF_PROOF" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$REQUEST_REVISION_PROOF" =~ ^[a-f0-9]{64}$ ]]
+          ref_hash="$REQUEST_REF_PROOF"
+          revision_proof="$REQUEST_REVISION_PROOF"
           case "$ref_hash" in
             6cf31d40422994d906540daad891b997e563a7686a3713dcbf93a426b00a2cfe|aa77dc01a8e9da49036564bbb861f32238923502258ad93d7b404b953697bff9|39fffef659723ba377eafd5a196a38a2daf1540ddd2d1e499fea9b87b2d63d93) ;;
             *) echo "LAS_ROUTINE_REQUEST=DENIED_REF"; exit 1 ;;
           esac
-          [[ "${pins[1]}" =~ ^EXPECTED_PRIVATE_SNAPSHOT_PROOF=([a-f0-9]{64})$ ]]
-          revision_proof="${BASH_REMATCH[1]}"
-          cmp -s RUN_ROUTINE_NATIVE_E2E.txt <(printf 'TARGET_REF_HASH=%s\nEXPECTED_PRIVATE_SNAPSHOT_PROOF=%s\n' "$ref_hash" "$revision_proof")
           echo "LAS_ROUTINE_SCOPE=DEVELOPMENT_ONLY_NOT_RELEASE_ACCEPTANCE"
 
           root="$(mktemp -d /tmp/las-candidate.XXXXXXXX)"
