@@ -29,12 +29,17 @@ jobs:
         shell: bash
         env:
           RECIPIENT_PEM: ${{ secrets.LAS_ROUTINE_EVIDENCE_RECIPIENT }}
+          RECIPIENT_SHA256: ${{ secrets.LAS_ROUTINE_EVIDENCE_RECIPIENT_SHA256 }}
         run: |
           set -euo pipefail
           umask 077
           work="$(mktemp -d "$RUNNER_TEMP/las-formal.XXXXXXXX")"
           printf 'LAS_FORMAL_WORK=%s\n' "$work" >> "$GITHUB_ENV"
-          printf '%s\n' "$RECIPIENT_PEM" > "$work/recipient.pem"
+          [[ "$RECIPIENT_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          cert="$(printf '%s\n' "$RECIPIENT_PEM" | openssl x509 -outform PEM)"
+          actual="$(printf '%s\n' "$cert" | openssl x509 -outform DER | sha256sum)"
+          [[ "${actual%% *}" == "$RECIPIENT_SHA256" ]]
+          printf '%s\n' "$cert" > "$work/recipient.pem"
           openssl x509 -in "$work/recipient.pem" -noout -checkend 21600 >/dev/null
           openssl x509 -in "$work/recipient.pem" -pubkey -noout > "$work/public.pem"
           openssl pkey -pubin -in "$work/public.pem" -pubcheck -noout >/dev/null
@@ -117,6 +122,8 @@ jobs:
       - name: Encrypt evidence before upload
         if: always() && env.LAS_FORMAL_WORK != ''
         shell: bash
+        env:
+          RECIPIENT_SHA256: ${{ secrets.LAS_ROUTINE_EVIDENCE_RECIPIENT_SHA256 }}
         run: |
           set -euo pipefail
           umask 077
@@ -127,9 +134,14 @@ jobs:
             if [[ -f "$name" && ! -L "$name" ]]; then files+=("$name"); fi
           done
           if (( ${#files[@]} == 0 )); then exit 0; fi
+          [[ "$RECIPIENT_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          cert="$(openssl x509 -in recipient.pem -outform PEM)"
+          actual="$(printf '%s\n' "$cert" | openssl x509 -outform DER | sha256sum)"
+          [[ "${actual%% *}" == "$RECIPIENT_SHA256" ]]
           tar -czf - -- "${files[@]}" |
             openssl cms -encrypt -binary -aes-256-cbc -outform DER \
-              -out "$RUNNER_TEMP/las-formal.cms" recipient.pem
+              -out "$RUNNER_TEMP/las-formal.cms.pending" <(printf '%s\n' "$cert")
+          mv -- "$RUNNER_TEMP/las-formal.cms.pending" "$RUNNER_TEMP/las-formal.cms"
 
       - name: Store ciphertext only
         if: always()
